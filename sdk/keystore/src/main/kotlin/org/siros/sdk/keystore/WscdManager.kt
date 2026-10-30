@@ -125,9 +125,9 @@ interface WscdManager : SignerLifecycleManager {
      * then-retry-the-next-candidate contract.
      *
      * [requiredLevel] is wscd-manager's own OBJECTIVE tier
-     * ([WscdCertificationLevel]: `none`/`baseline`/`substantial`/`high`,
-     * based on what a plugin can actually verify - hardware class,
-     * attestation presence, key non-exportability), deliberately NOT the
+     * ([WscdCertificationLevel]: `unattested`/`attested_shared_environment`/
+     * `attested_dedicated_hardware` - purely structural facts about the
+     * generation response, never a certification-SCHEME judgment), deliberately NOT the
      * ISO-18045 vocabulary ([WscdPluginCapabilities]'s
      * `iso_18045_basic`/`moderate`/`high`): that mapping, and the ordered
      * candidate list for a given ISO-18045 requirement
@@ -155,14 +155,23 @@ interface WscdManager : SignerLifecycleManager {
 data class GeneratedKeyWithPlugin(val keyId: String, val pluginId: String)
 
 /**
- * wscd-manager's own objective certification-level vocabulary - mirrors
- * `CertificationLevel`/`FfiCertificationLevel` (siros-wscd-manager)
- * exactly. Deliberately NOT the ISO-18045 vocabulary
- * ([WscdPluginCapabilities]'s `iso_18045_basic`/`moderate`/`high`) - see
+ * wscd-manager's own objective, purely STRUCTURAL certification-level
+ * vocabulary - mirrors `CertificationLevel`/`FfiCertificationLevel`
+ * (siros-wscd-manager) exactly: three tiers based only on what is
+ * structurally present in/alongside a key's attestation artifact
+ * (`UNATTESTED`: no artifact, or a structurally incomplete one;
+ * `ATTESTED_SHARED_ENVIRONMENT`: a complete artifact claiming a
+ * shared-silicon execution environment, e.g. a TEE; `ATTESTED_DEDICATED_HARDWARE`:
+ * a complete artifact claiming a physically separate secure element) -
+ * never a certification-SCHEME judgment (no "self-assessed"/"third-party
+ * evaluated"/"national scheme" concept exists here, by design: wscd-manager
+ * has no way to know who evaluated a given piece of hardware or how).
+ * Deliberately NOT the ISO-18045 vocabulary ([WscdPluginCapabilities]'s
+ * `iso_18045_basic`/`moderate`/`high`) - see
  * [WscdManager.generateKeyForLevel]'s doc comment for why the two must stay
  * distinct.
  */
-enum class WscdCertificationLevel { NONE, BASELINE, SUBSTANTIAL, HIGH }
+enum class WscdCertificationLevel { UNATTESTED, ATTESTED_SHARED_ENVIRONMENT, ATTESTED_DEDICATED_HARDWARE }
 
 /**
  * R2PS server connection parameters.

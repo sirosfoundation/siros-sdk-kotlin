@@ -24,10 +24,12 @@ package org.siros.sdk.keystore
  *
  * **wscd-manager itself never sees a label, ISO 18045 or otherwise** - its
  * own `CertificationLevel`/`FfiCertificationLevel` enum (mirrored here as
- * [WscdCertificationLevel]) stays in its own objective, four-point
- * vocabulary (`none`/`baseline`/`substantial`/`high`, based on real
- * verifiable facts: hardware class, attestation presence, key
- * non-exportability) and knows nothing about any label scheme. This
+ * [WscdCertificationLevel]) stays in its own objective, purely STRUCTURAL
+ * three-point vocabulary (`unattested`/`attested_shared_environment`/
+ * `attested_dedicated_hardware` - whether an attestation artifact is present
+ * and structurally complete, and whether the hardware class it claims is a
+ * shared execution environment or a dedicated one; never who evaluated the
+ * hardware or by what process) and knows nothing about any label scheme. This
  * interface - and everything that calls through it
  * ([WscdSelectionPolicy], [WscdPluginCapabilities]) - lives entirely on the
  * SDK side, by design: different deployments auditing the SAME wallet
@@ -68,8 +70,8 @@ interface WscdAssuranceScheme {
 
     /**
      * This scheme's label for wscd-manager's objective, scheme-agnostic
-     * [level] fact (`none`/`baseline`/`substantial`/`high` - see
-     * [WscdCertificationLevel]), as confirmed by
+     * [level] fact (`unattested`/`attested_shared_environment`/
+     * `attested_dedicated_hardware` - see [WscdCertificationLevel]), as confirmed by
      * [WscdManager.generateKeyForLevel] or reported in
      * [org.siros.sdk.credentials.SignerSecurityProperties.certification] for an
      * already-generated key.
@@ -218,16 +220,40 @@ class Iso18045AssuranceScheme(
         private val WIRE_LABELS: Set<String> = setOf(BASIC, ENHANCED_BASIC, MODERATE, HIGH)
 
         /**
-         * wscd-manager's own objective tiers, as this DEFAULT scheme reads
-         * them for [labelFor]: `NONE`/`BASELINE` both read as [BASIC]
-         * (neither represents meaningful hardware backing); `SUBSTANTIAL` as
-         * [MODERATE]; `HIGH` as [HIGH].
+         * wscd-manager's own objective, structural tiers, as this DEFAULT
+         * scheme reads them for [labelFor]:
+         *
+         * - [WscdCertificationLevel.UNATTESTED] -> [BASIC]: no attestation
+         *   evidence at all, same floor as an unrecognized/absent fact.
+         * - [WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT] ->
+         *   [ENHANCED_BASIC]: a real attestation artifact backs this key, but
+         *   the hardware class it claims shares silicon/attack surface with
+         *   the main application processor (e.g. a TEE) - exactly the same
+         *   reasoning [DEFAULT_KEY_STORAGE_TYPE_LABELS] already applies to
+         *   the raw `"trusted_execution"` key-storage string (see its own
+         *   doc comment): real isolation above pure software, but not a
+         *   dedicated element, so [ENHANCED_BASIC] is the precise fit, not a
+         *   compromise between [BASIC] and [MODERATE].
+         * - [WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE] ->
+         *   [MODERATE], deliberately NOT [HIGH]: a real attestation artifact
+         *   claims a physically separate, dedicated secure element, which is
+         *   real hardware-backing evidence worth crediting above
+         *   [ENHANCED_BASIC] - but wscd-manager's structural check alone
+         *   (attestation present + hardware-class claim, chain-to-root
+         *   verification explicitly NOT done by wscd-manager - see
+         *   `CertificationLevel`'s own Rust doc comment) is not the same
+         *   thing as a genuine third-party certification evaluation, so this
+         *   default does not reach for the wire format's strongest tier
+         *   without one. A deployment with real, out-of-band evaluation
+         *   evidence for its specific hardware (e.g. a confirmed StrongBox
+         *   chip model, or - mirroring [DEFAULT_NOMINAL_PLUGIN_LABELS]'s
+         *   `"r2ps"` entry - a specific known HSM) may override this default
+         *   to [HIGH] via the constructor parameter.
          */
         val DEFAULT_CERTIFICATION_LEVEL_LABELS: Map<WscdCertificationLevel, String> = mapOf(
-            WscdCertificationLevel.NONE to BASIC,
-            WscdCertificationLevel.BASELINE to BASIC,
-            WscdCertificationLevel.SUBSTANTIAL to MODERATE,
-            WscdCertificationLevel.HIGH to HIGH,
+            WscdCertificationLevel.UNATTESTED to BASIC,
+            WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT to ENHANCED_BASIC,
+            WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE to MODERATE,
         )
 
         /**

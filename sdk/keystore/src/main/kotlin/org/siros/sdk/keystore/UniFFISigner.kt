@@ -603,17 +603,25 @@ class UniFFISigner(
     }
 
     private fun WscdCertificationLevel.toFfi(): FfiCertificationLevel = when (this) {
-        WscdCertificationLevel.NONE -> FfiCertificationLevel.NONE
-        WscdCertificationLevel.BASELINE -> FfiCertificationLevel.BASELINE
-        WscdCertificationLevel.SUBSTANTIAL -> FfiCertificationLevel.SUBSTANTIAL
-        WscdCertificationLevel.HIGH -> FfiCertificationLevel.HIGH
+        WscdCertificationLevel.UNATTESTED -> FfiCertificationLevel.UNATTESTED
+        WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT -> FfiCertificationLevel.ATTESTED_SHARED_ENVIRONMENT
+        WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE -> FfiCertificationLevel.ATTESTED_DEDICATED_HARDWARE
     }
 
+    // TODO(siros-wscd-manager certification-level redesign, 2026-10-30): this
+    // still names "EUCC" as the certifying scheme for every structurally
+    // attested key, exactly the kind of certification-SCHEME claim
+    // wscd-manager's own `CertificationLevel` was just renamed away from
+    // (neither tier below has ever actually been evaluated under EUCC) -
+    // pre-existing behavior, preserved as-is (collapsed from the old 4-tier
+    // mapping to the new 3-tier one, same label strings) rather than
+    // redesigned here, since fixing `CertificationInfo`'s shape is a
+    // separate, out-of-scope decision. Flagged to the coordinator; do not
+    // copy this pattern elsewhere.
     private fun FfiCertificationLevel.toSdkCertification(): CertificationInfo = when (this) {
-        FfiCertificationLevel.NONE -> CertificationInfo.None
-        FfiCertificationLevel.BASELINE -> CertificationInfo.Certified("EUCC", "baseline")
-        FfiCertificationLevel.SUBSTANTIAL -> CertificationInfo.Certified("EUCC", "substantial")
-        FfiCertificationLevel.HIGH -> CertificationInfo.Certified("EUCC", "high")
+        FfiCertificationLevel.UNATTESTED -> CertificationInfo.None
+        FfiCertificationLevel.ATTESTED_SHARED_ENVIRONMENT -> CertificationInfo.Certified("EUCC", "baseline")
+        FfiCertificationLevel.ATTESTED_DEDICATED_HARDWARE -> CertificationInfo.Certified("EUCC", "substantial")
     }
 
     private fun FactorKind.toFfiFactorKind(): FfiFactorKind = when (this) {

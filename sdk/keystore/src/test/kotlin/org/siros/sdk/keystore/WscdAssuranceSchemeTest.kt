@@ -63,10 +63,19 @@ class WscdAssuranceSchemeTest {
     @Test
     fun default_certificationLevelLabels_rankWscdCertificationLevelsAscending() {
         val scheme = Iso18045AssuranceScheme.DEFAULT
-        assertEquals("iso_18045_basic", scheme.labelFor(WscdCertificationLevel.NONE))
-        assertEquals("iso_18045_basic", scheme.labelFor(WscdCertificationLevel.BASELINE))
-        assertEquals("iso_18045_moderate", scheme.labelFor(WscdCertificationLevel.SUBSTANTIAL))
-        assertEquals("iso_18045_high", scheme.labelFor(WscdCertificationLevel.HIGH))
+        assertEquals("iso_18045_basic", scheme.labelFor(WscdCertificationLevel.UNATTESTED))
+        assertEquals(
+            "iso_18045_enhanced-basic",
+            scheme.labelFor(WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT),
+        )
+        // Deliberately MODERATE, not HIGH: a structurally confirmed dedicated
+        // secure element is real evidence, but wscd-manager's structural
+        // check alone is not a genuine third-party certification evaluation -
+        // see DEFAULT_CERTIFICATION_LEVEL_LABELS's doc comment.
+        assertEquals(
+            "iso_18045_moderate",
+            scheme.labelFor(WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE),
+        )
     }
 
     @Test
@@ -122,11 +131,13 @@ class WscdAssuranceSchemeTest {
     @Test
     fun customScheme_overridesCertificationLevelLabel() {
         val custom = Iso18045AssuranceScheme(
-            certificationLevelLabels = mapOf(WscdCertificationLevel.SUBSTANTIAL to Iso18045AssuranceScheme.HIGH),
+            certificationLevelLabels = mapOf(
+                WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE to Iso18045AssuranceScheme.HIGH,
+            ),
         )
-        assertEquals("iso_18045_high", custom.labelFor(WscdCertificationLevel.SUBSTANTIAL))
+        assertEquals("iso_18045_high", custom.labelFor(WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE))
         // Unmapped levels fail closed to the lowest tier rather than throwing.
-        assertEquals("iso_18045_basic", custom.labelFor(WscdCertificationLevel.HIGH))
+        assertEquals("iso_18045_basic", custom.labelFor(WscdCertificationLevel.UNATTESTED))
     }
 
     @Test
@@ -143,9 +154,14 @@ class WscdAssuranceSchemeTest {
     @Test
     fun misconfiguredCertificationLevelLabel_fallsBackToBasic() {
         val misconfigured = Iso18045AssuranceScheme(
-            certificationLevelLabels = mapOf(WscdCertificationLevel.HIGH to "not_a_real_tier"),
+            certificationLevelLabels = mapOf(
+                WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE to "not_a_real_tier",
+            ),
         )
-        assertEquals("iso_18045_basic", misconfigured.labelFor(WscdCertificationLevel.HIGH))
+        assertEquals(
+            "iso_18045_basic",
+            misconfigured.labelFor(WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE),
+        )
     }
 
     @Test
@@ -186,7 +202,7 @@ class WscdAssuranceSchemeTest {
     fun wscdAssuranceScheme_isNotIso18045Specific_aDifferentVocabularyImplementationWorksToo() {
         val nistStyle = FixedLabelScheme("aal2")
         assertEquals("aal2", nistStyle.nominalLabelFor("fido2"))
-        assertEquals("aal2", nistStyle.labelFor(WscdCertificationLevel.HIGH))
+        assertEquals("aal2", nistStyle.labelFor(WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE))
         assertTrue(nistStyle.meets("aal2", "aal2"))
         assertFalse(nistStyle.meets("aal2", "iso_18045_high"))
     }
