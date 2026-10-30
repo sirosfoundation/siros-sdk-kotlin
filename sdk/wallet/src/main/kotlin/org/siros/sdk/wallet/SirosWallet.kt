@@ -119,7 +119,6 @@ import org.siros.sdk.keystore.mdoc.MdocCose
 import org.siros.sdk.credentials.VctmFetcher
 import org.siros.sdk.credentials.MddlSchema
 import org.siros.sdk.credentials.MddlSchemaFetcher
-import org.siros.sdk.keystore.WscdPluginCapabilities
 import org.siros.sdk.keystore.BbsHolderStateVault
 import org.siros.sdk.keystore.CredentialRefreshTokenEntry
 import org.siros.sdk.keystore.DCAPIResponseEncryption
@@ -6662,11 +6661,10 @@ class SirosWallet private constructor(
      * is non-empty, so a caller that never sets that field never triggers
      * any TOFU read/write or prompting.
      */
-    private val wscdSelectionPolicy = WscdSelectionPolicy(
-        tofuStore = SessionStoreWscdTofuStore(sessionStore),
-        defaultMapping = config.defaultWscdMapping,
-        requestChoice = config.requestWscdChoice,
-        userOverrideStore = SessionStoreWscdUserOverrideStore(sessionStore),
+    private val wscdSelectionPolicy = buildWscdSelectionPolicy(
+        config,
+        SessionStoreWscdTofuStore(sessionStore),
+        SessionStoreWscdUserOverrideStore(sessionStore),
     )
 
     /**
@@ -8286,14 +8284,24 @@ class SirosWallet private constructor(
             org.siros.sdk.credentials.CatalogTier.Unavailable ->
                 throw KeyStorageTierUndeterminedException(issuer, credentialType, "the catalog could not be consulted")
         }
-        if (WscdPluginCapabilities.rankOf(baseline) < 0) {
+        // meets(x, x) is true iff x is a known tier in config.wscdAssuranceScheme's
+        // own vocabulary (an unrecognized tier string never satisfies even itself -
+        // see WscdAssuranceScheme.meets's fail-closed doc comment) - using the
+        // SAME injected scheme every other WSCD eligibility check in this class
+        // uses, rather than WscdPluginCapabilities' own fixed default, which a
+        // Copilot review correctly caught this method was still using directly.
+        val scheme = config.wscdAssuranceScheme
+        if (!scheme.meets(baseline, baseline)) {
             throw KeyStorageTierUndeterminedException(issuer, credentialType, "the catalog states a tier that is not a known ISO 18045 tier")
         }
         if (issuerTier == null) return baseline
-        if (WscdPluginCapabilities.rankOf(issuerTier) < 0) {
+        if (!scheme.meets(issuerTier, issuerTier)) {
             throw KeyStorageTierUndeterminedException(issuer, credentialType, "the issuer states a tier that is not a known ISO 18045 tier")
         }
-        return if (WscdPluginCapabilities.rankOf(issuerTier) > WscdPluginCapabilities.rankOf(baseline)) issuerTier else baseline
+        // The issuer's tier wins only if it is itself at least as strong as the
+        // catalog's baseline - otherwise the (stronger) baseline wins, matching
+        // "raised, never lowered" above.
+        return if (scheme.meets(issuerTier, baseline)) issuerTier else baseline
     }
 
     private suspend fun resolveEffectiveKeystoreForIssuance(): KeystoreManager {
@@ -8369,7 +8377,7 @@ class SirosWallet private constructor(
         var selectable: Set<String> = available.keys
         if (requiredTier != null) {
             val eligible = available.keys.filter {
-                WscdPluginCapabilities.tierOf(it)?.let { tier -> WscdPluginCapabilities.meets(tier, requiredTier) } == true
+                config.wscdAssuranceScheme.nominalLabelFor(it)?.let { tier -> config.wscdAssuranceScheme.meets(tier, requiredTier) } == true
             }
             val onboarded = eligible.filter { id -> available[id]?.let { isOnboarded(it, id) } == true }
             if (eligible.isNotEmpty() && onboarded.isEmpty()) {
@@ -12806,6 +12814,32 @@ class SirosWallet private constructor(
  */
 /** How many redirects a third-party fetch will follow before giving up. */
 private const val MAX_PUBLIC_REDIRECTS = 5
+
+/**
+ * Builds the [WscdSelectionPolicy] [SirosWallet] uses internally from
+ * [config] and the two already-Context-free persistence interfaces
+ * ([tofuStore]/[userOverrideStore], both backed by [sessionStore] in
+ * production) - extracted to a standalone, testable function specifically
+ * so a test can prove [config].wscdAssuranceScheme actually reaches the
+ * real policy instance [SirosWallet] constructs, without needing a real
+ * `Activity`/`Context` (see `SirosWallet.create`'s doc comment for why
+ * [SirosWallet] itself can't be constructed in a plain, non-Robolectric
+ * JUnit test). A real, found bug this guards against: an earlier version
+ * threaded every other [WalletConfig] WSCD field through here except
+ * `wscdAssuranceScheme`, which was silently never consulted by real wallet
+ * issuance even though [WscdSelectionPolicy] itself fully supported it.
+ */
+internal fun buildWscdSelectionPolicy(
+    config: WalletConfig,
+    tofuStore: WscdTofuStore,
+    userOverrideStore: WscdUserOverrideStore,
+): WscdSelectionPolicy = WscdSelectionPolicy(
+    tofuStore = tofuStore,
+    defaultMapping = config.defaultWscdMapping,
+    requestChoice = config.requestWscdChoice,
+    userOverrideStore = userOverrideStore,
+    assuranceScheme = config.wscdAssuranceScheme,
+)
 
 internal fun isPublicFetchAllowed(url: String): Boolean = runCatching {
     val uri = java.net.URI(url)

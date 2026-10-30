@@ -14,8 +14,10 @@ import org.siros.sdk.credentials.interop.DiipProfile
 import org.siros.sdk.credentials.interop.InteropProfile
 import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.ZkCircuitClient
+import org.siros.sdk.keystore.Iso18045AssuranceScheme
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.NativeAttestationProvider
+import org.siros.sdk.keystore.WscdAssuranceScheme
 
 /**
  * Configuration for [SirosWallet].
@@ -469,6 +471,29 @@ data class WalletConfig(
      * the registered keystores or not at all.
      */
     val credentialTierCatalog: org.siros.sdk.credentials.CredentialTierCatalog? = null,
+    /**
+     * The assurance-label vocabulary [SirosWallet]'s internal
+     * [WscdSelectionPolicy] (and [resolveEffectiveKeystoreForIssuance]'s/
+     * [catalogBaselineTier]'s own eligibility checks) compare a plugin's
+     * nominal tier against a credential type's declared requirement with -
+     * [Iso18045AssuranceScheme.DEFAULT] unless overridden here. A deployment
+     * whose audit should map a plugin id (or a WSCD certification-level/
+     * key-storage fact) to a different ISO-18045 tier - or that speaks an
+     * entirely different assurance vocabulary - constructs its own
+     * [WscdAssuranceScheme] (an [Iso18045AssuranceScheme] with different
+     * mapping tables, or a wholly different implementation) and passes it
+     * here. See [WscdAssuranceScheme]'s doc comment for why this is a
+     * deployment decision the SDK (never `siros-wscd-manager`) owns.
+     *
+     * Deliberately the LAST constructor parameter (not grouped next to the
+     * other WSCD-related fields above): [WalletConfig] is a public `data
+     * class` whose `component*`/`copy`/constructor signatures are generated
+     * in declaration order, so inserting a new field anywhere but the end
+     * would silently renumber every later one, breaking binary compatibility
+     * for already-compiled callers - the exact class of bug a Copilot review
+     * caught on [WscdSelectionPolicy]'s constructor during this same change.
+     */
+    val wscdAssuranceScheme: WscdAssuranceScheme = Iso18045AssuranceScheme.DEFAULT,
 ) {
     init {
         wscdPluginClaims.forEach { (keystoreId, claim) ->

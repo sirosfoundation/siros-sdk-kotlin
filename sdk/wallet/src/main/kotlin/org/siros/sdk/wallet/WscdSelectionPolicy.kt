@@ -429,21 +429,48 @@ class WscdSelectionPolicy(
     private val defaultMapping: Map<String, String>? = null,
     private val requestChoice: RequestWscdChoice? = null,
     private val userOverrideStore: WscdUserOverrideStore = NoopWscdUserOverrideStore,
+) {
     /**
      * The assurance-label vocabulary [isEligible] (both [resolve] and
      * [resolveCandidates]) compares a plugin's nominal tier against a
      * credential type's declared `requiredTier` with -
-     * [Iso18045AssuranceScheme.DEFAULT] unless a deployment constructs this
-     * policy with its own [WscdAssuranceScheme] (its own
-     * [Iso18045AssuranceScheme] instance with different mapping tables, or a
-     * wholly different vocabulary altogether - see [WscdAssuranceScheme]'s
-     * doc comment). `requiredTier` itself is always a label IN this scheme's
-     * own vocabulary (it comes from the credential catalog/issuer, compared
-     * only via [WscdAssuranceScheme.meets] - never parsed or assumed to be
-     * ISO 18045 by this class).
+     * [Iso18045AssuranceScheme.DEFAULT] unless constructed via the
+     * secondary, scheme-taking constructor with a deployment's own
+     * [WscdAssuranceScheme] (its own [Iso18045AssuranceScheme] instance with
+     * different mapping tables, or a wholly different vocabulary altogether
+     * - see [WscdAssuranceScheme]'s doc comment). `requiredTier` itself is
+     * always a label IN this scheme's own vocabulary (it comes from the
+     * credential catalog/issuer, compared only via [WscdAssuranceScheme.meets]
+     * - never parsed or assumed to be ISO 18045 by this class).
+     *
+     * A property with a private setter, not a primary-constructor parameter:
+     * a Copilot review correctly caught that adding a 5th primary-constructor
+     * parameter (even a defaulted one) changes this class's compiled JVM
+     * constructor signature, breaking already-compiled callers with
+     * `NoSuchMethodError` - see the scheme-taking secondary [constructor]'s
+     * doc comment for why that one exists instead.
      */
-    private val assuranceScheme: WscdAssuranceScheme = Iso18045AssuranceScheme.DEFAULT,
-) {
+    private var assuranceScheme: WscdAssuranceScheme = Iso18045AssuranceScheme.DEFAULT
+        private set
+
+    /**
+     * Construct with a deployment's own [WscdAssuranceScheme] instead of
+     * [Iso18045AssuranceScheme.DEFAULT] - a genuinely separate constructor
+     * (not a 5th parameter on the primary one above) specifically so the
+     * primary constructor's original four-parameter JVM signature - and
+     * therefore binary compatibility for every already-compiled caller -
+     * stays exactly as it was before [WscdAssuranceScheme] existed.
+     */
+    constructor(
+        tofuStore: WscdTofuStore,
+        defaultMapping: Map<String, String>? = null,
+        requestChoice: RequestWscdChoice? = null,
+        userOverrideStore: WscdUserOverrideStore = NoopWscdUserOverrideStore,
+        assuranceScheme: WscdAssuranceScheme,
+    ) : this(tofuStore, defaultMapping, requestChoice, userOverrideStore) {
+        this.assuranceScheme = assuranceScheme
+    }
+
     companion object {
         /**
          * Issuer placeholder meaning "any issuer" in [setUserOverride] and
