@@ -13,16 +13,30 @@ permissions:
   packages: read
   security-events: write
 
+env:
+  ORG_GRADLE_PROJECT_sirosNativeRepo: ${{ github.workspace }}/build/native-repo
+
 jobs:
+  nymauth-native:
+    uses: ./.github/workflows/nymauth-native.yml
+
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    needs: nymauth-native
     strategy:
       fail-fast: false
       matrix:
         language: [java-kotlin, actions]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Download nymauth-native Maven repository
+        if: matrix.language == 'java-kotlin'
+        uses: actions/download-artifact@v4
+        with:
+          name: nymauth-native-maven
+          path: build/native-repo
 
       - name: Set up JDK 17
         if: matrix.language == 'java-kotlin'
