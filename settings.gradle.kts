@@ -78,6 +78,20 @@ dependencyResolutionManagement {
                 ).getOrElse("")
             }
         }
+        // siros-verifier-core proximity Reader AAR. Local PR builds use
+        // -PsirosNativeRepo=<directory> like the other native dependencies.
+        maven {
+            name = "GitHubPackagesVerifierCore"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/siros-verifier-core")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
         // zk-cred-bbs AAR — blind BBS with hardware key binding. Separate
         // entry for the same reason as zk-cred-longfellow below: GH Packages
         // Maven repos are scoped per-repo, not org-wide.
@@ -157,6 +171,7 @@ dependencyResolutionManagement {
 rootProject.name = "siros-sdk-kotlin"
 
 include(":sdk:transport")
+include(":sdk:verifier")
 include(":sdk:auth")
 include(":sdk:keystore")
 include(":sdk:flow")

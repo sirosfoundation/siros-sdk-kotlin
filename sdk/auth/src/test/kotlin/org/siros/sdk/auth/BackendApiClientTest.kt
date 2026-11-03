@@ -4,7 +4,11 @@ import org.siros.sdk.credentials.BackendApiException
 import io.mockk.coEvery
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -62,6 +66,46 @@ class BackendApiClientTest {
         val request = server.takeRequest()
         assertEquals("/health", request.path)
         assertEquals(null, request.getHeader("Authorization"))
+    }
+
+    @Test
+    fun cancellingWhileTheResponseBodyIsStillTricklingInActuallyCancelsTheUnderlyingCall() = runBlocking {
+        // A coroutine job completing promptly after cancel() is NOT, by itself, proof that the HTTP call was
+        // interrupted: suspendCancellableCoroutine unwinds the COROUTINE as soon as its own continuation is
+        // cancelled, regardless of whether anything was done to stop the underlying work - a job.join() check alone
+        // would pass even with the invokeOnCancellation { call.cancel() } hook removed entirely (found via Copilot
+        // review). This test instead listens for OkHttp's own `canceled` event, which fires only when
+        // Call.cancel() is actually invoked, and requires it to fire WHILE the body is demonstrably still being
+        // read (an EventListener.responseBodyStart gate), so the assertion is about the real network call, not
+        // coroutine timing.
+        server.enqueue(
+            MockResponse()
+                .setBody("x".repeat(32 * 1024))
+                .throttleBody(1024, 200, java.util.concurrent.TimeUnit.MILLISECONDS)
+        )
+        val bodyStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val cancelled = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val httpClient = okhttp3.OkHttpClient.Builder()
+            .eventListener(object : okhttp3.EventListener() {
+                override fun responseBodyStart(call: okhttp3.Call) {
+                    bodyStarted.complete(Unit)
+                }
+                override fun canceled(call: okhttp3.Call) {
+                    cancelled.complete(Unit)
+                }
+            })
+            .build()
+        val client = newClient(httpClient)
+        val job = launch(Dispatchers.IO) {
+            client.healthCheck()
+        }
+        withTimeout(3_000) { bodyStarted.await() } // don't cancel until streaming has genuinely begun
+        job.cancel()
+        withTimeout(2_000) {
+            cancelled.await() // the underlying okhttp3.Call must actually be cancelled - timing out means it never was
+        }
+        job.join()
+        assertTrue(job.isCancelled)
     }
 
     @Test
@@ -824,8 +868,8 @@ class BackendApiClientTest {
         }
     }
 
-    private fun newClient(): BackendApiClient {
+    private fun newClient(httpClient: okhttp3.OkHttpClient = okhttp3.OkHttpClient()): BackendApiClient {
         val baseUrl = server.url("/").toString().trimEnd('/')
-        return BackendApiClient(baseUrl = baseUrl, tenantId = "default")
+        return BackendApiClient(baseUrl = baseUrl, tenantId = "default", httpClient = httpClient)
     }
 }

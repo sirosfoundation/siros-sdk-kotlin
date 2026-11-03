@@ -278,6 +278,32 @@ class WscdKeystoreAdapterTest {
     }
 
     @Test
+    fun deletingAnExportableSignersKeyIsNotResurrectedByTheNextUnlock() = runTest {
+        val keyJwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256)
+            .keyID("softkey-1").generate().toJSONString()
+        val signer = mockk<Signer>(relaxed = true)
+        // The signer itself "deletes" the key (stops reporting it) once deleteKey() is called - simulating an
+        // exportable software plugin that actually removed its own copy.
+        var deleted = false
+        coEvery { signer.exportPrivateKeypairs() } answers {
+            if (deleted) emptyList() else listOf(ExportedPrivateKeypair(keyId = "softkey-1", algorithm = "ES256", privateJwk = keyJwk))
+        }
+        coEvery { signer.deleteKey("softkey-1") } answers { deleted = true }
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+
+        // export → delete → export → unlock: the key must not come back.
+        adapter.exportEncryptedContainer() // folds softkey-1 into credentialsKeystore, as a real session would have already done
+        adapter.deleteKey("softkey-1")
+        val exportedAfterDelete = adapter.exportEncryptedContainer()
+        adapter.lock()
+
+        adapter.unlock(fakePrfOutput, exportedAfterDelete, hkdfSalt, hkdfInfo)
+
+        coVerify(exactly = 0) { signer.importPrivateKeypairs(match { it.any { kp -> kp.keyId == "softkey-1" } }) }
+    }
+
+    @Test
     fun signerWithNoExportableKeysNeverTriggersImport() = runTest {
         // The default Signer.exportPrivateKeypairs()/importPrivateKeypairs()
         // no-ops (hardware/remote-HSM plugins have nothing exportable) -
@@ -817,6 +843,54 @@ class WscdKeystoreAdapterTest {
         coVerify(exactly = 0) { signer.sign(any(), any()) }
     }
 
+    /**
+     * Review of #312: a signer whose key pool mixes the wallet's own instance key with ordinary credential keys
+     * (one shared Android Keystore, no separate "instance" vs "credential" namespace) must never let
+     * generateProofWithJsonClaims's freshKey=false auto-selection pick up the instance key - it can be
+     * rotated/replaced by the wallet's own retry logic at any time without knowing a credential came to depend on it.
+     */
+    @Test
+    fun generateProofWithJsonClaimsNeverAutoSelectsAKeyMarkedAsTheInstanceKey() = runTest {
+        val signer = mockk<Signer>(relaxed = true)
+        coEvery { signer.listKeys() } returns listOf(
+            SignerKeyInfo("instance-key-1", "ES256"),
+            SignerKeyInfo("credential-key-1", "ES256"),
+        )
+        val jwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate().toPublicJWK().toJSONString()
+        coEvery { signer.exportPublicKey(any()) } returns jwk.toByteArray()
+        coEvery { signer.sign(any(), any()) } returns ByteArray(64) { it.toByte() }
+        val adapter = WscdKeystoreAdapter(signer).also { it.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0)) }
+        adapter.markInstanceKey("instance-key-1")
+
+        adapter.generateProofWithJsonClaims("aud-1", "n-1", false, null, emptyMap())
+
+        val signedKeyId = slot<String>()
+        coVerify { signer.sign(capture(signedKeyId), any()) }
+        assertEquals("the instance key was skipped in favour of the ordinary credential key", "credential-key-1", signedKeyId.captured)
+    }
+
+    @Test
+    fun generateProofWithJsonClaimsGeneratesAFreshKeyWhenOnlyTheInstanceKeyExists() = runTest {
+        val signer = mockk<Signer>(relaxed = true)
+        coEvery { signer.listKeys() } returnsMany listOf(
+            listOf(SignerKeyInfo("instance-key-1", "ES256")),
+            listOf(SignerKeyInfo("instance-key-1", "ES256"), SignerKeyInfo("fresh-key-1", "ES256")),
+        )
+        coEvery { signer.generateKey(any()) } returns "fresh-key-1"
+        val jwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate().toPublicJWK().toJSONString()
+        coEvery { signer.exportPublicKey(any()) } returns jwk.toByteArray()
+        coEvery { signer.sign(any(), any()) } returns ByteArray(64) { it.toByte() }
+        val adapter = WscdKeystoreAdapter(signer).also { it.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0)) }
+        adapter.markInstanceKey("instance-key-1")
+
+        adapter.generateProofWithJsonClaims("aud-1", "n-1", false, null, emptyMap())
+
+        coVerify(exactly = 1) { signer.generateKey("ES256") }
+        val signedKeyId = slot<String>()
+        coVerify { signer.sign(capture(signedKeyId), any()) }
+        assertEquals("fresh-key-1", signedKeyId.captured)
+    }
+
     @Test
     fun generateProofCarriesTheSignedExtraClaims() = runTest {
         val signer = createMockSigner()
@@ -859,5 +933,97 @@ class WscdKeystoreAdapterTest {
         coVerify(exactly = 1) { manager.activateLifecycle(any()) }
         coVerify(exactly = 0) { signer.isWscdOnboarded() }
         assertFalse(adapter.isWscdOnboarded())
+    }
+
+    // ── Key Attestation's key_storage/user_authentication now go through ─────
+    // ── the SAME configurable Iso18045AssuranceScheme as WscdPluginCapabilities ─
+
+    @Test
+    fun generateKeyAttestationMapsTrustedExecutionToEnhancedBasic() = runTest {
+        // "iso_18045_enhanced-basic" is a REAL, OID4VCI-registered value
+        // (Appendix D.2, VAN.3, between basic/VAN.2 and moderate/VAN.4) - see
+        // Iso18045AssuranceScheme.DEFAULT_KEY_STORAGE_TYPE_LABELS's doc
+        // comment. This regression test proves the single shared scheme
+        // still produces this value (unchanged from the previous, separate
+        // toIso18045AttackPotential table this replaced) rather than
+        // collapsing it into the coarser "moderate" the SDK's own narrower
+        // plugin-SELECTION scale uses.
+        val signer = mockk<Signer>(relaxed = true).also {
+            coEvery { it.generateKey(any()) } returns "test-key-1"
+            coEvery { it.sign(any(), any()) } returns ByteArray(64) { i -> i.toByte() }
+            coEvery { it.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+            coEvery { it.securityProperties(any()) } returns SignerSecurityProperties(
+                keyStorage = listOf("trusted_execution"),
+                userAuthentication = emptyList(),
+            )
+        }
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
+        val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
+
+        assertEquals(listOf("iso_18045_enhanced-basic"), claims.getClaim("key_storage"))
+    }
+
+    @Test
+    fun generateKeyAttestationHonorsCustomAssuranceScheme() = runTest {
+        // Proves the Key Attestation JWT's key_storage claim is genuinely
+        // read through the injected Iso18045AssuranceScheme, not still a
+        // separate compiled-in table: a deployment configuring "hardware" to
+        // read as iso_18045_high (rather than DEFAULT's iso_18045_moderate)
+        // sees that custom value in the signed claim.
+        val signer = mockk<Signer>(relaxed = true).also {
+            coEvery { it.generateKey(any()) } returns "test-key-1"
+            coEvery { it.sign(any(), any()) } returns ByteArray(64) { i -> i.toByte() }
+            coEvery { it.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+            coEvery { it.securityProperties(any()) } returns SignerSecurityProperties(
+                keyStorage = listOf("hardware"),
+                userAuthentication = emptyList(),
+            )
+        }
+        val lenientDeployment = Iso18045AssuranceScheme(
+            keyStorageTypeLabels = mapOf("hardware" to Iso18045AssuranceScheme.HIGH),
+        )
+        val adapter = WscdKeystoreAdapter(signer, assuranceScheme = lenientDeployment)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
+        val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
+
+        assertEquals(listOf("iso_18045_high"), claims.getClaim("key_storage"))
+    }
+
+    @Test
+    fun constructorCombiningProfileAndAssuranceSchemeAppliesBoth() = runTest {
+        // Regression test for a real Copilot finding: the profile-only and
+        // scheme-only constructors each forced the other setting to its
+        // default, so a DIIP integration (non-default InteropProfile) could
+        // not also customize its attestation mapping. This constructor
+        // combines both - proves the scheme is applied (the profile itself
+        // is exercised by this adapter's existing profile-specific tests).
+        val signer = mockk<Signer>(relaxed = true).also {
+            coEvery { it.generateKey(any()) } returns "test-key-1"
+            coEvery { it.sign(any(), any()) } returns ByteArray(64) { i -> i.toByte() }
+            coEvery { it.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+            coEvery { it.securityProperties(any()) } returns SignerSecurityProperties(
+                keyStorage = listOf("hardware"),
+                userAuthentication = emptyList(),
+            )
+        }
+        val lenientDeployment = Iso18045AssuranceScheme(
+            keyStorageTypeLabels = mapOf("hardware" to Iso18045AssuranceScheme.HIGH),
+        )
+        val adapter = WscdKeystoreAdapter(
+            signer,
+            org.siros.sdk.credentials.interop.InteropProfile.DEFAULT,
+            lenientDeployment,
+        )
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
+        val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
+
+        assertEquals(listOf("iso_18045_high"), claims.getClaim("key_storage"))
     }
 }

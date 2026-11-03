@@ -264,10 +264,15 @@ class SirosWalletTest {
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "apiClient" to apiClient,
             "json" to Json { ignoreUnknownKeys = true },
+            "config" to WalletConfig(backendUrl = "https://backend.example.com"),
         )
 
         val offers = wallet.getAvailableCredentials()
 
+        coVerify(exactly = 1) { apiClient.getIssuerMetadata(7) }
+        // The second call is served from the SDK's cache: no further request to the backend.
+        assertEquals(offers, wallet.getAvailableCredentials())
+        coVerify(exactly = 1) { apiClient.getIssuers() }
         coVerify(exactly = 1) { apiClient.getIssuerMetadata(7) }
         assertEquals(1, offers.size)
         assertEquals("pid", offers.single().credentialConfigurationId)
@@ -2338,6 +2343,44 @@ class SirosWalletTest {
     }
 
     /**
+     * Review of #298: [SirosWallet.unlockKeystore] schedules an issuer-catalog refresh once it reaches `Ready`, but
+     * [SirosWallet.resumeSession] can ALSO land directly in `Ready` itself - the "no stored private data" branch,
+     * which never calls `unlockKeystore` at all. Without its own refresh call, a stale (or still-empty) persisted
+     * catalog snapshot would sit unrefreshed until something else happened to read it.
+     */
+    @Test
+    fun resumeSession_withNoStoredPrivateData_stillSchedulesACatalogRefresh() = runTest(dispatcher) {
+        mockEngineConstructor()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.userId } returns "user-1"
+        every { sessionStore.displayName } returns "Alice"
+        every { sessionStore.privateDataJwe } returns null
+        every { sessionStore.hkdfSalt } returns null
+        every { sessionStore.hkdfInfo } returns null
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        every { accountRegistry.activeAccountId } returns "default:user-1"
+        val issuerCatalog = mockk<IssuerCatalog>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "accountRegistry" to accountRegistry,
+            "sessionStore" to sessionStore,
+            "authTokens" to mockk<AuthTokens>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "httpClient" to OkHttpClient(),
+            "issuerCatalog" to issuerCatalog,
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+
+        wallet.resumeSession()
+        advanceUntilIdle()
+
+        assertTrue(stateFlow.value is WalletState.Ready)
+        verify(exactly = 1) { issuerCatalog.refreshInBackground(any()) }
+    }
+
+    /**
      * `activeOffer` (used to build display metadata for a stored credential -
      * see [CredentialUtils.buildMetadata]/[CredentialUtils.buildMdocMetadata])
      * was previously only ever populated by [SirosWallet.startIssuanceByOffer].
@@ -2891,6 +2934,87 @@ class SirosWalletTest {
         }
     }
 
+    /**
+     * A renewal with BOTH an audience and a key id hint for a RETAINED, already-rotated-away instance key (the
+     * current instance key is a different one - see retireInstanceKey's retention rule) must not attest: a freshly
+     * obtained WIA/PoP would attest the current key while the DPoP proof is signed with the old, hinted one, which an
+     * issuer binding both to the same key would reject. Found via review of #312.
+     */
+    @Test
+    fun signClientAuth_aHintedKeyThatIsNotTheCurrentInstanceKey_isAnsweredWithoutAttestation() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every {
+            engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+        } just runs
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        // The CURRENT instance key differs from the hint below: the hint names a retained, superseded key.
+        every { sessionStore.instanceKeyId } returns "instance-key-1"
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.listKeys() } returns listOf(KeyInfo("instance-key-1", "ES256", 0L))
+        coEvery {
+            keystore.generateDPoPProof(keyId = any(), htm = any(), htu = any(), nonce = any(), accessTokenHash = any())
+        } returns "dpop-jwt"
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "sessionStore" to sessionStore,
+            "keystore" to keystore,
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-renew",
+                messageId = "msg-renew",
+                action = "sign_client_auth",
+                params = SignRequestParams(
+                    audience = "https://as.example.com",
+                    issuer = "siros-sample://callback",
+                    htm = "POST",
+                    htu = "https://as.example.com/token",
+                    ath = "ath-value",
+                    keyId = "old-instance-key",
+                ),
+            )
+        )
+        repeat(10) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+            advanceUntilIdle()
+        }
+
+        coVerify(exactly = 1) {
+            keystore.generateDPoPProof(
+                keyId = "old-instance-key",
+                htm = "POST",
+                htu = "https://as.example.com/token",
+                nonce = null,
+                accessTokenHash = "ath-value",
+            )
+        }
+        // No attestation material was obtained at all - the mismatch is caught before any WIA round trip, not after.
+        coVerify(exactly = 0) { apiClient.requestWIAChallenge() }
+        coVerify(exactly = 0) { apiClient.generateWIA(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.generateKeyProof(any(), any(), any(), any(), any()) }
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                flowId = "flow-renew",
+                messageId = "msg-renew",
+                clientAttestation = null,
+                clientAttestationPoP = null,
+                dpopKeyId = "old-instance-key",
+                dpopProof = "dpop-jwt",
+            )
+        }
+    }
+
     // ---- sign_client_auth: a proof that was asked for and could not be made is never answered with a bare key id ----
 
     private val ca = StringBuilder()
@@ -3268,6 +3392,45 @@ class SirosWalletTest {
         override fun get(issuer: String, credentialType: String): String? = entries[key(issuer, credentialType)]
         override fun put(issuer: String, credentialType: String, pluginId: String) {
             entries[key(issuer, credentialType)] = pluginId
+        }
+    }
+
+    /** Minimal [WscdUserOverrideStore] fake for [buildWscdSelectionPolicy]-level tests that don't exercise overrides. */
+    private class NoopTestWscdUserOverrideStore : WscdUserOverrideStore {
+        override fun get(issuer: String, credentialType: String): String? = null
+        override fun put(issuer: String, credentialType: String, pluginId: String) {}
+        override fun getGlobal(): String? = null
+        override fun setGlobal(pluginId: String) {}
+    }
+
+    /**
+     * Regression test for a real gap a Copilot review caught: [WalletConfig]
+     * gained a `wscdAssuranceScheme` field, and [WscdSelectionPolicy] (the
+     * type) fully supported one, but nothing in [SirosWallet]'s own
+     * construction actually forwarded it - real wallet issuance silently
+     * always used [org.siros.sdk.keystore.Iso18045AssuranceScheme.DEFAULT]
+     * no matter what a deployment configured. [buildWscdSelectionPolicy] is
+     * the exact function [SirosWallet]'s own init block calls, so this
+     * proves the real wiring, not a reimplementation of it.
+     */
+    @Test
+    fun buildWscdSelectionPolicy_threadsConfiguredAssuranceSchemeThrough() = runTest {
+        val strictDeployment = org.siros.sdk.keystore.Iso18045AssuranceScheme(
+            nominalPluginLabels = mapOf("fido2" to org.siros.sdk.keystore.Iso18045AssuranceScheme.MODERATE),
+        )
+        val config = WalletConfig(backendUrl = "https://wallet.example.com", wscdAssuranceScheme = strictDeployment)
+        val policy = buildWscdSelectionPolicy(config, InMemoryWscdTofuStore(), NoopTestWscdUserOverrideStore())
+
+        try {
+            policy.resolve(
+                issuer = "https://issuer.example.com",
+                credentialType = "urn:eu.europa.ec.eudi:pid:1",
+                requiredTier = "iso_18045_high",
+                availablePluginIds = setOf("fido2"),
+            )
+            org.junit.Assert.fail("expected NoEligibleWscdPluginException: the wallet-configured scheme caps fido2 at iso_18045_moderate")
+        } catch (e: NoEligibleWscdPluginException) {
+            // expected
         }
     }
 
@@ -6029,6 +6192,74 @@ class SirosWalletTest {
             org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]?.shape?.id,
         )
         second.await()
+    }
+
+    /**
+     * [IssuerCatalog]'s `buildOffers` calls [SirosWallet.recordAuxiliarySelection] for EVERY offer on every catalog
+     * assembly (a cache read, a background refresh), including for the configuration an issuance is actively in
+     * flight for. Its completion handlers (`wmpDeliveredMetadataRefusal` and the legacy equivalent) look up the
+     * selection live, by (issuer, configuration): a catalog pass landing mid-flight must never swap out the selection
+     * the request was built with, or a response missing a required seed could be silently accepted. Found via review
+     * of #298's background refresh.
+     */
+    @Test
+    fun catalogDerivationNeverOverwritesTheActiveIssuancesAuxiliarySelection() = runTest(dispatcher) {
+        val issuer = "https://issuer.example"
+        fun metadataWith(advert: kotlinx.serialization.json.JsonElement?) = buildJsonObject {
+            put("credential_issuer", JsonPrimitive(issuer))
+            putJsonObject("credential_configurations_supported") {
+                putJsonObject("pid") {
+                    put("format", JsonPrimitive("dc+sd-jwt"))
+                    if (advert != null) put("auxiliary_data_supported", advert)
+                }
+            }
+        }
+        val valid = metadataWith(Json.parseToJsonElement("""{"to_wallet":[{"type":"hash_commitment","alg":"sha-256","path":["ssc"],"encoding":"base64url"}]}"""))
+        val withoutAdvertisement = metadataWith(null) // no auxiliary_data_supported at all -> AuxiliarySelection.None
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.resolveIssuer(any(), any()) } returns buildJsonObject { putJsonObject("context") { put("trust_metadata", valid) } }
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val selections = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "engineSession" to engine,
+            "apiClient" to apiClient,
+            "secretSeedAdvertised" to selections,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        val offer = org.siros.sdk.credentials.CredentialOffer("pid", issuer, "PID", issuerName = "I")
+        wallet.startIssuanceByOffer(offer)
+        advanceUntilIdle()
+        assertEquals(
+            "the issuance's own resolution recorded the selection",
+            org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]?.shape?.id,
+        )
+        assertEquals(offer.credentialConfigurationId, "pid")
+        assertEquals("pid", (getField(wallet, "activeOffer") as org.siros.sdk.credentials.CredentialOffer).credentialConfigurationId)
+
+        // A concurrent catalog derivation (IssuerCatalog.buildOffers, e.g. a background refresh) for the SAME
+        // (issuer, "pid") the issuance above is still active for, with metadata that now advertises nothing.
+        val staleConfig = Json { ignoreUnknownKeys = true }
+            .decodeFromJsonElement(org.siros.sdk.credentials.IssuerMetadata.serializer(), withoutAdvertisement)
+            .credentialConfigurationsSupported.getValue("pid")
+        val record = SirosWallet::class.java.getDeclaredMethod(
+            "recordAuxiliarySelection", String::class.java, String::class.java, org.siros.sdk.credentials.CredentialConfiguration::class.java,
+        )
+        record.isAccessible = true
+        record.invoke(wallet, issuer, "pid", staleConfig)
+
+        assertEquals(
+            "a catalog pass for the actively-issuing pair must not overwrite the recorded selection",
+            org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]?.shape?.id,
+        )
+
+        // Once the issuance is no longer active (the attempt ended), the SAME catalog derivation is free to update it.
+        setField(wallet, "activeOffer", null)
+        record.invoke(wallet, issuer, "pid", staleConfig)
+        assertNull("no longer protected once the issuance ended", selections[issuer to "pid"])
     }
 
     @Test
@@ -14440,7 +14671,7 @@ class SirosWalletTest {
         assertTrue(getField(wallet, "issuanceInFlight") as Boolean)
     }
 
-    private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
+    internal fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())
         val stateFlow = values["_state"] as? MutableStateFlow<WalletState>
@@ -14454,6 +14685,9 @@ class SirosWalletTest {
         if ("pendingAuthorizations" !in values) {
             values["pendingAuthorizations"] = mutableMapOf<String, Any>()
         }
+        // allocateInstance skips these initializers: the WIA acquisition lock and the set of DPoP-bound instance keys.
+        if ("wiaMutex" !in values) values["wiaMutex"] = kotlinx.coroutines.sync.Mutex()
+        if ("dpopBoundInstanceKeys" !in values) values["dpopBoundInstanceKeys"] = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         if ("pscIssuerByFlow" !in values) {
             values["pscIssuerByFlow"] = java.util.concurrent.ConcurrentHashMap<String, String>()
         }
@@ -14528,6 +14762,12 @@ class SirosWalletTest {
         if ("trustDecisionCache" !in values) {
             values["trustDecisionCache"] = TrustDecisionCache(java.time.Duration.ZERO)
         }
+        if ("credentialStore" !in values) {
+            // allocateInstance skips this initializer too: retireInstanceKey (instance-key rotation) now reads
+            // getCredentials() to check whether a replaced key is still a stored credential's holder key, which NPEs
+            // on a null credentialStore for any test that exercises rotation without itself caring about credentials.
+            values["credentialStore"] = FakeCredentialStore(mutableListOf())
+        }
         if ("zkPreparationsByFlow" !in values) {
             values["zkPreparationsByFlow"] =
                 java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
@@ -14583,6 +14823,11 @@ class SirosWalletTest {
         }
         if ("readerTrustRootCertificates\$delegate" !in values) {
             setField(wallet, "readerTrustRootCertificates\$delegate", lazy { emptyList<java.security.cert.X509Certificate>() })
+        }
+        // allocateInstance skips the issuer catalog's initializer too; the wallet's own factory builds it over the fields set above.
+        if ("issuerCatalog" !in values) {
+            val catalogScope = (values["scope"] as? CoroutineScope) ?: CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+            setField(wallet, "issuerCatalog", wallet.newIssuerCatalog(catalogScope, InMemoryIssuerCatalogStore()))
         }
         return wallet
     }
@@ -16060,6 +16305,63 @@ class SirosWalletTest {
         assertEquals(null, offer("""{"namespaces":["org.siros.nym_auth"]}"""))
         assertEquals(null, offer("""{"org.siros.nym_auth":"00112233445566778899aabbccddeeff"}"""))
         assertEquals(null, offer("""{"namespaces":["org.siros.nym_auth"],"org.siros.nym_auth":"00112233445566778899aabbccddeeff"}"""))
+    }
+
+    @Test
+    fun nymAuthsIssuedDisplayRendering_isUsedAsTheOfferLogoInsteadOfTheFlatGreenFallback() = runTest(dispatcher) {
+        // Pulled live from the gdc environment's nym_auth issuer (sirosid-gdc-vc-apigw.fly.dev, 2026-10-29): the
+        // published display entry carries BOTH the original flat fields (kept for older readers) AND a `rendering`
+        // block with a properly designed SVG card - not a cache-staleness scenario, every refresh re-fetches this
+        // same document. Before this test's fix, `CredentialDisplayEntry` had no `rendering` field at all, so
+        // kotlinx.serialization's `ignoreUnknownKeys` silently dropped it (no exception, no fallback-to-cache: the
+        // decode simply never modeled the field), and the offer fell back to the flat `background_color`
+        // (`#006400`, dark green) with no logo - the "still shows the old green thumbnail" symptom.
+        val wallet = newWallet(
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "secretSeedAdvertised" to advertisedSelections(false),
+        )
+        val svgDataUri = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzY1IiBoZWlnaHQ9IjI0MyIvPg=="
+        val metadata = Json { ignoreUnknownKeys = true }.decodeFromString(
+            org.siros.sdk.credentials.IssuerMetadata.serializer(),
+            """
+            {
+              "credential_issuer": "https://sirosid-gdc-vc-apigw.fly.dev",
+              "credential_endpoint": "https://sirosid-gdc-vc-apigw.fly.dev/credential",
+              "credential_configurations_supported": {
+                "nym_auth": {
+                  "format": "mso_mdoc",
+                  "doctype": "eu.europa.ec.eudi.nym_auth.1",
+                  "credential_metadata": {
+                    "display": [
+                      {
+                        "locale": "en-US",
+                        "name": "Nym authentication",
+                        "description": "Anonymous/pseudonymous authentication attestation for zero-knowledge pseudonym and age predicate presentations",
+                        "background_color": "#006400",
+                        "text_color": "#ffffff",
+                        "rendering": {
+                          "svg_templates": [
+                            {"uri": "$svgDataUri", "properties": {"orientation": "landscape"}}
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+        val m = wallet.javaClass.getDeclaredMethod("buildCredentialOfferFromMetadata", String::class.java, String::class.java, org.siros.sdk.credentials.IssuerMetadata::class.java)
+        m.isAccessible = true
+        val offer = m.invoke(wallet, "https://sirosid-gdc-vc-apigw.fly.dev", "nym_auth", metadata) as org.siros.sdk.credentials.CredentialOffer
+
+        assertEquals("Nym authentication", offer.credentialName)
+        // The flat fallback color is still carried (nothing regresses for a reader that only understands it)...
+        assertEquals("#006400", offer.backgroundColor)
+        // ...but the SVG card template - the issuer's actual, current, properly designed display - is what the
+        // catalog now shows as the offer's logo, the same way a flat `logo.uri` always has been.
+        assertEquals(svgDataUri, offer.logoUri)
     }
 
     @Test
