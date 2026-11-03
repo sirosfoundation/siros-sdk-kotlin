@@ -160,7 +160,39 @@ class MainActivity : ComponentActivity() {
                             pendingWscaIntent = null
                         }
                     }
-                    WalletScreen(viewModel)
+                    var showVerifier by rememberSaveable { mutableStateOf(false) }
+                    val verifierViewModel = remember {
+                        VerifierViewModel(
+                            transportFactory = { engagement, _ ->
+                                openMdocBleTransport(this@MainActivity, engagement)
+                            },
+                            nfcHandoverReader = {
+                                org.siros.sdk.verifier.mdoc.proximity.ndef.android.MdocNfcEngagementReader(
+                                    this@MainActivity,
+                                ).read()
+                            },
+                        )
+                    }
+                    if (showVerifier) {
+                        val verifierState by verifierViewModel.state.collectAsState()
+                        MdocVerifierScreen(
+                            state = verifierState,
+                            onEndpointChange = verifierViewModel::updateEndpoint,
+                            onTenantChange = verifierViewModel::updateTenant,
+                            onStartScan = verifierViewModel::startScan,
+                            onStartNfc = verifierViewModel::startNfc,
+                            onBluetoothPermissionsDenied = verifierViewModel::bluetoothPermissionsDenied,
+                            onQrScanned = verifierViewModel::onQrScanned,
+                            onCancelScan = verifierViewModel::cancelScan,
+                            onClear = verifierViewModel::clear,
+                            onBack = {
+                                verifierViewModel.cancelVerification()
+                                showVerifier = false
+                            },
+                        )
+                    } else {
+                        WalletScreen(viewModel, onVerify = { showVerifier = true })
+                    }
                 }
             }
         }
@@ -229,9 +261,35 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private suspend fun openMdocBleTransport(
+    context: android.content.Context,
+    engagement: org.siros.sdk.verifier.mdoc.proximity.MdocEngagement,
+): org.siros.sdk.verifier.mdoc.proximity.MdocMessageTransport {
+    val election = org.siros.sdk.verifier.mdoc.proximity.MdocBleTransportFactory.start(context, engagement)
+    try {
+        val transport = election.await()
+        return object : org.siros.sdk.verifier.mdoc.proximity.MdocMessageTransport {
+            override suspend fun send(message: ByteArray) = transport.send(message)
+
+            override suspend fun receive(): ByteArray = transport.receive()
+
+            override suspend fun close() {
+                try {
+                    transport.close()
+                } finally {
+                    election.close()
+                }
+            }
+        }
+    } catch (error: Throwable) {
+        election.close()
+        throw error
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WalletScreen(viewModel: WalletViewModel) {
+fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val walletState by viewModel.state.collectAsState()
     val r2psServerUrl by viewModel.r2psServerUrl.collectAsState()
     val showAddCredential by viewModel.showAddCredential.collectAsState()
@@ -405,6 +463,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
             onLoginAccount = { account -> viewModel.login(account.accountId) },
             onForgetAccount = viewModel::forgetAccount,
             onRegister = { name -> viewModel.register(name) },
+            onVerify = onVerify,
             onUpdateBackendUrl = viewModel::updateBackendUrl,
             onUpdateTenantId = viewModel::updateTenantId,
             onUpdateEngineUrl = viewModel::updateEngineUrl,
@@ -818,6 +877,21 @@ fun WalletScreen(viewModel: WalletViewModel) {
                     color = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable { onVerify() },
+            ) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = "Verify",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Verify",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
         }
@@ -852,6 +926,7 @@ fun LoginScreen(
     onLoginAccount: (org.siros.sdk.wallet.CachedAccount) -> Unit,
     onForgetAccount: (String) -> Unit,
     onRegister: (String) -> Unit,
+    onVerify: () -> Unit,
     onUpdateBackendUrl: (String) -> Unit,
     onUpdateTenantId: (String) -> Unit,
     onUpdateEngineUrl: (String) -> Unit,
@@ -1045,10 +1120,19 @@ fun LoginScreen(
                         }
                     }
                 }
-            } // Column
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onVerify,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                enabled = !isLoading,
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text("Verify nearby mdoc (no account required)")
+            }
+        } // Column
         } // Box
     } // Scaffold padding
-    } // Scaffold
 } // LoginScreen
 
 // ── Pre-Login Settings Bottom Sheet ────────────────────────────────

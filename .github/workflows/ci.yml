@@ -144,7 +144,7 @@ jobs:
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: sdk/transport/build/reports/kover/report.xml,sdk/auth/build/reports/kover/report.xml,sdk/credentials/build/reports/kover/report.xml,sdk/keystore/build/reports/kover/report.xml,sdk/flow/build/reports/kover/report.xml,sdk/wallet/build/reports/kover/report.xml,sdk/passkey-provider/build/reports/kover/report.xml
+          files: sdk/transport/build/reports/kover/report.xml,sdk/auth/build/reports/kover/report.xml,sdk/credentials/build/reports/kover/report.xml,sdk/keystore/build/reports/kover/report.xml,sdk/flow/build/reports/kover/report.xml,sdk/wallet/build/reports/kover/report.xml,sdk/passkey-provider/build/reports/kover/report.xml,sdk/verifier/build/reports/kover/report.xml
           flags: android
           fail_ci_if_error: false
 

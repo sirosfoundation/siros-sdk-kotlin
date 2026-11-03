@@ -1,0 +1,296 @@
+public final class org/siros/sdk/verifier/mdoc/MdocDocumentRequest {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthentication;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthentication;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthentication;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthentication;)Lorg/siros/sdk/verifier/mdoc/MdocDocumentRequest;
+	public static synthetic fun copy$default (Lorg/siros/sdk/verifier/mdoc/MdocDocumentRequest;Ljava/lang/String;Ljava/util/List;Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthentication;ILjava/lang/Object;)Lorg/siros/sdk/verifier/mdoc/MdocDocumentRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDocType ()Ljava/lang/String;
+	public final fun getNamespaces ()Ljava/util/List;
+	public final fun getReaderAuth ()Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthentication;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class org/siros/sdk/verifier/mdoc/MdocReaderAuthSigner {
+	public abstract fun signEs256 ([B)[B
+}
+
+public final class org/siros/sdk/verifier/mdoc/MdocReaderAuthentication {
+	public fun <init> (Ljava/util/List;Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthSigner;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthSigner;
+	public final fun copy (Ljava/util/List;Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthSigner;)Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthentication;
+	public static synthetic fun copy$default (Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthentication;Ljava/util/List;Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthSigner;ILjava/lang/Object;)Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthentication;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCertificateChain ()Ljava/util/List;
+	public final fun getSigner ()Lorg/siros/sdk/verifier/mdoc/MdocReaderAuthSigner;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class org/siros/sdk/verifier/mdoc/MdocReaderInbound {
+}
+
+public final class org/siros/sdk/verifier/mdoc/MdocReaderInbound$SessionOver : org/siros/sdk/verifier/mdoc/MdocReaderInbound {
+	public final fun component1-s-VKNKU ()J
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getStatus-s-VKNKU ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/MdocReaderInbound$Verified : org/siros/sdk/verifier/mdoc/MdocReaderInbound {
+	public final fun component1 ()Ljava/util/List;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDocuments ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/MdocRequestedElement {
+	public fun <init> (Ljava/lang/String;Z)V
+	public synthetic fun <init> (Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Z
+	public final fun copy (Ljava/lang/String;Z)Lorg/siros/sdk/verifier/mdoc/MdocRequestedElement;
+	public static synthetic fun copy$default (Lorg/siros/sdk/verifier/mdoc/MdocRequestedElement;Ljava/lang/String;ZILjava/lang/Object;)Lorg/siros/sdk/verifier/mdoc/MdocRequestedElement;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIdentifier ()Ljava/lang/String;
+	public final fun getIntentToRetain ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/MdocRequestedNamespace {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;)Lorg/siros/sdk/verifier/mdoc/MdocRequestedNamespace;
+	public static synthetic fun copy$default (Lorg/siros/sdk/verifier/mdoc/MdocRequestedNamespace;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/verifier/mdoc/MdocRequestedNamespace;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getElements ()Ljava/util/List;
+	public final fun getNamespace ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/VerifiedMdocDocument {
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()J
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDocType ()Ljava/lang/String;
+	public final fun getElements ()Ljava/util/List;
+	public final fun getIssuerX5c ()Ljava/util/List;
+	public final fun getValidUntil ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/VerifiedMdocElement {
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()[B
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIdentifier ()Ljava/lang/String;
+	public final fun getNamespace ()Ljava/lang/String;
+	public final fun getValueCbor ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod {
+	public fun <init> (ZZLjava/util/UUID;Ljava/util/UUID;)V
+	public final fun component1 ()Z
+	public final fun component2 ()Z
+	public final fun component3 ()Ljava/util/UUID;
+	public final fun component4 ()Ljava/util/UUID;
+	public final fun copy (ZZLjava/util/UUID;Ljava/util/UUID;)Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;
+	public static synthetic fun copy$default (Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;ZZLjava/util/UUID;Ljava/util/UUID;ILjava/lang/Object;)Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCentralClientModeUuid ()Ljava/util/UUID;
+	public final fun getPeripheralServerModeUuid ()Ljava/util/UUID;
+	public final fun getSupportsCentralClientMode ()Z
+	public final fun getSupportsPeripheralServerMode ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/MdocBleTransportElection {
+	public final fun await (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/MdocBleTransportException : java/lang/Exception {
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/MdocBleTransportFactory {
+	public static final field INSTANCE Lorg/siros/sdk/verifier/mdoc/proximity/MdocBleTransportFactory;
+	public final fun start (Landroid/content/Context;Lorg/siros/sdk/verifier/mdoc/proximity/MdocEngagement;)Lorg/siros/sdk/verifier/mdoc/proximity/MdocBleTransportElection;
+}
+
+public abstract interface class org/siros/sdk/verifier/mdoc/proximity/MdocEngagement {
+	public abstract fun getBle ()Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;
+	public abstract fun getDeviceEngagementBytes ()[B
+	public abstract fun getEDeviceKeyBytes ()[B
+	public abstract fun getHandoverCbor ()[B
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/MdocEngagementParseException : java/lang/IllegalArgumentException {
+}
+
+public abstract interface class org/siros/sdk/verifier/mdoc/proximity/MdocMessageTransport {
+	public abstract fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun receive (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/MdocProximityVerifier {
+	public fun <init> (Lorg/siros/sdk/verifier/trust/AuthZenPdp;Ljava/lang/String;Lkotlin/jvm/functions/Function0;)V
+	public synthetic fun <init> (Lorg/siros/sdk/verifier/trust/AuthZenPdp;Ljava/lang/String;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun start (Lorg/siros/sdk/verifier/mdoc/proximity/MdocEngagement;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement : org/siros/sdk/verifier/mdoc/proximity/MdocEngagement {
+	public fun <init> ([B[B[BLorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;)V
+	public final fun component1 ()[B
+	public final fun component2 ()[B
+	public final fun component3 ()[B
+	public final fun component4 ()Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;
+	public final fun copy ([B[B[BLorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;)Lorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement;
+	public static synthetic fun copy$default (Lorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement;[B[B[BLorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;ILjava/lang/Object;)Lorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getBle ()Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;
+	public fun getDeviceEngagementBytes ()[B
+	public fun getEDeviceKeyBytes ()[B
+	public fun getHandoverCbor ()[B
+	public final fun getQrHandover ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/MdocQrEngagementParser {
+	public static final field INSTANCE Lorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagementParser;
+	public static final field MAX_DEVICE_ENGAGEMENT_BYTES I
+	public static final fun parse (Ljava/lang/String;)Lorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/MdocReaderSession : java/lang/AutoCloseable {
+	public fun close ()V
+	public final fun dataMessage (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun establishmentMessage (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun openResponse ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun terminationMessage (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/MdocVerifierException : java/lang/Exception {
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getDetail ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/MdocNfcHandover : org/siros/sdk/verifier/mdoc/proximity/MdocEngagement {
+	public fun <init> ([B[BLorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement;Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;)V
+	public final fun component1 ()[B
+	public final fun component2 ()[B
+	public final fun component3 ()Lorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement;
+	public final fun component4 ()Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;
+	public final fun copy ([B[BLorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement;Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;)Lorg/siros/sdk/verifier/mdoc/proximity/ndef/MdocNfcHandover;
+	public static synthetic fun copy$default (Lorg/siros/sdk/verifier/mdoc/proximity/ndef/MdocNfcHandover;[B[BLorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement;Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;ILjava/lang/Object;)Lorg/siros/sdk/verifier/mdoc/proximity/ndef/MdocNfcHandover;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getBle ()Lorg/siros/sdk/verifier/mdoc/proximity/BleDeviceRetrievalMethod;
+	public final fun getBleSupported ()Z
+	public fun getDeviceEngagementBytes ()[B
+	public fun getEDeviceKeyBytes ()[B
+	public final fun getEngagement ()Lorg/siros/sdk/verifier/mdoc/proximity/MdocQrEngagement;
+	public fun getHandoverCbor ()[B
+	public final fun getHandoverSelectBytes ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/MdocNfcHandoverParseException : java/lang/IllegalArgumentException {
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/MdocNfcHandoverParser {
+	public static final field INSTANCE Lorg/siros/sdk/verifier/mdoc/proximity/ndef/MdocNfcHandoverParser;
+	public static final field MAX_HANDOVER_SELECT_BYTES I
+	public static final fun parse ([B)Lorg/siros/sdk/verifier/mdoc/proximity/ndef/MdocNfcHandover;
+}
+
+public abstract class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException : java/lang/Exception {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException$ApduFailure : org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException {
+	public final fun getOperation ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException$ApduStatus : org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException {
+	public final fun getOperation ()Ljava/lang/String;
+	public final fun getStatusWord ()I
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException$InvalidNdef : org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException {
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException$NfcDisabled : org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException {
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException$NfcUnavailable : org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException {
+	public fun <init> ()V
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException$NoTag : org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException {
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException$ReadInProgress : org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException {
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException$Timeout : org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementException {
+	public final fun getTimeoutMillis ()J
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementReader {
+	public static final field Companion Lorg/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementReader$Companion;
+	public static final field DEFAULT_TIMEOUT_MILLIS J
+	public fun <init> (Landroid/app/Activity;)V
+	public final fun read (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun read$default (Lorg/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementReader;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/verifier/mdoc/proximity/ndef/android/MdocNfcEngagementReader$Companion {
+}
+
+public final class org/siros/sdk/verifier/trust/AuthZenDeniedException : org/siros/sdk/verifier/trust/AuthZenException {
+}
+
+public abstract class org/siros/sdk/verifier/trust/AuthZenException : java/lang/Exception {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class org/siros/sdk/verifier/trust/AuthZenHttpException : org/siros/sdk/verifier/trust/AuthZenException {
+	public final fun getStatusCode ()I
+}
+
+public final class org/siros/sdk/verifier/trust/AuthZenNetworkException : org/siros/sdk/verifier/trust/AuthZenException {
+}
+
+public abstract interface class org/siros/sdk/verifier/trust/AuthZenPdp {
+	public abstract fun evaluate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/verifier/trust/AuthZenResponseException : org/siros/sdk/verifier/trust/AuthZenException {
+}
+
+public final class org/siros/sdk/verifier/trust/HttpAuthZenPdp : org/siros/sdk/verifier/trust/AuthZenPdp {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun evaluate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+

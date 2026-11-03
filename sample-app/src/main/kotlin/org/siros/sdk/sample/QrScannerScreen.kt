@@ -77,6 +77,10 @@ fun QrScannerScreen(
     onQrScanned: (String) -> Unit,
     onBack: () -> Unit,
     onUseProximityInstead: (() -> Unit)? = null,
+    title: String = stringResource(R.string.qr_scanner_title),
+    pasteLabel: String = stringResource(R.string.qr_scanner_paste_label),
+    pastePlaceholder: String = "openid-credential-offer://...",
+    pasteButtonLabel: String = stringResource(R.string.qr_scanner_paste_button),
 ) {
     val context = LocalContext.current
     var hasCameraPermission by remember {
@@ -101,7 +105,7 @@ fun QrScannerScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.qr_scanner_title)) },
+                title = { Text(title) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
@@ -167,7 +171,7 @@ fun QrScannerScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.qr_scanner_paste_label),
+                    text = pasteLabel,
                     style = MaterialTheme.typography.labelLarge,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
@@ -175,7 +179,7 @@ fun QrScannerScreen(
                     value = pasteUri,
                     onValueChange = { pasteUri = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("openid-credential-offer://...") },
+                    placeholder = { Text(pastePlaceholder) },
                     singleLine = true,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -184,7 +188,7 @@ fun QrScannerScreen(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = pasteUri.isNotBlank(),
                 ) {
-                    Text(stringResource(R.string.qr_scanner_paste_button))
+                    Text(pasteButtonLabel)
                 }
             }
         }

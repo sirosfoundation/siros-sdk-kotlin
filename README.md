@@ -19,7 +19,8 @@ Native Android SDK for integrating SIROS ID wallet infrastructure into existing 
 | `sdk:flow` | OID4VCI/OID4VP flow orchestration over WMP |
 | `sdk:credentials` | Credential storage and metadata |
 | `sdk:passkey-provider` | Android Credential Provider Service for passkeys |
-| `sample-app` | Minimal example wallet app |
+| `sdk:verifier` | Standalone ISO 18013-5 mdoc verification and go-trust authorization |
+| `sample-app` | Minimal example wallet and verifier app |
 
 ## Architecture
 
@@ -65,6 +66,10 @@ The SDK includes a full WMP implementation as an alternative to the legacy WebSo
 - **`WmpWebSocketTransport`** — WebSocket transport with `wmp.v1` subprotocol
 
 Enable via `WalletConfig(useWmpProtocol = true)`. Requires backend with WMP endpoint.
+
+### Standalone mdoc verification
+
+`sdk:verifier` verifies ISO 18013-5 presentations without constructing `SirosWallet` or logging in to a wallet account. Applications supply a go-trust/AuthZEN evaluation endpoint and tenant ID; `HttpAuthZenPdp` sends no authorization or cookie header. Claims are exposed only after cryptographic verification, request-policy checks, and an explicit permit for every document. There is no local trust fallback. See [docs/VERIFIER.md](docs/VERIFIER.md).
 
 ### Engine URL Auto-Discovery
 
