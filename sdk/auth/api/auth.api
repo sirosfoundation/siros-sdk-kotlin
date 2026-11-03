@@ -324,8 +324,8 @@ public final class org/siros/sdk/auth/BackendApiClient {
 	public final fun deleteAccountBegin (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun deleteCredential (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun evaluateTrust (Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun generateWIA (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun generateWIA$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun generateWIA (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun generateWIA$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun getAccountInfo (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getCredential (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getCredentials (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -863,9 +863,15 @@ public final class org/siros/sdk/auth/WalletInstanceStatus$Companion {
 
 public final class org/siros/sdk/auth/WalletLifecycleKt {
 	public static final field ERROR_CREDENTIAL_NOT_OWNED Ljava/lang/String;
+	public static final field ERROR_KEY_ATTESTATION_INVALID Ljava/lang/String;
+	public static final field ERROR_KEY_ATTESTATION_NOT_QUALIFYING Ljava/lang/String;
+	public static final field ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED Ljava/lang/String;
+	public static final field ERROR_KEY_ATTESTATION_UNAVAILABLE Ljava/lang/String;
 	public static final fun apiErrorCode (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
 	public static final fun apiRefusalMessage (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
 	public static final fun apiRefusalScope (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
+	public static final fun getKEY_ATTESTATION_NOT_QUALIFYING_REASONS ()Ljava/util/Set;
+	public static final fun keyAttestationNotQualifyingReason (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
 }
 
 public final class org/siros/sdk/auth/WalletLifecycleRefusal : java/lang/Enum {

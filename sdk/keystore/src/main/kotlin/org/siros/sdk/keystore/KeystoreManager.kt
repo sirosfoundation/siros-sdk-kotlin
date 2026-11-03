@@ -461,6 +461,28 @@ interface KeystoreManager {
      */
     suspend fun attestationChain(keyId: String): AttestationChain? = null
 
+    /** Whether [generateAttestedKey] works (see [Signer.supportsAttestedKeyGeneration]). Default: no. */
+    val supportsAttestedKeyGeneration: Boolean get() = false
+
+    /** Generate a key whose attestation carries [attestationChallenge] (see [Signer.generateAttestedKey]). Default: unsupported. */
+    suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String =
+        throw UnsupportedOperationException("This keystore cannot generate challenge-attested keys")
+
+    /** Delete a key this keystore generated (for example an instance key that must be replaced). Default: nothing to delete. */
+    suspend fun deleteKey(keyId: String) {}
+
+    /**
+     * Marks [keyId] as the wallet's own instance key (the WIA's `cnf` key), so a keystore that also serves ordinary
+     * credential proofs from the SAME key pool (one shared [Signer], e.g. a hardware keystore with no notion of
+     * "instance" vs "credential" key) never offers it to [generateProofWithJsonClaims]'s auto-selection
+     * (`freshKey = false`): the instance key can be rotated/replaced by the wallet's own retry logic at any time
+     * without knowing a credential has come to depend on it for signing, which would permanently break that
+     * credential's presentation. Call whenever the instance key id is established OR RESTORED (not only when freshly
+     * generated - a key generated in an earlier process run is not remembered as "the instance key" here across a
+     * restart otherwise). Default: no-op (a keystore with separate pools, or no auto-selection, has nothing to mark).
+     */
+    suspend fun markInstanceKey(keyId: String) {}
+
     /**
      * Generate [count] fresh keypairs and build a single OID4VCI `attestation`
      * proof-type Key Attestation JWT (spec: "Key Attestation in JWT format",

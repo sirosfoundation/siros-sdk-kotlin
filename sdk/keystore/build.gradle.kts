@@ -29,6 +29,10 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.serialization.cbor)
     implementation(libs.kotlinx.coroutines.core)
+    // BiometricPromptAuthenticator: Dispatchers.Main, and BiometricPrompt (its constructor takes a
+    // FragmentActivity, so the biometric library is part of this module's API).
+    implementation(libs.kotlinx.coroutines.android)
+    api(libs.androidx.biometric)
     // Real CBOR codec for ISO 18013-5 mdoc (IssuerSigned/DeviceResponse parsing,
     // COSE_Sign1 construction) - replaces hand-rolled byte-packing.
     implementation(libs.upokecenter.cbor)
@@ -42,7 +46,7 @@ dependencies {
     // The AAR is built by `make aar` in the siros-wscd-manager crate.
     // For local development, publish to mavenLocal:
     //   cd siros-wscd-manager && make aar && make publish-local
-    implementation("org.siros:siros-wscd-manager:0.12.0")
+    implementation("org.siros:siros-wscd-manager:0.14.0")
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
     // Circuits fetched from go-zk-circuits (see ZkCircuitClient, sdk/credentials)
@@ -71,4 +75,10 @@ dependencies {
     // test - see LongfellowZkVectorTest (androidTest), which needs these.
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    // AndroidKeystoreSignerInteractiveTest: an EmptyFragmentActivity to show BiometricPrompt over.
+    androidTestImplementation("androidx.fragment:fragment-testing:1.8.5")
+    // fragment-testing's EmptyFragmentActivity must be declared in the manifest merged into the APK under test;
+    // the -manifest artifact provides that. Without it ActivityScenario.launch() fails before the test runs.
+    debugImplementation("androidx.fragment:fragment-testing-manifest:1.8.5")
+    androidTestImplementation("androidx.test:core:1.6.1")
 }

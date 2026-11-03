@@ -59,6 +59,11 @@ import org.siros.sdk.auth.AddPasskeyOutcome
 import org.siros.sdk.auth.DeleteAccountBegin
 import org.siros.sdk.auth.DeleteAccountOutcome
 import org.siros.sdk.auth.ERROR_CREDENTIAL_NOT_OWNED
+import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_INVALID
+import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_NOT_QUALIFYING
+import org.siros.sdk.auth.keyAttestationNotQualifyingReason
+import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED
+import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_UNAVAILABLE
 import org.siros.sdk.auth.StepUpAuthenticator
 import org.siros.sdk.auth.WalletInstance
 import org.siros.sdk.auth.WalletLifecycleRefusal
@@ -114,7 +119,6 @@ import org.siros.sdk.keystore.mdoc.MdocCose
 import org.siros.sdk.credentials.VctmFetcher
 import org.siros.sdk.credentials.MddlSchema
 import org.siros.sdk.credentials.MddlSchemaFetcher
-import org.siros.sdk.keystore.WscdPluginCapabilities
 import org.siros.sdk.keystore.BbsHolderStateVault
 import org.siros.sdk.keystore.CredentialRefreshTokenEntry
 import org.siros.sdk.keystore.DCAPIResponseEncryption
@@ -2027,6 +2031,8 @@ class SirosWallet private constructor(
         )
         hydrateReloadedCredentials()
         reloadPresentationHistory()
+        // Warm the issuer catalog (list and metadata) while the user is still on the home screen.
+        issuerCatalog.refreshInBackground(issuerCatalogScopeKey())
     }
 
     /**
@@ -2291,6 +2297,9 @@ class SirosWallet private constructor(
         // not at the next connection (a wallet that stays logged out never makes one).
         blindIssuance.clear()
         dropAllHolderCommitments()
+        // The issuer catalog belongs to the session's user: unreadable from here on, the stored copy removed in the background.
+        issuerCatalog.clearMemory()
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch { issuerCatalog.clearStore() }
         keystore.lock()
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = null
@@ -2393,6 +2402,10 @@ class SirosWallet private constructor(
                     displayName = displayName,
                     credentials = emptyList(),
                 )
+                // Same reason as unlockKeystore's identical call: this path also lands directly in Ready, so without
+                // it the issuer catalog is never scheduled for a refresh here, and a stale persisted snapshot (or an
+                // empty one) can sit unrefreshed until something else happens to trigger a read.
+                issuerCatalog.refreshInBackground(issuerCatalogScopeKey())
                 Timber.i("Session resumed for user $userId (no private data)")
             }
         } catch (e: SirosException) {
@@ -2537,6 +2550,7 @@ class SirosWallet private constructor(
             )
             hydrateReloadedCredentials()
             reloadPresentationHistory()
+            issuerCatalog.refreshInBackground(issuerCatalogScopeKey())
             Timber.i("Keystore unlocked after session resume")
         } catch (e: KeystoreException) {
             Timber.e(e, "Keystore unlock failed: corrupt container")
@@ -2574,6 +2588,8 @@ class SirosWallet private constructor(
         bumpSessionGeneration()
         activity.applicationContext.unregisterComponentCallbacks(memoryPressureCallbacks)
         circuitCatalogRefreshJob?.cancel()
+        issuerCatalog.clearMemory()
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch { issuerCatalog.clearStore() }
         circuitCatalogNetworkCallback?.let {
             try {
                 (activity.applicationContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)
@@ -3366,7 +3382,13 @@ class SirosWallet private constructor(
         // key, by any cause, is self-healed the same way, here, rather than
         // needing its own special case.
         sessionStore.instanceKeyId?.let { existing ->
-            if (keystore.listKeys().any { it.keyId == existing }) return existing
+            if (keystore.listKeys().any { it.keyId == existing }) {
+                // Re-mark on every restore, not only on generation: a keystore sharing one key pool with ordinary
+                // credential proofs (see KeystoreManager.markInstanceKey) remembers this only in memory, so a process
+                // restart must re-establish it before any credential issuance can run.
+                keystore.markInstanceKey(existing)
+                return existing
+            }
             Timber.w("Instance key $existing is recorded but missing from the keystore; regenerating")
         }
         // First use has to be serialised. Two callers arriving together - an
@@ -3387,10 +3409,18 @@ class SirosWallet private constructor(
             // confirmed live) one, or healed a stale one away.
             val current = sessionStore.instanceKeyId
             if (current != null && keystore.listKeys().any { it.keyId == current }) {
+                keystore.markInstanceKey(current)
                 current
             } else {
-                val keyId = keystore.generateKey("ES256")
+                val keyId = generateInstanceKey()
                 if (sessionStore.activeAccountId != account) {
+                    // Same discipline as rotateInstanceKey's analogous check: the unused key and any pending evidence
+                    // it registered are discarded, not left behind - otherwise an account switch racing first-use
+                    // generation (challenge fetch, hardware key generation) can repeat on every interrupted attempt
+                    // and accumulate orphaned keys in finite hardware storage. runCatching because the keystore may
+                    // already be locked (a logout can race this too), in which case there is nothing more to clean up.
+                    if (pendingInstanceKeyEvidence?.keyId == keyId) pendingInstanceKeyEvidence = null
+                    runCatching { keystore.deleteKey(keyId) }
                     throw WalletException("Account changed while generating the wallet instance key")
                 }
                 sessionStore.instanceKeyId = keyId
@@ -3415,6 +3445,9 @@ class SirosWallet private constructor(
 
     /** Serialises first-use instance-key creation; see [ensureInstanceKeyId]. */
     private val instanceKeyMutex = Mutex()
+
+    /** Serialises whole WIA acquisitions; see [ensureWalletInstanceAttestation]. */
+    private val wiaMutex = Mutex()
 
     /**
      * Serialises every writer of the account's private-data container
@@ -3442,6 +3475,14 @@ class SirosWallet private constructor(
      * deployment enables this feature.
      */
     private suspend fun ensureWalletInstanceAttestation(): String? {
+        val fastNow = System.currentTimeMillis() / 1000
+        cachedWia?.let { wia -> if (cachedWiaExpiresAt - fastNow > 60) return wia }
+        // The WHOLE acquisition is one critical section (cache recheck, evidence consumption, retries, key replacement, cache
+        // publication): two callers must never use one key while the other replaces it and caches a WIA for the deleted key.
+        return wiaMutex.withLock { acquireWalletInstanceAttestation() }
+    }
+
+    private suspend fun acquireWalletInstanceAttestation(budget: RotationBudget = RotationBudget(1)): String? {
         val now = System.currentTimeMillis() / 1000
         cachedWia?.let { wia -> if (cachedWiaExpiresAt - now > 60) return wia }
         return try {
@@ -3449,11 +3490,316 @@ class SirosWallet private constructor(
             // The session this attestation is being fetched for; see where it
             // is published below.
             val generation = sessionGeneration
-            val keyId = ensureInstanceKeyId()
-            val challengeResponse = client.requestWIAChallenge()
-            val challenge = challengeResponse["challenge"]?.jsonPrimitive?.contentOrNull
-                ?: return null
-            val pop = keystore.generateKeyProof(
+            // The account this acquisition is for: a key replacement it triggers touches only THIS account's key.
+            val account = sessionStore.activeAccountId
+            val firstKeyId = ensureInstanceKeyId()
+            // Instance-key evidence (Android Keystore): a key generated for challenge C has to be used with exactly that C.
+            val pending = takePendingInstanceKeyEvidence(firstKeyId)
+            // The backend already declared this very key NOT_QUALIFYING: no new request (a fresh challenge without evidence would
+            // just be sent for a key it refused) until the key is replaced.
+            if (firstKeyId == refusedInstanceKeyId) throw WalletException("The backend refused this instance key's evidence; no WIA until it is replaced")
+            val wia = obtainWia(client, firstKeyId, pending, account, generation, budget)
+            // Only publish a WIA that still belongs to the session that asked
+            // for it. This function suspends several times, and a logout,
+            // account switch or new login landing in that window resets the
+            // cache; storing afterwards would make [thisInstanceId] and
+            // currentWalletInstanceId() answer with the PREVIOUS account's
+            // thumbprint for the new session. The caller still gets its own
+            // result - it is only the cache that is refused.
+            if (sessionGeneration == generation) {
+                cachedWia = wia
+                cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
+                    ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
+            }
+            wia
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to obtain Wallet Instance Attestation")
+            null
+        }
+    }
+
+    /**
+     * Instance-key evidence whose key was generated for [challenge] and has not been used for a WIA yet.
+     *
+     * @param fetchedAtMillis When the challenge was FETCHED (before hardware key generation, which can take seconds
+     *   for StrongBox plus attestation) - the fallback staleness clock when [serverExpiresAtMillis] is unavailable.
+     *   Starting the clock only after key generation finishes would undercount a challenge's true age by however
+     *   long generation took, letting an already-expired challenge pass the local freshness check.
+     * @param serverExpiresAtMillis The backend's own `expires_at` for the challenge (epoch seconds, converted to
+     *   millis), when it sent one - authoritative over [fetchedAtMillis]'s local heuristic.
+     */
+    private class PendingInstanceKeyEvidence(
+        val keyId: String,
+        val challenge: String,
+        val fetchedAtMillis: Long,
+        val serverExpiresAtMillis: Long?,
+    ) {
+        /** True once the server's own expiry has passed, or (without one) the local fallback window has. */
+        fun isStale(now: Long): Boolean = now >= (serverExpiresAtMillis ?: (fetchedAtMillis + INSTANCE_KEY_CHALLENGE_FRESH_MS))
+    }
+
+    @Volatile
+    private var pendingInstanceKeyEvidence: PendingInstanceKeyEvidence? = null
+
+    private fun takePendingInstanceKeyEvidence(keyId: String): PendingInstanceKeyEvidence? {
+        val p = pendingInstanceKeyEvidence ?: return null
+        pendingInstanceKeyEvidence = null
+        return p.takeIf { it.keyId == keyId }
+    }
+
+    /**
+     * Whether [ensureAndroidKeystorePluginRegistered] has already registered the `android-keystore` WSCD plugin on
+     * [keystore]'s own [WscdManager] this process - registering twice on the same [keystore] is neither needed nor
+     * supported (see [WscdManager.registerAndroidKeystorePlugin]'s "at most once per process" contract). Guarded only
+     * by [instanceKeyMutex] (every caller below already holds it), not its own lock.
+     */
+    @Volatile
+    private var androidKeystorePluginRegistered = false
+
+    /**
+     * Registers the `android-keystore` WSCD plugin on [wscd] (a no-op after the first successful call) so
+     * [WscdManager.generateAndroidKeystoreKeyWithChallenge] - and, afterwards, plain [KeystoreManager.sign]/
+     * [KeystoreManager.attestationChain]/[KeystoreManager.listKeys]/[KeystoreManager.generateDPoPProof] on the very
+     * same [keystore] - can reach the key it makes. Registering on [keystore] itself (never a separate signer
+     * instance) is what makes the key immediately usable through every other call site in this class, which all
+     * read/write keys through [keystore] alone.
+     */
+    private fun ensureAndroidKeystorePluginRegistered(wscd: WscdManager) {
+        if (!androidKeystorePluginRegistered) {
+            wscd.registerAndroidKeystorePlugin()
+            androidKeystorePluginRegistered = true
+        }
+    }
+
+    /**
+     * Generates this installation's instance key. When the keystore can bind a key to an attestation challenge - a WSCD-backed
+     * [keystore] (via the `android-keystore` plugin, [WscdManager.generateAndroidKeystoreKeyWithChallenge] - the fixed, forced
+     * path real Android Key Attestation always uses, independent of whichever WSCD plugin the deployment has selected for
+     * ordinary credential keys) or, for a [keystore] that is itself a challenge-capable [Signer] outside the WSCD/UniFFI
+     * bridge ([org.siros.sdk.keystore.Signer.supportsAttestedKeyGeneration]) - the WIA challenge C is fetched FIRST and the key
+     * is generated for SHA-256("siros-instance-key-v1" || C), and remembered so the next WIA uses that very C with the key's
+     * chain; otherwise (or when the challenge cannot be fetched, or generation fails for any reason - no hardware support, an
+     * emulator with no Keystore attestation, ...) a plain key, exactly as before, and no evidence.
+     */
+    private suspend fun generateInstanceKey(): String {
+        val wscd = keystore as? WscdManager
+        val attestedCapable = wscd != null || keystore.supportsAttestedKeyGeneration
+        if (attestedCapable && (evidenceBlockedAt == null || evidenceBlockedAt != deviceStateFingerprint())) {
+            try {
+                val challengeResponse = apiClient?.requestWIAChallenge()
+                val c = challengeResponse?.get("challenge")?.jsonPrimitive?.contentOrNull
+                if (c != null) {
+                    // Captured here, before hardware key generation - see PendingInstanceKeyEvidence's doc comment.
+                    val fetchedAt = instanceKeyClock()
+                    val serverExpiresAt = challengeResponse["expires_at"]?.jsonPrimitive?.longOrNull?.let { it * 1000 }
+                    val challengeHash = InstanceKeyEvidence.challengeHash(c)
+                    val keyId = if (wscd != null) {
+                        ensureAndroidKeystorePluginRegistered(wscd)
+                        wscd.generateAndroidKeystoreKeyWithChallenge(challengeHash)
+                    } else {
+                        keystore.generateAttestedKey("ES256", challengeHash)
+                    }
+                    pendingInstanceKeyEvidence = PendingInstanceKeyEvidence(keyId, c, fetchedAt, serverExpiresAt)
+                    keystore.markInstanceKey(keyId)
+                    return keyId
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "Attested instance key generation failed, using a plain key")
+            }
+        }
+        return keystore.generateKey("ES256").also { keystore.markInstanceKey(it) }
+    }
+
+    /**
+     * Replaces the instance key [oldKeyId] (one key per challenge: a failed attempt needs a NEW key and challenge). Only when, UNDER
+     * the key mutex, the account and session this acquisition started for are still the active ones and the recorded key is still
+     * [oldKeyId]: account A's failure after a switch to B must never generate into, or overwrite, B's key. Returns the new key id.
+     */
+    private suspend fun rotateInstanceKey(oldKeyId: String, account: String?, generation: Int): String {
+        fun stillOurs() = sessionStore.activeAccountId == account && sessionGeneration == generation && sessionStore.instanceKeyId == oldKeyId
+        return instanceKeyMutex.withLock {
+            if (!stillOurs()) throw WalletException("The session or its instance key changed; the instance key is left alone")
+            val keyId = generateInstanceKey()
+            // Generation suspended (the challenge fetch, the key itself): the session may have changed meanwhile. The unused
+            // replacement and its pending evidence are discarded, and nothing of the other account is touched.
+            if (!stillOurs()) {
+                if (pendingInstanceKeyEvidence?.keyId == keyId) pendingInstanceKeyEvidence = null
+                runCatching { keystore.deleteKey(keyId) }
+                throw WalletException("The session or its instance key changed while the replacement was generated; it was discarded")
+            }
+            sessionStore.instanceKeyId = keyId
+            persistAndSyncKeystore()
+            retireInstanceKey(oldKeyId, account, generation)
+            keyId
+        }
+    }
+
+    /** Instance keys handed out for DPoP in this process: tokens are bound to them, so they are never deleted. */
+    private val dpopBoundInstanceKeys: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * Retention rule: a replaced instance key is deleted ONLY when nothing can still refer to it, that is when it was never used for
+     * DPoP in this process, no stored refresh token names it as its `dpop_key_id`, and no stored credential names it as its `kid`
+     * (with the adapter as the default keystore and `freshKey = false`, `WscdKeystoreAdapter.generateProofWithJsonClaims` can pick
+     * the instance key as a credential's own holder key - deleting it then would permanently break that credential's presentation).
+     * Otherwise it is retained (it is not the instance key any more, it is only kept for those references). The bound is one key per
+     * such reference plus the keys of this process; the settled ordering ([settledInstanceKeyId]) means a key only rotates before
+     * DPoP ever used it, so in practice a key a token references is not rotated at all.
+     *
+     * [account]/[generation] are the ownership [rotateInstanceKey] confirmed just before calling this: [persistAndSyncKeystore] can
+     * wait on the backend for a while, so they are re-checked here, before AND after reading the refresh-token/credential snapshot
+     * used to decide retention. A switch to another account in that window means the snapshot just read may be the NEW account's,
+     * not [oldKeyId]'s - never delete on a cross-account snapshot; the key is retained instead (best-effort cleanup, never a wrong
+     * deletion).
+     */
+    private suspend fun retireInstanceKey(keyId: String, account: String?, generation: Int) {
+        fun stillOurs() = sessionStore.activeAccountId == account && sessionGeneration == generation
+        if (!stillOurs()) {
+            Timber.i("The account/session changed while retiring the replaced instance key; it is retained rather than checked against another account's data")
+            return
+        }
+        val referencedByDpop = keyId in dpopBoundInstanceKeys || exportCredentialRefreshTokens().values.any { it.dpopKeyId == keyId }
+        val referencedByCredential = getCredentials(includeExpired = true).any { it.kid == keyId }
+        if (!stillOurs()) {
+            Timber.i("The account/session changed while reading retention references for the replaced instance key; it is retained")
+            return
+        }
+        if (referencedByDpop || referencedByCredential) {
+            Timber.i("The replaced instance key is still referenced by a DPoP-bound token or a stored credential; it is retained")
+            return
+        }
+        try {
+            keystore.deleteKey(keyId)
+        } catch (e: Exception) {
+            Timber.w(e, "The replaced instance key could not be deleted")
+        }
+    }
+
+    /**
+     * The instance key for DPoP and PoP use, AFTER its initial attestation has been settled: a key that was just generated with
+     * pending evidence completes (or gives up) its WIA acquisition first, which is where a key may still be replaced, so a proof is
+     * never signed with a key that can still rotate. Best-effort like every WIA step.
+     */
+    private suspend fun settledInstanceKeyId(): String = wiaMutex.withLock {
+        // Under the WIA lock, always: an in-flight acquisition (which may still replace the key) finishes first, even when its pending
+        // marker has already been consumed; this caller then sees the FINAL key.
+        val first = ensureInstanceKeyId()
+        if (pendingInstanceKeyEvidence?.keyId == first && first != refusedInstanceKeyId) acquireWalletInstanceAttestation()
+        ensureInstanceKeyId()
+    }
+
+    /** The one rotation an acquisition (or an explicit retry) may spend, shared by every path that replaces the instance key. */
+    private class RotationBudget(var left: Int) {
+        fun spend(): Boolean = if (left > 0) { left--; true } else false
+    }
+
+    /** The instance key the backend declared NOT_QUALIFYING: no acquisition re-sends it (with a fresh challenge and no evidence) until it is replaced. */
+    @Volatile
+    private var refusedInstanceKeyId: String? = null
+
+    /** The device state at the time the backend declared this device's instance-key evidence not qualifying (in memory: cleared by a restart). */
+    @Volatile
+    private var evidenceBlockedAt: String? = null
+
+    /** What the host's device looks like for the purpose of "has anything changed that could now qualify": OS build and security patch. */
+    internal var deviceStateFingerprint: () -> String = { android.os.Build.FINGERPRINT + "|" + android.os.Build.VERSION.SECURITY_PATCH }
+
+    /**
+     * Tries instance-key attestation again after the backend found the device's evidence NOT_QUALIFYING. Allowed only when the device
+     * state changed since (a new OS build or security patch); the app restarting also clears the block (it is in memory). Never loops:
+     * one explicit call is one new key and challenge. Returns whether a new attempt was made; the WIA stays best-effort.
+     */
+    suspend fun retryInstanceKeyAttestation(): Boolean = wiaMutex.withLock {
+        val blocked = evidenceBlockedAt
+        if (blocked != null && blocked == deviceStateFingerprint()) return@withLock false
+        if (!keystore.supportsAttestedKeyGeneration) return@withLock false
+        val account = sessionStore.activeAccountId
+        val generation = sessionGeneration
+        val old = sessionStore.instanceKeyId ?: return@withLock false
+        try {
+            // Eligibility, cache invalidation, rotation and acquisition are ONE critical section: no in-flight acquisition can cache
+            // a WIA for the retired key, and the stale cache is dropped BEFORE the key is replaced.
+            cachedWia = null
+            cachedWiaExpiresAt = 0
+            rotateInstanceKey(old, account, generation)
+            evidenceBlockedAt = null
+            refusedInstanceKeyId = null
+            // This call's one key is the replacement above: the acquisition may not make a second.
+            acquireWalletInstanceAttestation(RotationBudget(0))
+            true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w("Instance-key attestation retry failed (${e.javaClass.simpleName})")
+            false
+        }
+    }
+
+    /** Overridable clock for the freshness of a pending challenge (tests). */
+    internal var instanceKeyClock: () -> Long = System::currentTimeMillis
+
+    /**
+     * The WIA for [keyId]. With evidence pending for it, the key's chain goes along; a refused or unjudgeable chain (or a challenge
+     * that went stale before it could be used) is retried ONCE with a NEW key and a new challenge, an old backend that does not
+     * know the evidence type is retried at once without it (its challenge was not consumed), and anything else propagates (the
+     * caller treats a missing WIA as best-effort).
+     */
+    private suspend fun obtainWia(client: BackendApiClient, keyId: String, pending: PendingInstanceKeyEvidence?, account: String?, generation: Int, budget: RotationBudget): String {
+        var key = keyId
+        var evidence = pending
+        while (true) {
+            if (evidence != null && evidence.isStale(instanceKeyClock())) {
+                // The challenge is single use and short lived: do not spend it, replace the key. Checked on every
+                // loop iteration, not just once before it starts - a replacement challenge can itself go stale
+                // before use (slow key generation, slow persistence), and submitting it anyway would repeat the
+                // very bug this check exists to prevent. The shared rotation budget (see the INVALID/UNAVAILABLE
+                // case below) bounds how many times this can happen in one attempt.
+                if (!budget.spend()) throw WalletException("The instance key challenge went stale and no replacement is left in this attempt")
+                Timber.w("The instance key challenge went stale before use; replacing the key")
+                key = rotateInstanceKey(key, account, generation)
+                evidence = takePendingInstanceKeyEvidence(key)
+                continue
+            }
+            val challenge = evidence?.challenge ?: client.requestWIAChallenge()["challenge"]?.jsonPrimitive?.contentOrNull
+                ?: throw WalletException("The backend gave no WIA challenge")
+            val keyAttestation = evidence?.let { InstanceKeyEvidence.androidKey(keystore.attestationChain(key)) }
+            try {
+                return requestWia(client, key, challenge, keyAttestation)
+            } catch (e: BackendApiException) {
+                if (keyAttestation == null) throw e
+                when (e.apiErrorCode()) {
+                    ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED -> {
+                        // The challenge is not consumed: the same attempt without evidence.
+                        Timber.i("The backend does not know the instance-key evidence type; continuing without it")
+                        return requestWia(client, key, challenge, null)
+                    }
+                    ERROR_KEY_ATTESTATION_NOT_QUALIFYING -> {
+                        // Well formed but not good enough (a property of this device and build): a HARD failure for this key. No retry
+                        // and no new key now; only the reason enum is logged. A new key is tried only after the device state changed.
+                        val reason = e.keyAttestationNotQualifyingReason()
+                        Timber.w("Instance-key evidence does not qualify: reason=$reason")
+                        evidenceBlockedAt = deviceStateFingerprint()
+                        refusedInstanceKeyId = key
+                        throw e
+                    }
+                    ERROR_KEY_ATTESTATION_INVALID, ERROR_KEY_ATTESTATION_UNAVAILABLE -> {
+                        // ONE shared budget: the stale-challenge replacement above, this retry and an explicit retry all draw on it.
+                        if (!budget.spend()) throw e
+                        Timber.w("Instance-key evidence was refused (${e.apiErrorCode()}); retrying once with a new key and challenge")
+                        key = rotateInstanceKey(key, account, generation)
+                        evidence = takePendingInstanceKeyEvidence(key)
+                    }
+                    else -> throw e
+                }
+            }
+        }
+    }
+
+    /** One PoP-signed WIA request for [keyId] and [challenge], with [keyAttestation] when there is evidence. */
+    private suspend fun requestWia(client: BackendApiClient, keyId: String, challenge: String, keyAttestation: kotlinx.serialization.json.JsonObject?): String {
+        val pop = keystore.generateKeyProof(
                 keyId = keyId,
                 typ = "oauth-client-attestation-pop+jwt",
                 // iss doesn't need to equal client_id for THIS PoP - it's
@@ -3508,6 +3854,7 @@ class SirosWallet private constructor(
                     clientId = clientId,
                     nativeAttestation = nativeAttestation,
                     credentialId = linkedCredentialId,
+                    keyAttestation = keyAttestation,
                 )
             } catch (e: BackendApiException) {
                 // The passkey this session recorded is not one of the
@@ -3528,25 +3875,10 @@ class SirosWallet private constructor(
                     clientId = clientId,
                     nativeAttestation = nativeAttestation,
                     credentialId = null,
+                    keyAttestation = keyAttestation,
                 )
             }
-            // Only publish a WIA that still belongs to the session that asked
-            // for it. This function suspends several times, and a logout,
-            // account switch or new login landing in that window resets the
-            // cache; storing afterwards would make [thisInstanceId] and
-            // currentWalletInstanceId() answer with the PREVIOUS account's
-            // thumbprint for the new session. The caller still gets its own
-            // result - it is only the cache that is refused.
-            if (sessionGeneration == generation) {
-                cachedWia = wia
-                cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
-                    ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
-            }
-            wia
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to obtain Wallet Instance Attestation")
-            null
-        }
+        return wia
     }
 
     /**
@@ -3624,7 +3956,7 @@ class SirosWallet private constructor(
     private suspend fun buildClientAttestationPoP(asUrl: String, clientId: String): String? {
         return try {
             val challenge = fetchAttestationChallenge(asUrl)
-            val keyId = ensureInstanceKeyId()
+            val keyId = settledInstanceKeyId()
             keystore.generateKeyProof(
                 keyId = keyId,
                 typ = "oauth-client-attestation-pop+jwt",
@@ -3738,12 +4070,15 @@ class SirosWallet private constructor(
         var pop: String? = null
         var failure: String? = null
         val dpopAsked = !htm.isNullOrBlank() && !htu.isNullOrBlank()
+        val hinted = !keyIdHint.isNullOrBlank()
         try {
             // The DPoP key is the wallet instance key of the DEFAULT keystore (the WIA's `cnf` key, see
             // ensureInstanceKeyId), and the proof is made in that same keystore; the keystore resolved for credential
             // key proofs (resolveEffectiveKeystoreForIssuance) is a different thing and is not involved.
-            keyId = keyIdHint?.takeIf { it.isNotBlank() } ?: ensureInstanceKeyId()
+            keyId = keyIdHint?.takeIf { it.isNotBlank() } ?: settledInstanceKeyId()
             if (dpopAsked) {
+                // Tokens are about to be bound to this key: from here it is never deleted by a replacement.
+                dpopBoundInstanceKeys += keyId
                 dpopProof = keystore.generateDPoPProof(
                     keyId = keyId,
                     htm = htm!!,
@@ -3753,11 +4088,26 @@ class SirosWallet private constructor(
                 )
             }
             if (!audience.isNullOrBlank()) {
-                wia = ensureWalletInstanceAttestation()
-                if (wia == null) {
-                    Timber.d("No Wallet Instance Attestation available for flow $flowId; answering sign_client_auth unattested")
+                // A WIA/PoP attests whatever key is CURRENTLY the instance key (its cnf). A hinted key id (a renewal
+                // passing the key an earlier token was bound to) can be a RETAINED, already-rotated-away key - see
+                // retireInstanceKey's retention rule - in which case a freshly obtained WIA/PoP would attest the NEW
+                // key while this call's DPoP proof (above) is signed with the OLD, hinted one: material an issuer that
+                // requires the same key for both would reject outright. Attest only when the hinted key still IS the
+                // current instance key; a hint for a retained, superseded key goes out unattested, like any other
+                // best-effort WIA miss.
+                val attestsCurrentKey = !hinted || keyId == ensureInstanceKeyId()
+                if (attestsCurrentKey) {
+                    wia = ensureWalletInstanceAttestation()
+                    if (wia == null) {
+                        Timber.d("No Wallet Instance Attestation available for flow $flowId; answering sign_client_auth unattested")
+                    } else {
+                        pop = buildClientAttestationPoP(audience, clientId)
+                    }
                 } else {
-                    pop = buildClientAttestationPoP(audience, clientId)
+                    Timber.d(
+                        "sign_client_auth for flow $flowId: DPoP key $keyId is a retained, non-current instance key; " +
+                            "omitting attestation rather than attesting a different (the current) key",
+                    )
                 }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -3875,26 +4225,44 @@ class SirosWallet private constructor(
      * Returns a flat list of [CredentialOffer] items ready for display in a
      * picker UI. Each item can be passed to [startIssuanceByOffer].
      */
-    suspend fun getAvailableCredentials(): List<CredentialOffer> = withContext(Dispatchers.IO) {
-        val issuers = getIssuers()
-        Timber.d("getAvailableCredentials: ${issuers.size} issuers")
-        val client = apiClient ?: throw WalletException(NOT_CONNECTED)
-        val offers = mutableListOf<CredentialOffer>()
+    suspend fun getAvailableCredentials(): List<CredentialOffer> = issuerCatalog.get(issuerCatalogScopeKey())
 
-        for (issuer in issuers) {
-            try {
-                val metadataJson = client.getIssuerMetadata(issuer.id)
-                val metadata = json.decodeFromJsonElement(IssuerMetadata.serializer(), metadataJson)
-                for (configId in metadata.credentialConfigurationsSupported.keys) {
-                    buildCredentialOfferFromMetadata(issuer.credentialIssuerIdentifier, configId, metadata)
-                        ?.let { offers.add(it) }
-                }
-            } catch (e: Exception) {
-                Timber.w(e, "Failed to fetch metadata for ${issuer.credentialIssuerIdentifier}")
-            }
-        }
-        offers
+    /**
+     * The credential offers the wallet knows about and whether it is refreshing them: the cached list at once (also after a cold start,
+     * from app-private storage), updated when a background refresh finishes. [getAvailableCredentials] and [refreshAvailableCredentials]
+     * feed it. Scoped to the tenant, backend and signed-in user, and cleared on logout and [destroy].
+     */
+    val availableCredentials: kotlinx.coroutines.flow.StateFlow<AvailableCredentials> get() = issuerCatalog.state
+
+    /**
+     * Refresh the issuer list and every issuer's metadata now (per-issuer in parallel; an issuer that fails keeps its previous entry)
+     * and return when done. Joins a refresh that is already running. [availableCredentials] updates when it finishes.
+     */
+    suspend fun refreshAvailableCredentials() = issuerCatalog.refresh(issuerCatalogScopeKey())
+
+    /** The catalog is only ever read by the tenant, backend and user it was fetched for. */
+    private fun issuerCatalogScopeKey(): String {
+        val state = _state.value
+        val userId = (state as? WalletState.Ready)?.userId ?: (state as? WalletState.FlowActive)?.userId
+            ?: (state as? WalletState.KeystoreLocked)?.userId ?: ""
+        return "${config.tenantId}|${config.backendUrl}|$userId"
     }
+
+    /** Builds the issuer catalog over this wallet's backend client; internal so a test wallet can be given one. */
+    internal fun newIssuerCatalog(catalogScope: CoroutineScope, store: IssuerCatalogStore): IssuerCatalog = IssuerCatalog(
+        scope = catalogScope,
+        store = store,
+        fetchIssuers = { getIssuers() },
+        fetchMetadata = { issuer ->
+            withContext(Dispatchers.IO) { (apiClient ?: throw WalletException(NOT_CONNECTED)).getIssuerMetadata(issuer.id) }
+        },
+        buildOffers = { issuer, metadataJson ->
+            val metadata = json.decodeFromJsonElement(IssuerMetadata.serializer(), metadataJson)
+            metadata.credentialConfigurationsSupported.keys.mapNotNull {
+                buildCredentialOfferFromMetadata(issuer.credentialIssuerIdentifier, it, metadata)
+            }
+        },
+    )
 
     /**
      * Build a [CredentialOffer] (display name/logo/colors) for one credential
@@ -3912,13 +4280,26 @@ class SirosWallet private constructor(
      * Records which auxiliary-data adapter the issuer's advertisement selects for ([issuerUrl], [configId]) so a response is read
      * with it. Returns false when the advertisement is malformed (the configuration is not offered; an earlier record is dropped,
      * so nothing is read with a stale adapter).
+     *
+     * NEVER overwrites the record for the pair [activeOffer] names: this is also called from catalog derivation (a cache read, a
+     * background refresh - [IssuerCatalog]'s `buildOffers`), which can run for the SAME (issuer, configuration) an issuance is
+     * ACTIVELY in flight for. Its completion handler ([wmpDeliveredMetadataRefusal] and the legacy engine equivalent) looks up this
+     * map live, by the completion's own (issuer, configuration) - a catalog pass landing mid-flight must not swap the selection out
+     * from under that validation (stale/incomplete metadata silently dropping a required-seed check and accepting a response that
+     * should have been refused). The active issuance's own offer resolution already recorded the selection it relies on before
+     * [activeOffer] was set; only a FOLLOW-ON catalog rebuild for that same pair is suppressed here, not the original recording.
      */
     private fun recordAuxiliarySelection(issuerUrl: String, configId: String, config: org.siros.sdk.credentials.CredentialConfiguration): Boolean {
-        return when (val selection = org.siros.sdk.credentials.AuxiliaryDataShapes.select(config)) {
-            org.siros.sdk.credentials.AuxiliarySelection.Malformed -> { secretSeedAdvertised?.remove(issuerUrl to configId); false }
-            is org.siros.sdk.credentials.AuxiliarySelection.Selected -> { secretSeedAdvertised?.put(issuerUrl to configId, selection); true }
-            org.siros.sdk.credentials.AuxiliarySelection.None -> { secretSeedAdvertised?.remove(issuerUrl to configId); true }
+        val selection = org.siros.sdk.credentials.AuxiliaryDataShapes.select(config)
+        val activeForThisPair = activeOffer?.credentialIssuerIdentifier == issuerUrl && activeOffer?.credentialConfigurationId == configId
+        if (!activeForThisPair) {
+            when (selection) {
+                org.siros.sdk.credentials.AuxiliarySelection.Malformed -> secretSeedAdvertised?.remove(issuerUrl to configId)
+                is org.siros.sdk.credentials.AuxiliarySelection.Selected -> secretSeedAdvertised?.put(issuerUrl to configId, selection)
+                org.siros.sdk.credentials.AuxiliarySelection.None -> secretSeedAdvertised?.remove(issuerUrl to configId)
+            }
         }
+        return selection != org.siros.sdk.credentials.AuxiliarySelection.Malformed
     }
 
     private fun buildCredentialOfferFromMetadata(issuerUrl: String, configId: String, metadata: IssuerMetadata): CredentialOffer? =
@@ -3959,7 +4340,16 @@ class SirosWallet private constructor(
                 ?: issuerDisplay?.backgroundColor,
             textColor = credDisplay?.textColor
                 ?: issuerDisplay?.textColor,
-            logoUri = credDisplay?.logo?.uri,
+            // `logo` is a small icon; `rendering` is OID4VCI's richer alternative - a `simple.logo` or a full SVG
+            // card template (vc's `MetadataRendering`). A configuration that only publishes `rendering` (no flat
+            // `logo`) used to fall back all the way to backgroundColor + an initial-letter badge: `rendering` had
+            // no field to decode into at all, so it was silently dropped like any other unknown key, not cached or
+            // ignored deliberately. [org.siros.sdk.credentials.logo.LogoSanitizer] already rasterizes an SVG card
+            // template exactly like a logo (it is one, by this wallet's existing display convention - see
+            // AddCredentialScreen's CredentialOfferRow comment), so no renderer change is needed, only decoding it.
+            logoUri = credDisplay?.logo?.uri
+                ?: credDisplay?.rendering?.simple?.logo?.uri
+                ?: credDisplay?.rendering?.svgTemplates?.firstOrNull()?.uri,
             issuerLogoUri = issuerDisplay?.logo?.uri,
             cryptographicBindingMethodsSupported = config.cryptographicBindingMethodsSupported.orEmpty(),
         )
@@ -6198,6 +6588,9 @@ class SirosWallet private constructor(
     private val displayMetadataCache: org.siros.sdk.credentials.FetchCache =
         FileFetchCache(activity.applicationContext)
 
+    /** Stale-while-revalidate cache of the issuer list, issuer metadata and the offers derived from them (see [IssuerCatalog]). */
+    private val issuerCatalog: IssuerCatalog = newIssuerCatalog(scope, FileIssuerCatalogStore(activity.applicationContext))
+
     private val vctmFetcher = VctmFetcher(
         httpGet = ::fetchTypeMetadataUrl,
         persistentCache = displayMetadataCache,
@@ -6268,11 +6661,10 @@ class SirosWallet private constructor(
      * is non-empty, so a caller that never sets that field never triggers
      * any TOFU read/write or prompting.
      */
-    private val wscdSelectionPolicy = WscdSelectionPolicy(
-        tofuStore = SessionStoreWscdTofuStore(sessionStore),
-        defaultMapping = config.defaultWscdMapping,
-        requestChoice = config.requestWscdChoice,
-        userOverrideStore = SessionStoreWscdUserOverrideStore(sessionStore),
+    private val wscdSelectionPolicy = buildWscdSelectionPolicy(
+        config,
+        SessionStoreWscdTofuStore(sessionStore),
+        SessionStoreWscdUserOverrideStore(sessionStore),
     )
 
     /**
@@ -7892,14 +8284,24 @@ class SirosWallet private constructor(
             org.siros.sdk.credentials.CatalogTier.Unavailable ->
                 throw KeyStorageTierUndeterminedException(issuer, credentialType, "the catalog could not be consulted")
         }
-        if (WscdPluginCapabilities.rankOf(baseline) < 0) {
+        // meets(x, x) is true iff x is a known tier in config.wscdAssuranceScheme's
+        // own vocabulary (an unrecognized tier string never satisfies even itself -
+        // see WscdAssuranceScheme.meets's fail-closed doc comment) - using the
+        // SAME injected scheme every other WSCD eligibility check in this class
+        // uses, rather than WscdPluginCapabilities' own fixed default, which a
+        // Copilot review correctly caught this method was still using directly.
+        val scheme = config.wscdAssuranceScheme
+        if (!scheme.meets(baseline, baseline)) {
             throw KeyStorageTierUndeterminedException(issuer, credentialType, "the catalog states a tier that is not a known ISO 18045 tier")
         }
         if (issuerTier == null) return baseline
-        if (WscdPluginCapabilities.rankOf(issuerTier) < 0) {
+        if (!scheme.meets(issuerTier, issuerTier)) {
             throw KeyStorageTierUndeterminedException(issuer, credentialType, "the issuer states a tier that is not a known ISO 18045 tier")
         }
-        return if (WscdPluginCapabilities.rankOf(issuerTier) > WscdPluginCapabilities.rankOf(baseline)) issuerTier else baseline
+        // The issuer's tier wins only if it is itself at least as strong as the
+        // catalog's baseline - otherwise the (stronger) baseline wins, matching
+        // "raised, never lowered" above.
+        return if (scheme.meets(issuerTier, baseline)) issuerTier else baseline
     }
 
     private suspend fun resolveEffectiveKeystoreForIssuance(): KeystoreManager {
@@ -7975,7 +8377,7 @@ class SirosWallet private constructor(
         var selectable: Set<String> = available.keys
         if (requiredTier != null) {
             val eligible = available.keys.filter {
-                WscdPluginCapabilities.tierOf(it)?.let { tier -> WscdPluginCapabilities.meets(tier, requiredTier) } == true
+                config.wscdAssuranceScheme.nominalLabelFor(it)?.let { tier -> config.wscdAssuranceScheme.meets(tier, requiredTier) } == true
             }
             val onboarded = eligible.filter { id -> available[id]?.let { isOnboarded(it, id) } == true }
             if (eligible.isNotEmpty() && onboarded.isEmpty()) {
@@ -12294,6 +12696,9 @@ class SirosWallet private constructor(
         private const val NOT_CONNECTED = "Not connected"
         private const val ABANDONED_START_TTL_MS = 30_000L
 
+        /** How long a challenge fetched for a freshly generated instance key is spent as is; older, the key is replaced instead. */
+        private const val INSTANCE_KEY_CHALLENGE_FRESH_MS = 120_000L
+
         /** The engine's `flow_error` code for a flow it does not know (session replaced, flow already ended). */
         internal const val ERROR_UNKNOWN_FLOW = "UNKNOWN_FLOW"
 
@@ -12409,6 +12814,32 @@ class SirosWallet private constructor(
  */
 /** How many redirects a third-party fetch will follow before giving up. */
 private const val MAX_PUBLIC_REDIRECTS = 5
+
+/**
+ * Builds the [WscdSelectionPolicy] [SirosWallet] uses internally from
+ * [config] and the two already-Context-free persistence interfaces
+ * ([tofuStore]/[userOverrideStore], both backed by [sessionStore] in
+ * production) - extracted to a standalone, testable function specifically
+ * so a test can prove [config].wscdAssuranceScheme actually reaches the
+ * real policy instance [SirosWallet] constructs, without needing a real
+ * `Activity`/`Context` (see `SirosWallet.create`'s doc comment for why
+ * [SirosWallet] itself can't be constructed in a plain, non-Robolectric
+ * JUnit test). A real, found bug this guards against: an earlier version
+ * threaded every other [WalletConfig] WSCD field through here except
+ * `wscdAssuranceScheme`, which was silently never consulted by real wallet
+ * issuance even though [WscdSelectionPolicy] itself fully supported it.
+ */
+internal fun buildWscdSelectionPolicy(
+    config: WalletConfig,
+    tofuStore: WscdTofuStore,
+    userOverrideStore: WscdUserOverrideStore,
+): WscdSelectionPolicy = WscdSelectionPolicy(
+    tofuStore = tofuStore,
+    defaultMapping = config.defaultWscdMapping,
+    requestChoice = config.requestWscdChoice,
+    userOverrideStore = userOverrideStore,
+    assuranceScheme = config.wscdAssuranceScheme,
+)
 
 internal fun isPublicFetchAllowed(url: String): Boolean = runCatching {
     val uri = java.net.URI(url)
