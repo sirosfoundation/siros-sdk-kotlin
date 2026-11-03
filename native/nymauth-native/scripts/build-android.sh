@@ -6,9 +6,9 @@
 #   build/kotlin/uniffi/nymauth_native/      the UniFFI Kotlin bindings, which the SDK vendors
 #   build/nymauth-native-<version>.aar       the .so files only (as zk-cred-longfellow's AAR)
 #
-# Needs: rustup targets aarch64-linux-android and x86_64-linux-android, cargo-ndk, an Android NDK
-# (ANDROID_NDK_HOME, or the newest under $ANDROID_HOME/ndk), and readdit-demo (nym-longfellow) checked out
-# next to siros-sdk-kotlin.
+# Needs: rustup targets aarch64-linux-android and x86_64-linux-android, cargo-ndk, and an Android NDK
+# (ANDROID_NDK_HOME, or the newest under $ANDROID_HOME/ndk). Cargo fetches the pinned nym-longfellow
+# git dependency; no sibling checkout is required.
 # armeabi-v7a is not built: Google's runtime needs PMULL (AArch64) or PCLMULQDQ (x86-64).
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -27,7 +27,6 @@ fi
 [ -d "${ANDROID_NDK_HOME:-}" ] || { echo "build-android: no NDK (set ANDROID_NDK_HOME)"; exit 1; }
 export ANDROID_NDK_HOME
 command -v cargo-ndk >/dev/null || { echo "build-android: cargo install cargo-ndk"; exit 1; }
-[ -d ../../../readdit-demo/native/longfellow/nym-longfellow ] || { echo "build-android: readdit-demo (nym-longfellow) is missing next to siros-sdk-kotlin"; exit 1; }
 
 rm -rf build && mkdir -p build/jni build/kotlin build/aar
 # arm64-v8a always; x86_64 (emulators) when its Rust target is installed.
