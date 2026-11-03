@@ -5,3 +5,8 @@ This library links:
   AltmannPeter/readdit-demo native/longfellow/vendor/longfellow-zk (its LICENSE there).
 - nym-longfellow (AltmannPeter/readdit-demo native/longfellow/nym-longfellow) and the nym_auth Longfellow
   circuits and slot map of the SIROS nym-auth-circuits archive (circuits/longfellow-mdoc here).
+- cd-ecdsa-pop and bbs-cd-plugin (MIT License, Copyright (c) 2026 SIROS Foundation), from
+  sirosfoundation/bbs-cd-plugins, vendored unchanged in AltmannPeter/readdit-demo
+  native/bbs/vendor/bbs-cd-plugins (its LICENSE there).
+- nym-bbs (AltmannPeter/readdit-demo native/bbs/nym-bbs), the nym_auth attestation in its bbs_cd
+  encoding (rulebook v0.4) on cd-ecdsa-pop and bbs-cd-plugin above.
