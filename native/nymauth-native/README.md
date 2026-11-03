@@ -101,4 +101,5 @@ scripts/build-android.sh --demo-issuer     # also org.siros:nymauth-demo-issuer:
 - `nym-longfellow` and the circuits are community-demo's, from the SIROS nym-auth-circuits archive.
 - `nym-bbs` is community-demo's; sirosfoundation/bbs-cd-plugins 0.1 is vendored unchanged in its `native/bbs/vendor`
   (research code: not constant-time, not audited).
-- This library's own license is to be decided.
+- This library's own code is BSD-2-Clause, like the SDK (see the repository-root `LICENSE`). Linked third-party components
+  remain under their own licenses; confirm the upstream `nym-longfellow`, `nym-bbs` and circuit licenses before publishing the AAR.

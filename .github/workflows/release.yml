@@ -9,12 +9,25 @@ permissions:
   contents: write
   packages: write
 
+env:
+  ORG_GRADLE_PROJECT_sirosNativeRepo: ${{ github.workspace }}/build/native-repo
+
 jobs:
+  nymauth-native:
+    uses: ./.github/workflows/nymauth-native.yml
+
   build:
     name: Build SDK & Sample App
     runs-on: ubuntu-latest
+    needs: nymauth-native
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download nymauth-native Maven repository
+        uses: actions/download-artifact@v4
+        with:
+          name: nymauth-native-maven
+          path: build/native-repo
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -96,6 +109,7 @@ jobs:
   publish-maven:
     name: Publish to GitHub Packages
     runs-on: ubuntu-latest
+    needs: nymauth-native
     # Deliberately NOT `needs: build`. Publication to Maven Central and GitHub
     # Packages is what makes a tag a release for consumers; it must not be
     # suppressed because attaching a file to the GitHub release page flaked.
@@ -107,6 +121,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Download nymauth-native Maven repository
+        uses: actions/download-artifact@v4
+        with:
+          name: nymauth-native-maven
+          path: build/native-repo
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -115,6 +135,18 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Check the nymauth-native release prerequisite
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' native/nymauth-native/Cargo.toml | head -1)"
+          for extension in aar pom; do
+            url="https://repo.maven.apache.org/maven2/org/siros/nymauth-native/$version/nymauth-native-$version.$extension"
+            if ! curl --proto '=https' --proto-redir '=https' -fsSL --retry 3 -o /dev/null "$url"; then
+              echo "::error::org.siros:nymauth-native:$version ($extension) is not on Maven Central. Publish it before tagging the SDK; no SDK artifacts were uploaded by this job."
+              exit 1
+            fi
+          done
 
       # The version is the tag's, not gradle.properties' `sdkVersion` (which
       # is the NEXT release's) - so a re-tag can never publish under a stale

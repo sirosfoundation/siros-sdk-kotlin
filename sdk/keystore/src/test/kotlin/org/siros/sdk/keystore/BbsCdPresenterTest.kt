@@ -3,6 +3,8 @@ package org.siros.sdk.keystore
 
 import java.util.Base64
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -73,11 +75,19 @@ class BbsCdPresenterTest {
         raw = query(sourceFormat, prf),
     )
 
-    private val requestObject = buildJsonObject { put("client_id", "x509_san_dns:community.example") }
+    private fun requestObject(p: CircuitZkPlan = plan(), queryIdOverride: String? = null) = buildJsonObject {
+        put("client_id", "x509_san_dns:community.example")
+        put("dcql_query", buildJsonObject {
+            put("credentials", buildJsonArray {
+                add(if (queryIdOverride == null) p.raw else JsonObject(p.raw + ("id" to JsonPrimitive(queryIdOverride))))
+            })
+        })
+    }
     private val handover = BbsCdHandover("x509_san_dns:community.example", "0123456789abcdef", "https://community.example/r", "thumb")
     private val signer = ZkWitnessSigner { _, _ -> ByteArray(64) }
 
-    private fun request(p: CircuitZkPlan = plan()) = BbsCdPresenter.Request(p, requestObject, handover, """{"format":"bbs_cd"}""", byteArrayOf(4, 1, 2), parallel = true)
+    private fun request(p: CircuitZkPlan = plan(), requestObject: JsonObject = requestObject(p)) =
+        BbsCdPresenter.Request(p, requestObject, handover, """{"format":"bbs_cd"}""", byteArrayOf(4, 1, 2), parallel = true)
 
     private fun present(binding: FakeBinding, p: CircuitZkPlan = plan()) = runBlocking { BbsCdPresenter(binding).present(request(p), signer) }
 
@@ -96,7 +106,7 @@ class BbsCdPresenterTest {
         assertEquals(160.0, r.metrics!!.proveMs, 0.0)
         val call = binding.calls.single()
         assertEquals("nym_attestation_bbs", call.credentialQueryId)
-        assertSame(requestObject, call.requestObject)
+        assertEquals(requestObject(), call.requestObject)
         assertSame(handover, call.handover)
         assertSame(signer, call.signer)
         assertArrayEquals(byteArrayOf(4, 1, 2), call.devicePublicKey)
@@ -109,6 +119,19 @@ class BbsCdPresenterTest {
         assertEquals(CircuitZkStep.VALIDATE, denied(binding, plan(sourceFormat = "mso_mdoc", prf = "sha-256")).step)
         // bbs_cd's pseudonym is hashdh-bls12381g1 only.
         assertEquals(CircuitZkStep.VALIDATE, denied(binding, plan(prf = "sha-256")).step)
+        assertTrue(binding.calls.isEmpty())
+    }
+
+    @Test
+    fun `refuses a plan that does not match the request object, without proving`() {
+        val binding = FakeBinding { response() }
+        val mismatched = request(plan(), requestObject(plan(), queryIdOverride = "another_query"))
+
+        val denial = assertThrows(CircuitZkError.AccessDenied::class.java) {
+            runBlocking { BbsCdPresenter(binding).present(mismatched, signer) }
+        }
+
+        assertEquals(CircuitZkStep.VALIDATE, denial.step)
         assertTrue(binding.calls.isEmpty())
     }
 

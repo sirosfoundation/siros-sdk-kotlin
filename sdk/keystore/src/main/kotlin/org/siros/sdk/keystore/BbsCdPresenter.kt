@@ -225,6 +225,13 @@ class BbsCdPresenter(
         if (!offered) throw CircuitZkError.AccessDenied(CircuitZkStep.CIRCUIT)
         val queryId = (plan.raw["id"] as? JsonPrimitive)?.takeIf { it.isString }?.content
             ?: throw CircuitZkError.AccessDenied(CircuitZkStep.VALIDATE)
+        val credentials = (request.requestObject["dcql_query"] as? JsonObject)
+            ?.get("credentials") as? JsonArray
+        val requestedQuery = credentials?.singleOrNull {
+            ((it as? JsonObject)?.get("id") as? JsonPrimitive)?.content == queryId
+        } as? JsonObject
+        // Consent and proof must cover the same request, not merely the same query id.
+        if (requestedQuery != plan.raw) throw CircuitZkError.AccessDenied(CircuitZkStep.VALIDATE)
 
         val proved = try {
             withContext(Dispatchers.Default) {

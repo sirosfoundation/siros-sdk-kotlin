@@ -1,0 +1,8 @@
+# Generate Android-aware Kotlin bindings.
+#
+# Without this, UniFFI emits a cleaner that calls java.lang.ref.Cleaner (API 33), guarded only by
+# Class.forName. Runtime fallback works, but Android lint rejects it for this minSdk-28 SDK.
+# android_cleaner emits android.system.SystemCleaner behind an SDK_INT check lint can read.
+[bindings.kotlin]
+android = true
+android_cleaner = true
