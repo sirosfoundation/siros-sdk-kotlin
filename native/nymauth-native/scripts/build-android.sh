@@ -10,9 +10,9 @@
 # SDK dependency) the same way, as org.siros:nymauth-demo-issuer:<version>, with its bindings in
 # demo-issuer/build/kotlin/uniffi/nymauth_demo_issuer/ for the demo app to vendor.
 #
-# Needs: rustup targets aarch64-linux-android and x86_64-linux-android, cargo-ndk, an Android NDK
-# (ANDROID_NDK_HOME, or the newest under $ANDROID_HOME/ndk), and readdit-demo (nym-longfellow, nym-bbs)
-# checked out next to siros-sdk-kotlin.
+# Needs: rustup targets aarch64-linux-android and x86_64-linux-android, cargo-ndk, and an Android NDK
+# (ANDROID_NDK_HOME, or the newest under $ANDROID_HOME/ndk). Cargo fetches the pinned nym-longfellow and
+# nym-bbs git dependencies; no sibling checkout is required.
 # armeabi-v7a is not built: Google's runtime needs PMULL (AArch64) or PCLMULQDQ (x86-64).
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -37,12 +37,6 @@ fi
 [ -d "${ANDROID_NDK_HOME:-}" ] || { echo "build-android: no NDK (set ANDROID_NDK_HOME)"; exit 1; }
 export ANDROID_NDK_HOME
 command -v cargo-ndk >/dev/null || { echo "build-android: cargo install cargo-ndk"; exit 1; }
-for dep in native/longfellow/nym-longfellow native/bbs/nym-bbs; do
-  [ -d "../../../readdit-demo/$dep" ] || { echo "build-android: readdit-demo ($dep) is missing next to siros-sdk-kotlin"; exit 1; }
-done
-grep -q "fn prove_with" ../../../readdit-demo/native/bbs/nym-bbs/src/prover.rs || {
-  echo "build-android: readdit-demo's nym-bbs has no Prover::prove_with (check out feat/bbs-prove-with-signer, or main once it is merged)"; exit 1;
-}
 
 # arm64-v8a always; x86_64 (emulators) when its Rust target is installed.
 abis=(-t arm64-v8a)
