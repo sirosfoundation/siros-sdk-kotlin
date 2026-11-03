@@ -78,10 +78,10 @@ the native side computed.
 
 ## Build and test
 
-`nym-longfellow` and `nym-bbs` are taken by path from a readdit-demo checkout next to siros-sdk-kotlin
-(`../readdit-demo` from the repository root): AltmannPeter/readdit-demo, `main` from commit `50c47ac` (which adds
-`Circuits::from_pair` and `Layout::parse`) with commit `0250f90` (branch `feat/bbs-prove-with-signer`, which adds
-`nym-bbs`'s `Prover::prove_with`).
+`nym-longfellow` and the BBS crates are git dependencies on AltmannPeter/readdit-demo. `nym-longfellow` is pinned to
+`50c47ac98e37f65003a71e75059fd49ce6f91916` (merged upstream); the BBS crates are pinned to
+`0250f907ec3264cb876da9c909362e553ea77093` (adds `nym-bbs`'s `Prover::prove_with`). Cargo fetches them automatically;
+no sibling checkout is required. Re-pin the BBS dependencies once their feature branch merges upstream (#365).
 
 ```sh
 cargo test --release                       # prove with the teen's demo mdoc; this library's verifier and
