@@ -83,6 +83,11 @@ covered by the API dump; see [docs/TWO-APIS.md](docs/TWO-APIS.md).
 - Private data sync with backend
 - Event listener pattern for UI updates
 
+### sdk:verifier
+- Standalone mdoc proximity verification through verifier-core's UniFFI Reader
+- QR engagement parsing and reader-side BLE transport; no wallet account or `SirosWallet` dependency
+- Exact AuthZEN forwarding to go-trust with fail-closed claim release
+
 ### sdk:passkey-provider
 - Android CredentialProvider Service
 - Surfaces SIROS credentials in Android's system credential picker

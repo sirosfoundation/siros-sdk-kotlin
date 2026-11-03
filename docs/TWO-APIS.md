@@ -74,6 +74,7 @@ The pieces, and what each needs from the host:
 | keystore | `ZkMdocPresentation.standard(ZkCircuitClient(cacheDir = ...))` | a cache dir; a `ZkWitnessSigner` that signs the witness with the device key | `systemIds()`, `present(request, signer)` -> a ZK mdoc device response |
 | keystore | `MdocProximitySession` | a `Context` for the BLE transports; callbacks for credentials, consent, device signature, reader trust | a complete ISO 18013-5 session over BLE (central or peripheral), NFC static handover via `MdocHostApduService` |
 | auth | `CredentialManagerAuthProvider(context)` | a `Context` | passkey registration/assertion with PRF; security keys over the SDK's CTAP2 transports |
+| verifier | `MdocProximityVerifier` + `HttpAuthZenPdp` | a go-trust evaluation endpoint and tenant ID; no wallet login | standalone mdoc request, proximity response verification, request policy, and fail-closed issuer authorization |
 | auth | `AuthServerClient(baseUrl, tenantId)` | nothing | the passkey challenge/response conversation with the auth server, if you use SIROS's |
 | credentials | `CredentialMatcher`, `MdocCbor`, `SdJwtParts`, `VctmFetcher` | nothing | parsing, DCQL matching, display metadata |
 | credentials | `ZkCircuitClient` | a cache dir | circuit catalog client with hash-verified disk cache |
