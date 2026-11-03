@@ -156,6 +156,65 @@ class JweKeystoreTest {
     }
 
     @Test
+    fun generateProofWithJsonClaimsSignsAnArrayClaimIntoThePayload() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.generateKey()
+        val claim = kotlinx.serialization.json.buildJsonArray {
+            add(kotlinx.serialization.json.buildJsonObject {
+                put("type", kotlinx.serialization.json.JsonPrimitive("hash_commitment"))
+                put("path", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("psc")) })
+            })
+        }
+        val proof = keystore.generateProofWithJsonClaims("https://issuer.example.com", "n-1", false, null, mapOf("auxiliary_data" to claim))
+        val signed = com.nimbusds.jwt.SignedJWT.parse(proof)
+        @Suppress("UNCHECKED_CAST")
+        val got = signed.jwtClaimsSet.getClaim("auxiliary_data") as List<Map<String, Any?>>
+        assertEquals("hash_commitment", got.single()["type"])
+        assertEquals(listOf("psc"), got.single()["path"])
+        assertTrue(signed.verify(com.nimbusds.jose.crypto.ECDSAVerifier(signed.header.jwk.toECKey())))
+    }
+
+    @Test
+    fun aRejectedJsonClaimRegistersNoKey_whetherTheKeystoreIsEmptyOrAFreshKeyIsAsked() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        val bad = mapOf("x" to kotlinx.serialization.json.JsonNull)
+        repeat(3) {
+            try {
+                keystore.generateProofWithJsonClaims("https://issuer.example.com", "n-1", true, null, bad)
+                org.junit.Assert.fail("signed a claim it cannot carry")
+            } catch (_: org.siros.sdk.credentials.KeystoreException) {
+            }
+        }
+        assertEquals("rejected requests left no key behind (empty keystore, fresh key)", 0, keystore.listKeys().size)
+        keystore.generateKey()
+        repeat(2) {
+            try {
+                keystore.generateProofWithJsonClaims("https://issuer.example.com", "n-1", true, null, bad)
+                org.junit.Assert.fail("signed a claim it cannot carry")
+            } catch (_: org.siros.sdk.credentials.KeystoreException) {
+            }
+        }
+        assertEquals(1, keystore.listKeys().size)
+    }
+
+    @Test
+    fun generateProofWithJsonClaimsRefusesNumbersItCannotCarryExactly() = runTest {
+        // The shared ProofClaims keeps only exact integers: a number outside Long (or a fraction) is refused, never rounded.
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.generateKey()
+        for (n in listOf("9223372036854775809", "0.1234567890123456789012345")) {
+            try {
+                keystore.generateProofWithJsonClaims("https://issuer.example.com", "n-1", false, null, mapOf("big" to kotlinx.serialization.json.Json.parseToJsonElement("[$n]")))
+                org.junit.Assert.fail("signed $n")
+            } catch (_: org.siros.sdk.credentials.KeystoreException) {
+            }
+        }
+    }
+
+    @Test
     fun generateProofWithoutExtraClaimsCarriesNoCommitmentClaim() = runTest {
         val keystore = JweKeystore()
         keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
@@ -483,5 +542,53 @@ class JweKeystoreTest {
         val c = unlockedWithKey().scaAuthenticationCapability(scaCredential, null)
 
         assertFalse(c.isPossible)
+    }
+
+    // -- adding a passkey (preparePrfKey / commitPrfKey) --
+
+    private val secondPrf = ByteArray(32) { (it + 0x40).toByte() }
+    private val secondHkdfSalt = ByteArray(32) { (it + 0x70).toByte() }
+    private val secondCredential = byteArrayOf(7, 7, 7)
+
+    @Test
+    fun preparedContainerUnlocksWithTheNewPasskeyAndStillWithTheOld() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.setCredentialId(byteArrayOf(1))
+        val keyId = keystore.generateKey()
+
+        val prepared = keystore.preparePrfKey(secondCredential, secondPrf, ByteArray(32) { 9 }, secondHkdfSalt, hkdfInfo)
+
+        assertEquals(2, EncryptedContainer.parse(prepared.container).prfKeys.size)
+        val viaNew = JweKeystore()
+        viaNew.unlock(secondPrf, prepared.container, secondHkdfSalt, hkdfInfo)
+        assertEquals(listOf(keyId), viaNew.listKeys().map { it.keyId })
+        val viaOld = JweKeystore()
+        viaOld.unlock(fakePrfOutput, prepared.container, hkdfSalt, hkdfInfo)
+        assertEquals(listOf(keyId), viaOld.listKeys().map { it.keyId })
+    }
+
+    @Test
+    fun preparingAPasskeyDoesNotChangeTheKeystoreUntilCommitted() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.setCredentialId(byteArrayOf(1))
+
+        val prepared = keystore.preparePrfKey(secondCredential, secondPrf, ByteArray(32), secondHkdfSalt, hkdfInfo)
+        assertEquals(1, EncryptedContainer.parse(keystore.exportEncryptedContainer()).prfKeys.size)
+
+        keystore.commitPrfKey(prepared)
+        assertEquals(2, EncryptedContainer.parse(keystore.exportEncryptedContainer()).prfKeys.size)
+        keystore.commitPrfKey(prepared)
+        assertEquals("committing twice must not duplicate the entry", 2, EncryptedContainer.parse(keystore.exportEncryptedContainer()).prfKeys.size)
+    }
+
+    @Test
+    fun preparingAPasskeyNeedsAnUnlockedKeystore() = runTest {
+        try {
+            JweKeystore().preparePrfKey(secondCredential, secondPrf, ByteArray(32), secondHkdfSalt, hkdfInfo)
+            fail("a locked keystore has no main key to wrap")
+        } catch (_: KeystoreException) {
+        }
     }
 }

@@ -118,10 +118,9 @@ class OpenID4xEngineSubFlowTest {
         val complete = transport.awaitSent { it["method"] == JsonPrimitive("wmp.flow.complete") }
         val params = complete["params"]!!.jsonObject
         assertEquals(JsonPrimitive("child-2"), params["flow_id"])
-        assertEquals(
-            JsonPrimitive("c1"),
-            params["result"]!!.jsonObject["matches"]!!.jsonArray.single().jsonObject["credential_id"],
-        )
+        val match = params["result"]!!.jsonObject["matches"]!!.jsonArray.single().jsonObject
+        assertEquals(setOf("credential_query_id"), match.keys)
+        assertEquals(JsonPrimitive("q"), match["credential_query_id"])
         peer.close()
     }
 

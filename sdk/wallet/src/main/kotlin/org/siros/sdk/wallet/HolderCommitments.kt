@@ -4,94 +4,72 @@ package org.siros.sdk.wallet
 import org.siros.sdk.credentials.WalletException
 
 /**
- * The holder commitments an issuer asks for in the OpenID4VCI proof JWT
- * (tracking issue https://github.com/SUNET/vc/issues/823).
- *
- * The engine's `generate_proof` sign request carries `holder_commitments`
- * (names only, today `["psc"]`), `credential_type` and `credential_issuer`
- * (the exact `credential_issuer` string of the issuer metadata). The wallet adds
- * `org.siros.psc` = base64url-without-padding (RFC 7515 section 2) of the
- * 32-byte commitment to the proof payload before signing, so the proof of
- * possession covers it.
- *
- * Fail-closed throughout: an unknown commitment name, a missing type or issuer,
- * a keystore that is not a [org.siros.sdk.keystore.HolderWitnessSource], or a value that is not 32
- * bytes refuses the proof. Nothing here ever logs or puts a commitment value in
- * a message.
+ * The issuer refused the auxiliary data (commitment) the wallet sent: it holds a conflicting one (flow error code
+ * `AUXILIARY_DATA_CONFLICT`, `error.details.error == "auxiliary_data_conflict"`). Retrying never helps, the conflict is
+ * resolved out of band with the issuer, so there is no retry affordance; [userMessageRes] is the localised sentence.
  */
-internal object HolderCommitments {
-    const val PSC = "psc"
+class AuxiliaryDataConflictException(
+    val issuerMessage: String,
+) : org.siros.sdk.credentials.SirosException(
+    "The issuer reports a conflict with the auxiliary data the wallet sent",
+    errorCode = ERROR_CODE,
+) {
+    /** Always false: the same request would be refused again. */
+    val retryable: Boolean get() = false
 
-    /** The proof JWT claim carrying the `psc`. */
-    const val PSC_CLAIM = "org.siros.psc"
+    val userMessageRes: Int get() = R.string.siros_auxiliary_data_conflict
 
-    private const val PSC_BYTES = 32
-
-    /** The extra proof claims for [requested]; empty when nothing was requested. */
-    fun proofClaims(
-        requested: List<String>?,
-        credentialType: String?,
-        credentialIssuer: String?,
-        derive: ((credentialType: String, issuer: String) -> ByteArray)?,
-    ): Map<String, String> {
-        if (requested.isNullOrEmpty()) return emptyMap()
-        val unknown = requested.filter { it != PSC }
-        if (unknown.isNotEmpty()) {
-            throw WalletException(
-                "The issuer asked for holder commitments this wallet does not support: $unknown",
-                errorCode = "holder_commitment_unsupported",
-            )
-        }
-        if (credentialType.isNullOrEmpty() || credentialIssuer.isNullOrEmpty()) {
-            throw WalletException(
-                "The issuer asked for a holder commitment but the request names no credential type or issuer",
-                errorCode = "holder_commitment_unavailable",
-            )
-        }
-        if (derive == null) {
-            throw WalletException(
-                "The issuer asked for a holder commitment but this wallet's keystore cannot derive one",
-                errorCode = "holder_commitment_unavailable",
-            )
-        }
-        val psc = derive(credentialType, credentialIssuer)
-        try {
-            if (psc.size != PSC_BYTES) {
-                throw WalletException(
-                    "The holder commitment derived for this issuer is not $PSC_BYTES bytes",
-                    errorCode = "holder_commitment_unavailable",
-                )
-            }
-            return mapOf(PSC_CLAIM to java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(psc))
-        } finally {
-            psc.fill(0)
-        }
+    companion object {
+        const val FLOW_ERROR_CODE = "AUXILIARY_DATA_CONFLICT"
+        const val DETAIL_ERROR = "auxiliary_data_conflict"
+        const val ERROR_CODE = "auxiliary_data_conflict"
     }
 }
 
 /**
- * The issuer refused the holder's pseudonym commitment: it already holds a
- * different one for this subject (flow error code `PSC_CONFLICT`, an issuer
- * `invalid_request` whose description starts `org.siros.psc_conflict:`).
- *
- * Terminal and clean: the issuer refuses before issuing, so nothing was stored
- * and no refresh token was captured. The user is told to ask the issuer for an
- * operator-approved reset; [userMessageRes] is the localised sentence.
- *
- * @property issuerMessage The issuer's own text, for logs and support; may be shown but is not the user message.
+ * The issuer refused the auxiliary data of the key proofs: `invalid_proof` whose `error_description` starts `auxiliary_data: ` (vc pull 850).
+ * Terminal and NOT retryable: the same proofs would be refused again. Only the fixed [Reason] is kept, never the issuer's free text.
  */
-class PseudonymCommitmentConflictException(
-    val issuerMessage: String,
-) : org.siros.sdk.credentials.SirosException(
-    "The issuer already has a different pseudonym commitment on record for this holder",
+class AuxiliaryDataRefusedException(val reason: Reason) : org.siros.sdk.credentials.SirosException(
+    "The issuer refused the auxiliary data in the key proofs (${reason.code})",
     errorCode = ERROR_CODE,
 ) {
-    /** The string resource with the plain-language sentence for the user. */
-    val userMessageRes: Int get() = R.string.siros_psc_conflict
+    /** Always false: the same request would be refused again. */
+    val retryable: Boolean get() = false
+
+    val userMessageRes: Int get() = R.string.siros_auxiliary_data_refused
+
+    /** The details vc names (the fixed set); everything else is [OTHER]. */
+    enum class Reason(val code: String) {
+        PROOFS_DIFFER("proofs_differ"),
+        ENTRY_REQUIRED("entry_required"),
+        NO_SUCH_ENTRY("no_such_entry"),
+        ALG("alg"),
+        ENTRY_MEMBERS("entry_members"),
+        COMMITMENT_FORMAT("commitment_format"),
+        OTHER("other"),
+    }
 
     companion object {
-        /** The engine's flow error code. */
-        const val FLOW_ERROR_CODE = "PSC_CONFLICT"
-        const val ERROR_CODE = "psc_conflict"
+        const val ERROR_CODE = "auxiliary_data_refused"
+        private const val PREFIX = "auxiliary_data: "
+
+        /** The refusal an issuer error text expresses, or null when [message] is not an `auxiliary_data: ` refusal. */
+        fun fromIssuerMessage(message: String?): AuxiliaryDataRefusedException? {
+            val text = message ?: return null
+            val at = text.indexOf(PREFIX)
+            if (at < 0) return null
+            val detail = text.substring(at + PREFIX.length)
+            val reason = when {
+                detail.contains("different auxiliary_data") -> Reason.PROOFS_DIFFER
+                detail.contains("is required") -> Reason.ENTRY_REQUIRED
+                detail.contains("lists no entry") -> Reason.NO_SUCH_ENTRY
+                detail.contains("alg must be") -> Reason.ALG
+                detail.contains("carries only") -> Reason.ENTRY_MEMBERS
+                detail.contains("base64url sha-256") -> Reason.COMMITMENT_FORMAT
+                else -> Reason.OTHER
+            }
+            return AuxiliaryDataRefusedException(reason)
+        }
     }
 }

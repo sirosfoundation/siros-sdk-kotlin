@@ -1,6 +1,9 @@
 package org.siros.sdk.keystore
 
+import timber.log.Timber
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -15,6 +18,7 @@ import org.siros.sdk.credentials.SignerSecurityProperties
 import uniffi.siros_wscd_manager.FfiActivateLifecycleRequest
 import uniffi.siros_wscd_manager.FfiActivationOutcome
 import uniffi.siros_wscd_manager.FfiAlgorithm
+import uniffi.siros_wscd_manager.FfiAttestationFormat
 import uniffi.siros_wscd_manager.FfiAuthCallback
 import uniffi.siros_wscd_manager.FfiCertificationLevel
 import uniffi.siros_wscd_manager.FfiDestroyLifecycleRequest
@@ -64,6 +68,11 @@ class UniFFISigner(
 
     private val ffi: FfiWscdManager = FfiWscdManager(config)
 
+    private companion object {
+        /** Plugins whose keys live on a token the user must onboard (enroll) before use. */
+        val ONBOARDED_KEY_PLUGIN_IDS = setOf("fido2")
+    }
+
     /**
      * Which plugin this instance was constructed to back by default (e.g.
      * "softkey", "fido2", "r2ps"). Every instance also self-registers a
@@ -96,6 +105,95 @@ class UniFFISigner(
         ffi.registerR2psPlugin(ffiConfig, R2psTransportBridge(transport))
     }
 
+    override fun registerAndroidKeystorePlugin(backend: AndroidKeyStoreBackend, authenticator: UserAuthenticator?) {
+        ffi.registerAndroidKeystorePlugin(AndroidKeystoreWscdCallbackBridge(backend, authenticator))
+    }
+
+    override fun registerAndroidKeystorePluginWithState(
+        state: ByteArray,
+        backend: AndroidKeyStoreBackend,
+        authenticator: UserAuthenticator?,
+    ) {
+        ffi.registerAndroidKeystorePluginWithState(AndroidKeystoreWscdCallbackBridge(backend, authenticator), state)
+    }
+
+    override fun exportAndroidKeystoreState(): ByteArray = ffi.exportAndroidKeystoreState()
+
+    /**
+     * Runs a native generate call that may have already persisted (and, for
+     * [generateKeyForLevel], already bound to its manager) a real key by
+     * the time it returns, so a cancellation racing the dispatcher handoff
+     * back to the caller - after the native call succeeded, before this
+     * suspend function delivers its result - must not silently lose that
+     * key: [kidOf] extracts the id from whatever [call] returned, and a
+     * cancellation caught here deletes it via [deleteKey] in a
+     * [NonCancellable] cleanup before rethrowing, mirroring
+     * [AndroidKeystoreSigner.generateManaged]'s identical rationale for the
+     * exact same race on this plugin's own generation paths.
+     */
+    private suspend fun <T> generateManagedNative(kidOf: (T) -> String, call: () -> T): T {
+        var created: T? = null
+        return try {
+            withContext(Dispatchers.IO) { call().also { created = it } }
+        } catch (e: CancellationException) {
+            created?.let { t ->
+                withContext(NonCancellable) { runCatching { ffi.deleteKey(kidOf(t)) } }
+            }
+            throw e
+        }
+    }
+
+    override suspend fun generateAndroidKeystoreKeyWithChallenge(attestationChallenge: ByteArray): String {
+        val result = generateManagedNative({ it.kid }) {
+            ffi.generateAndroidKeystoreKeyWithChallenge(attestationChallenge, FfiAlgorithm.ES256, noOpProgress())
+        }
+        publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
+        return result.kid
+    }
+
+    /**
+     * Unlike [generateAndroidKeystoreKeyWithChallenge], this has a second
+     * fallible step AFTER the key exists - reading back which candidate won
+     * via [FfiWscdManager.listKeys] (see below) - so it cannot reuse
+     * [generateManagedNative], which only guards the race between a
+     * successful native call returning and this suspend function delivering
+     * its result. Here, [created] is set as soon as generation itself
+     * succeeds, and BOTH a cancellation and an ordinary exception from the
+     * plugin-id lookup that follows go through the same cleanup: an
+     * unrelated registered plugin (e.g. an unreachable R2PS server) failing
+     * [FfiWscdManager.listKeys] must not leak the key this call just
+     * created, nor silently drop its id with no way to delete it later.
+     */
+    override suspend fun generateKeyForLevel(
+        requiredLevel: WscdCertificationLevel,
+        candidatePluginIds: List<String>,
+    ): GeneratedKeyWithPlugin {
+        var created: FfiGeneratedKey? = null
+        return try {
+            withContext(Dispatchers.IO) {
+                val result = withPinAuth { auth ->
+                    ffi.generateKeyForLevel(requiredLevel.toFfi(), candidatePluginIds, FfiAlgorithm.ES256, auth, noOpProgress())
+                }
+                created = result
+                publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
+                // generate_key_for_level tries candidates in order and keeps
+                // whichever one's result was actually confirmed sufficient -
+                // that may not be the first (or only) candidate offered, so
+                // the winner is read back from the manager's own record
+                // rather than assumed.
+                val pluginId = ffi.listKeys().firstOrNull { it.kid == result.kid }?.pluginId
+                    ?: error("generateKeyForLevel's own manager has no record of the key it just generated (${result.kid})")
+                GeneratedKeyWithPlugin(keyId = result.kid, pluginId = pluginId)
+            }
+        } catch (e: CancellationException) {
+            created?.let { t -> withContext(NonCancellable) { runCatching { ffi.deleteKey(t.kid) } } }
+            throw e
+        } catch (e: Exception) {
+            created?.let { t -> withContext(NonCancellable) { runCatching { ffi.deleteKey(t.kid) } } }
+            throw e
+        }
+    }
+
     override fun registerFido2Plugin(transport: Ctap2TransportProvider) {
         ffi.registerFido2Plugin(Ctap2TransportBridge(transport))
     }
@@ -104,27 +202,48 @@ class UniFFISigner(
         ffi.registerFido2PluginWithState(Ctap2TransportBridge(transport), state)
     }
 
+    /**
+     * Onboarding is the plugin holding at least one enrolled key: enrolling a token generates its
+     * first key, restoring from synced state (`registerFido2PluginWithState`) brings the keys back,
+     * and destroying the lifecycle removes them. A token plugin that is not registered, holds no
+     * key, or cannot be queried is not onboarded (fail closed).
+     */
+    override suspend fun isWscdOnboarded(): Boolean {
+        if (defaultPluginId !in ONBOARDED_KEY_PLUGIN_IDS) return true
+        return try {
+            withContext(Dispatchers.IO) { ffi.listKeys().any { it.pluginId == defaultPluginId } }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     override fun exportFido2State(): ByteArray = ffi.exportFido2State()
+
+    override suspend fun describeFido2Authenticator(): Fido2AuthenticatorInfo = withContext(Dispatchers.IO) {
+        ffi.describeAuthenticator("fido2").toSdk()
+    }
 
     override suspend fun generateKey(algorithm: String): String = withContext(Dispatchers.IO) {
         val ffiAlgorithm = algorithm.toFfiAlgorithm()
-        val result: FfiGeneratedKey = ffi.generateKey(
-            ffiAlgorithm,
-            authCallbackBridge(),
-            noOpProgress(),
-        )
+        val result: FfiGeneratedKey = withPinAuth { auth ->
+            ffi.generateKey(ffiAlgorithm, auth, noOpProgress())
+        }
         publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
         result.kid
     }
 
     override suspend fun sign(keyId: String, data: ByteArray): ByteArray = withContext(Dispatchers.IO) {
-        val result = ffi.sign(
-            keyId,
-            data,
-            FfiAlgorithm.ES256, // algorithm is inferred from the key by the manager
-            authCallbackBridge(),
-            noOpProgress(),
-        )
+        val result = withPinAuth { auth ->
+            ffi.sign(
+                keyId,
+                data,
+                FfiAlgorithm.ES256, // algorithm is inferred from the key by the manager
+                auth,
+                noOpProgress(),
+            )
+        }
         result.data
     }
 
@@ -141,7 +260,7 @@ class UniFFISigner(
                     auth: FfiAuthCallback,
                 ) = ffi.signWithFactors(kid, data, FfiAlgorithm.ES256, options, auth, noOpProgress())
             },
-            authCallbackBridge(),
+            { authCallbackBridge() },
             canAskForPin = authProvider != null,
         )
     }
@@ -285,6 +404,20 @@ class UniFFISigner(
     }
 
     /**
+     * Erases this instance's own internal softkey plugin (every instance
+     * registers one in [init] regardless of [defaultPluginId] - see
+     * [exportPrivateKeypairs]'s doc comment) by replacing its container with
+     * an empty one, the same shape [importPrivateKeypairs] already uses to
+     * populate it. A fido2 or r2ps plugin's keys are never touched here -
+     * they live on external hardware or a remote server, outside anything a
+     * software wipe can (or should) reach.
+     */
+    override suspend fun resetLocalKeys(): Unit = withContext(Dispatchers.IO) {
+        ffi.importSoftkeyContainer("[]".toByteArray(Charsets.UTF_8))
+        publicKeyCache.clear()
+    }
+
+    /**
      * List keys with plugin and creation metadata.
      * Intended for developer/diagnostic UIs — not part of the [Signer] interface.
      */
@@ -307,8 +440,45 @@ class UniFFISigner(
         Unit
     }
 
+    /**
+     * siros-wscd-manager's `AttestationChain` carries an explicit `format`
+     * discriminant (`FfiAttestationFormat.X509_CHAIN`/`OPAQUE`) - unlike this
+     * SDK's own [AttestationChain], whose `certificates` field is overloaded
+     * to also mean "the one opaque blob" for [AttestationChain.FORMAT_FIDO2_PACKED]
+     * (see that class's doc comment: a pre-existing design predating the
+     * Rust-side discriminant, kept so `BackendApiClient.registerFido2Attestation`
+     * and `InstanceKeyEvidence` - both written against that shape - need no
+     * change). Map explicitly rather than forwarding `certificates`
+     * unconditionally: the fido2 plugin now reports `OPAQUE` (its CBOR
+     * attestation object lives in `opaqueAttestation`, not `certificates`),
+     * so a blind `AttestationChain(it.certificates, ...)` would silently
+     * produce an EMPTY certificates list for fido2 the moment that plugin's
+     * shape was corrected Rust-side - exactly the breakage flagged and
+     * fixed here instead of discovered later as a silent regression.
+     *
+     * `X509_CHAIN` is mapped to [AttestationChain.FORMAT_ANDROID_KEY]: of
+     * the plugins reachable through this signer today, only the Android
+     * Keystore plugin can ever return that format (fido2 always returns
+     * `OPAQUE`; r2ps's `attestation_chain()` always returns `null`, pending
+     * HSM-vendor attestation support). If a future plugin also returns a
+     * genuine X.509 chain, this mapping will need to distinguish by plugin
+     * id, not format alone - not needed yet.
+     */
     override suspend fun attestationChain(keyId: String): AttestationChain? = withContext(Dispatchers.IO) {
-        ffi.attestationChain(keyId)?.let { AttestationChain(it.certificates, it.clientDataHash) }
+        ffi.attestationChain(keyId)?.let { chain ->
+            when (chain.format) {
+                FfiAttestationFormat.X509_CHAIN -> AttestationChain(
+                    certificates = chain.certificates,
+                    clientDataHash = chain.clientDataHash,
+                    format = AttestationChain.FORMAT_ANDROID_KEY,
+                )
+                FfiAttestationFormat.OPAQUE -> AttestationChain(
+                    certificates = listOf(chain.opaqueAttestation),
+                    clientDataHash = chain.clientDataHash,
+                    format = AttestationChain.FORMAT_FIDO2_PACKED,
+                )
+            }
+        }
     }
 
     override suspend fun exportPublicKey(keyId: String): ByteArray = withContext(Dispatchers.IO) {
@@ -333,7 +503,7 @@ class UniFFISigner(
 
     override suspend fun migrateKey(keyId: String, targetPlugin: String): MigrationResult =
         withContext(Dispatchers.IO) {
-            when (val result = ffi.migrateKey(keyId, targetPlugin, authCallbackBridge())) {
+            when (val result = withPinAuth { auth -> ffi.migrateKey(keyId, targetPlugin, auth) }) {
                 is FfiMigrationResult.Migrated -> MigrationResult.Migrated(result.newKid)
                 is FfiMigrationResult.ReEnrollmentRequired -> MigrationResult.ReEnrollmentRequired(result.oldKid)
             }
@@ -357,38 +527,22 @@ class UniFFISigner(
 
     override suspend fun registerLifecycle(request: RegisterLifecycleRequest): RegistrationOutcome =
         withContext(Dispatchers.IO) {
-            ffi.registerLifecycle(
-                request.toFfiRequest(),
-                authCallbackBridge(),
-                noOpProgress(),
-            ).toSdkRegistrationOutcome()
+            withPinAuth { auth -> ffi.registerLifecycle(request.toFfiRequest(), auth, noOpProgress()) }.toSdkRegistrationOutcome()
         }
 
     override suspend fun activateLifecycle(request: ActivateLifecycleRequest): ActivationOutcome =
         withContext(Dispatchers.IO) {
-            ffi.activateLifecycle(
-                request.toFfiRequest(),
-                authCallbackBridge(),
-                noOpProgress(),
-            ).toSdkActivationOutcome()
+            withPinAuth { auth -> ffi.activateLifecycle(request.toFfiRequest(), auth, noOpProgress()) }.toSdkActivationOutcome()
         }
 
     override suspend fun rotateLifecycle(request: RotateLifecycleRequest): RotationOutcome =
         withContext(Dispatchers.IO) {
-            ffi.rotateLifecycle(
-                request.toFfiRequest(),
-                authCallbackBridge(),
-                noOpProgress(),
-            ).toSdkRotationOutcome()
+            withPinAuth { auth -> ffi.rotateLifecycle(request.toFfiRequest(), auth, noOpProgress()) }.toSdkRotationOutcome()
         }
 
     override suspend fun destroyLifecycle(request: DestroyLifecycleRequest): DestructionOutcome =
         withContext(Dispatchers.IO) {
-            ffi.destroyLifecycle(
-                request.toFfiRequest(),
-                authCallbackBridge(),
-                noOpProgress(),
-            ).toSdkDestructionOutcome()
+            withPinAuth { auth -> ffi.destroyLifecycle(request.toFfiRequest(), auth, noOpProgress()) }.toSdkDestructionOutcome()
         }
 
     /**
@@ -406,23 +560,16 @@ class UniFFISigner(
 
     // ─── Auth callback bridge ────────────────────────────────────────────────
 
-    private fun authCallbackBridge(): FfiAuthCallback = object : FfiAuthCallback {
-        override fun requestPin(pluginId: String): ByteArray {
-            val provider = authProvider
-                ?: throw FfiWscdException.AuthCancelled("No AuthProvider configured")
-            return provider.requestPin(pluginId)
-        }
+    private fun authCallbackBridge(): AuthCallbackBridge = AuthCallbackBridge(authProvider)
 
-        override fun requestWebauthnAssertion(
-            pluginId: String,
-            challenge: ByteArray,
-            rpId: String,
-            allowedCredentials: List<ByteArray>,
-        ): ByteArray {
-            val provider = authProvider
-                ?: throw FfiWscdException.AuthCancelled("No AuthProvider configured")
-            return provider.requestWebauthnAssertion(pluginId, challenge, rpId, allowedCredentials)
-        }
+    /**
+     * One WSCD call that may ask for a PIN: runs it with a fresh [AuthCallbackBridge] and re-runs it (bounded by
+     * [PinPrompter.MAX_PIN_ATTEMPTS]) after a PIN the authenticator refused for a reason the user can fix; a blocked key or one
+     * that needs replugging ends it with [WscdPinException].
+     */
+    private fun <T> withPinAuth(call: (FfiAuthCallback) -> T): T {
+        val bridge = AuthCallbackBridge(authProvider)
+        return bridge.prompter.run { call(bridge) }
     }
 
     private fun noOpProgress(): FfiProgressCallback = object : FfiProgressCallback {
@@ -455,11 +602,26 @@ class UniFFISigner(
         FfiKeyStorageType.TRUSTED_EXECUTION -> "trusted_execution"
     }
 
+    private fun WscdCertificationLevel.toFfi(): FfiCertificationLevel = when (this) {
+        WscdCertificationLevel.UNATTESTED -> FfiCertificationLevel.UNATTESTED
+        WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT -> FfiCertificationLevel.ATTESTED_SHARED_ENVIRONMENT
+        WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE -> FfiCertificationLevel.ATTESTED_DEDICATED_HARDWARE
+    }
+
+    // TODO(siros-wscd-manager certification-level redesign, 2026-10-30): this
+    // still names "EUCC" as the certifying scheme for every structurally
+    // attested key, exactly the kind of certification-SCHEME claim
+    // wscd-manager's own `CertificationLevel` was just renamed away from
+    // (neither tier below has ever actually been evaluated under EUCC) -
+    // pre-existing behavior, preserved as-is (collapsed from the old 4-tier
+    // mapping to the new 3-tier one, same label strings) rather than
+    // redesigned here, since fixing `CertificationInfo`'s shape is a
+    // separate, out-of-scope decision. Flagged to the coordinator; do not
+    // copy this pattern elsewhere.
     private fun FfiCertificationLevel.toSdkCertification(): CertificationInfo = when (this) {
-        FfiCertificationLevel.NONE -> CertificationInfo.None
-        FfiCertificationLevel.BASELINE -> CertificationInfo.Certified("EUCC", "baseline")
-        FfiCertificationLevel.SUBSTANTIAL -> CertificationInfo.Certified("EUCC", "substantial")
-        FfiCertificationLevel.HIGH -> CertificationInfo.Certified("EUCC", "high")
+        FfiCertificationLevel.UNATTESTED -> CertificationInfo.None
+        FfiCertificationLevel.ATTESTED_SHARED_ENVIRONMENT -> CertificationInfo.Certified("EUCC", "baseline")
+        FfiCertificationLevel.ATTESTED_DEDICATED_HARDWARE -> CertificationInfo.Certified("EUCC", "substantial")
     }
 
     private fun FactorKind.toFfiFactorKind(): FfiFactorKind = when (this) {
@@ -571,7 +733,7 @@ class UniFFISigner(
  * called [Ctap2TransportProvider.connect] again. On any [send] failure,
  * drop the stale connection and reconnect once before giving up.
  */
-private class Ctap2TransportBridge(private val provider: Ctap2TransportProvider) : FfiCtap2Transport {
+internal class Ctap2TransportBridge(private val provider: Ctap2TransportProvider) : FfiCtap2Transport {
     // Read and written from Rust's own background FFI thread pool (per this
     // class's own doc comment) - @Volatile so a genuinely concurrent
     // invocation can't observe a stale value cached in another thread's
@@ -579,12 +741,24 @@ private class Ctap2TransportBridge(private val provider: Ctap2TransportProvider)
     @Volatile
     private var connected = false
 
-    override fun ctap2SendCommand(command: ByteArray): ByteArray = runBlocking {
+    override fun ctap2SendCommand(command: ByteArray): ByteArray = try {
+        runBlocking { exchange(command) }
+    } catch (e: uniffi.siros_wscd_manager.FfiWscdException) {
+        throw e
+    } catch (e: Exception) {
+        // The callback boundary: an exception of any other type would be sent to Rust as `UnexpectedUniFFICallbackError` whose
+        // message is the WHOLE Kotlin stack trace (what a user saw as "a very long error"). A typed error with a short message
+        // goes instead; the cause is logged here, separately.
+        Timber.w("Ctap2 transport failed: ${e.javaClass.simpleName}: ${e.message?.take(120)}")
+        throw uniffi.siros_wscd_manager.FfiWscdException.Callback(e.shortTransportReason())
+    }
+
+    private suspend fun exchange(command: ByteArray): ByteArray {
         if (!connected) {
             provider.connect()
             connected = true
         }
-        try {
+        return try {
             provider.send(command)
         } catch (e: Exception) {
             connected = false

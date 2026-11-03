@@ -29,13 +29,15 @@ private fun bytes(circuit: ByteBuffer): ByteArray {
 }
 
 /**
- * The Vega nymauth binding: `nymauthVegaLoadKeys(shapes)` runs key setup from the catalog artifact's shapes (the
- * resident, 100+ MB part), `nymauthVegaProve(keys, statement, holder)` proves. The binding approves only shapes on its
- * own list: others are `UnknownCircuit`, mapped to "not supported by this app version". It zeroes its copy of the seed.
- * Every binding error becomes a [NymAuthNativeException] carrying no message of the binding (not the digest, not a rule).
+ * The Vega nymauth binding over zk-cred-vega (Microsoft vega-prover): `nymauthVegaLoadKeys(shapes)` runs key setup
+ * from the catalog artifact's shapes (the resident, 100+ MB part), `nymauthVegaProve(keys, statement, holder)`
+ * proves. The binding approves only shapes on its own list: others are `UnknownCircuit`, mapped to "not supported
+ * by this app version". It zeroes its copy of the seed. Every binding error becomes a [NymAuthNativeException]
+ * carrying no message of the binding (not the digest, not a rule).
  */
-internal object VegaNymAuthBinding : NymAuthBinding {
+object ZkCredVegaNymAuthBinding : NymAuthBinding {
     override val system: String = NymAuthCircuitZkAdapter.VEGA_SYSTEM
+    override val implementation: String = "zk-cred-vega"
 
     override fun load(request: NymAuthProveRequest): AutoCloseable = try {
         nymauthVegaLoadKeys(bytes(request.circuit))
@@ -82,13 +84,15 @@ internal object VegaNymAuthBinding : NymAuthBinding {
 }
 
 /**
- * The Longfellow nymauth binding: `nymauthInitializeProver(circuit, params)` loads the signature and hash circuits once
- * (the resident part; `params` are the catalog descriptor's `block_enc_hash`, `block_enc_sig`, `hash_circuit_id` and
+ * The Longfellow nymauth binding over zk-cred-longfellow (ISRG's Rust Longfellow, with SIROS's nymauth module):
+ * `nymauthInitializeProver(circuit, params)` loads the signature and hash circuits once (the resident part;
+ * `params` are the catalog descriptor's `block_enc_hash`, `block_enc_sig`, `hash_circuit_id` and
  * `sig_circuit_id`), `nymauthProve(prover, request)` proves. A circuit id it has no witness map for is
  * `UnsupportedCircuit`. Every error becomes a [NymAuthNativeException] with no message of the binding.
  */
-internal object LongfellowNymAuthBinding : NymAuthBinding {
+object ZkCredLongfellowNymAuthBinding : NymAuthBinding {
     override val system: String = NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM
+    override val implementation: String = "zk-cred-longfellow"
 
     override fun load(request: NymAuthProveRequest): AutoCloseable = try {
         val p = request.circuitParams

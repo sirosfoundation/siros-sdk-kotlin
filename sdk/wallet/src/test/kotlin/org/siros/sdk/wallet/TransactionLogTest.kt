@@ -17,6 +17,7 @@ class TransactionLogTest {
         read = { if (readFails) throw IOException("keystore unavailable") else slot },
         write = { v -> if (writeOk) { slot = v; true } else false },
         keepCorrupt = { corrupt = it },
+        clearCorrupt = { corrupt = null },
         maxEntries = max, maxRefused = maxRefused, refusalDedupMillis = dedup,
     )
 
@@ -132,6 +133,22 @@ class TransactionLogTest {
         s.clear()
         assertEquals(emptyList<TransactionLogEntry>(), s.entries())
         assertNull(slot)
+    }
+
+    @Test
+    fun `clear also drops a corrupt-text backup left by an earlier malformed read`() = runBlocking {
+        // keepCorrupt's backup is a separate slot from the live log (a
+        // different preferences key in the real store), so clearing the log
+        // does not automatically clear it too unless clear() does so
+        // explicitly - leaving stale transaction data behind after deletion.
+        slot = "{not json"
+        val s = store()
+        s.append(entry("z"))
+        assertEquals("{not json", corrupt)
+
+        s.clear()
+
+        assertNull(corrupt)
     }
 
     @Test

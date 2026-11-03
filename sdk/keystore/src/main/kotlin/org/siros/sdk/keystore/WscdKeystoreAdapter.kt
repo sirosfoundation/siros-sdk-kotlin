@@ -76,6 +76,19 @@ class WscdKeystoreAdapter private constructor(
      * signs for it - see [resolveSignerKey].
      */
     private val profile: InteropProfile = InteropProfile.DEFAULT,
+    /**
+     * The ISO-18045 mapping this adapter uses to encode the OID4VCI Key
+     * Attestation JWT's registered `key_storage`/`user_authentication`
+     * claims (see [toIso18045AttackPotential]) - [Iso18045AssuranceScheme.DEFAULT]
+     * unless a deployment constructs this adapter with its own
+     * [Iso18045AssuranceScheme] instance. Always this concrete class, never
+     * the generic [WscdAssuranceScheme] interface: those two claims are a
+     * registered external wire format that IS the ISO-18045 vocabulary by
+     * spec, not a deployment's free choice of label scheme (see
+     * [WscdAssuranceScheme]'s doc comment) - only which objective fact maps
+     * to which of the three real ISO-18045 tiers is configurable here.
+     */
+    private val assuranceScheme: Iso18045AssuranceScheme = Iso18045AssuranceScheme.DEFAULT,
 ) : KeystoreManager,
     WscdManager,
     // Extension state has to land in the same blob the credentials do, or
@@ -92,6 +105,28 @@ class WscdKeystoreAdapter private constructor(
         this(signer, JweKeystore(profile = profile), profile)
 
     /**
+     * Construct with a deployment's own [Iso18045AssuranceScheme] (e.g. a
+     * different [Iso18045AssuranceScheme.DEFAULT_KEY_STORAGE_TYPE_LABELS]
+     * mapping for this adapter's Key Attestation JWT) instead of accepting
+     * the default - see [assuranceScheme]'s doc comment.
+     */
+    constructor(signer: Signer, assuranceScheme: Iso18045AssuranceScheme) :
+        this(signer, JweKeystore(), InteropProfile.DEFAULT, assuranceScheme)
+
+    /**
+     * Construct with BOTH a non-default [InteropProfile] (e.g. a DIIP
+     * integration that wants `did:jwk` holder binding) AND a deployment's
+     * own [Iso18045AssuranceScheme] - a Copilot review correctly caught that
+     * [constructor] (profile-only) and [constructor] (scheme-only) above
+     * each force the other setting to its default, so a caller needing both
+     * had no way to get them together. Forwards [profile] to both this
+     * adapter and its [JweKeystore], exactly like the profile-only
+     * constructor does.
+     */
+    constructor(signer: Signer, profile: InteropProfile, assuranceScheme: Iso18045AssuranceScheme) :
+        this(signer, JweKeystore(profile = profile), profile, assuranceScheme)
+
+    /**
      * Non-null only when [signer] is itself WSCD-backed (i.e. a
      * [UniFFISigner]) - a plain software [Signer] has no lifecycle or
      * plugin-registration concept.
@@ -102,6 +137,17 @@ class WscdKeystoreAdapter private constructor(
         ?: throw UnsupportedOperationException(
             "WSCD lifecycle/plugin registration not supported - this keystore's signer is not WSCD-backed"
         )
+
+    /**
+     * Key ids [markInstanceKey] has named as the wallet's own instance key, excluded from
+     * [generateProofWithJsonClaims]'s auto-selection so an ordinary credential issuance never picks up the instance
+     * key as its holder key: the instance key can be replaced (rotated) by the wallet's own retry logic at any time
+     * without knowing a credential has come to depend on it for signing, which would permanently break that
+     * credential's presentation. [sign]/[generateKeyProof] (an explicit `keyId`) are unaffected - only the "any
+     * available key" auto-selection path is narrowed. In-memory only: [markInstanceKey] must be called again after a
+     * process restart for a RESTORED instance key id, not only when one is freshly generated.
+     */
+    private val attestedKeyIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     override suspend fun lifecycleStatus(pluginId: String, contextId: String): LifecycleStatus =
         requireWscdManager().lifecycleStatus(pluginId, contextId)
@@ -118,6 +164,8 @@ class WscdKeystoreAdapter private constructor(
     override suspend fun destroyLifecycle(request: DestroyLifecycleRequest): DestructionOutcome =
         requireWscdManager().destroyLifecycle(request)
 
+    override suspend fun isWscdOnboarded(): Boolean = signer.isWscdOnboarded()
+
     override fun registerFido2Plugin(transport: Ctap2TransportProvider) =
         requireWscdManager().registerFido2Plugin(transport)
 
@@ -126,6 +174,9 @@ class WscdKeystoreAdapter private constructor(
 
     override fun exportFido2State(): ByteArray =
         requireWscdManager().exportFido2State()
+
+    override suspend fun describeFido2Authenticator(): Fido2AuthenticatorInfo =
+        requireWscdManager().describeFido2Authenticator()
 
     /**
      * The persisted (privatedata-synced) copy of every hardware-backed WSCD
@@ -173,6 +224,26 @@ class WscdKeystoreAdapter private constructor(
     override fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) =
         requireWscdManager().registerR2psPlugin(config, transport)
 
+    override fun registerAndroidKeystorePlugin(backend: AndroidKeyStoreBackend, authenticator: UserAuthenticator?) =
+        requireWscdManager().registerAndroidKeystorePlugin(backend, authenticator)
+
+    override fun registerAndroidKeystorePluginWithState(
+        state: ByteArray,
+        backend: AndroidKeyStoreBackend,
+        authenticator: UserAuthenticator?,
+    ) = requireWscdManager().registerAndroidKeystorePluginWithState(state, backend, authenticator)
+
+    override fun exportAndroidKeystoreState(): ByteArray =
+        requireWscdManager().exportAndroidKeystoreState()
+
+    override suspend fun generateAndroidKeystoreKeyWithChallenge(attestationChallenge: ByteArray): String =
+        requireWscdManager().generateAndroidKeystoreKeyWithChallenge(attestationChallenge)
+
+    override suspend fun generateKeyForLevel(
+        requiredLevel: WscdCertificationLevel,
+        candidatePluginIds: List<String>,
+    ): GeneratedKeyWithPlugin = requireWscdManager().generateKeyForLevel(requiredLevel, candidatePluginIds)
+
     override val isUnlocked: Boolean get() = credentialsKeystore.isUnlocked
 
     override suspend fun unlock(
@@ -214,6 +285,28 @@ class WscdKeystoreAdapter private constructor(
         return signer.generateKey(algorithm)
     }
 
+    override val supportsAttestedKeyGeneration: Boolean get() = signer.supportsAttestedKeyGeneration
+
+    override suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String {
+        checkUnlocked()
+        return signer.generateAttestedKey(algorithm, attestationChallenge)
+    }
+
+    override suspend fun deleteKey(keyId: String) {
+        checkUnlocked()
+        signer.deleteKey(keyId)
+        attestedKeyIds -= keyId
+        // For an exportable software signer (see the class doc comment), the key's private JWK may already be folded
+        // into credentialsKeystore by an earlier exportEncryptedContainer() - remove it there too, or it stays in
+        // S.keypairs forever and the next unlock() imports it straight back into the signer, resurrecting a key this
+        // call just reported deleted.
+        credentialsKeystore.removeKeypair(keyId)
+    }
+
+    override suspend fun markInstanceKey(keyId: String) {
+        attestedKeyIds += keyId
+    }
+
     override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String): ByteArray {
         checkUnlocked()
         return signer.sign(keyId, payload)
@@ -236,9 +329,24 @@ class WscdKeystoreAdapter private constructor(
         freshKey: Boolean,
         holderBinding: HolderBinding?,
         extraClaims: Map<String, String>,
+    ): String = generateProofWithJsonClaims(audience, nonce, freshKey, holderBinding, extraClaims.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) })
+
+    /**
+     * The proof with claims of any JSON type (the v0.1 `auxiliary_data` array), signed by the WSCD with the rest. The conversion is
+     * [ProofClaims], shared with the software keystore, so the claim is byte-identical either way; a claim it cannot carry is refused.
+     */
+    override suspend fun generateProofWithJsonClaims(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+        extraJsonClaims: Map<String, kotlinx.serialization.json.JsonElement>,
     ): String {
         checkUnlocked()
-        var keys = signer.listKeys()
+        // Converted (and refused) BEFORE any key is generated or used.
+        val converted = ProofClaims.toJava(extraJsonClaims)
+        // Instance keys are never eligible for auto-selection here - see attestedKeyIds' doc comment.
+        var keys = signer.listKeys().filterNot { it.keyId in attestedKeyIds }
         if (keys.isEmpty() || freshKey) {
             // Auto-generate a key for VCI proof-of-possession
             val newKeyId = signer.generateKey("ES256")
@@ -246,7 +354,7 @@ class WscdKeystoreAdapter private constructor(
                 // Use only the freshly generated key
                 signer.listKeys().filter { it.keyId == newKeyId }
             } else {
-                signer.listKeys()
+                signer.listKeys().filterNot { it.keyId in attestedKeyIds }
             }
         }
         val key = keys.firstOrNull()
@@ -276,7 +384,7 @@ class WscdKeystoreAdapter private constructor(
             .issueTime(Date())
             .claim("nonce", nonce)
         did?.let { claimsBuilder.issuer(it) }
-        extraClaims.forEach { (k, v) -> claimsBuilder.claim(k, v) }
+        converted.forEach { (k, v) -> claimsBuilder.claim(k, v) }
         val claims = claimsBuilder.build()
 
         val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.toJSONObject())}"
@@ -609,6 +717,23 @@ class WscdKeystoreAdapter private constructor(
         return credentialsKeystore.exportEncryptedContainer()
     }
 
+    override suspend fun preparePrfKey(
+        credentialId: ByteArray,
+        prfOutput: ByteArray,
+        prfSalt: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ): PreparedPrfKey {
+        // Fold the signer's keys in first, as exportEncryptedContainer does, so
+        // the container this returns is as complete as the one it replaces.
+        for (kp in signer.exportPrivateKeypairs()) {
+            credentialsKeystore.importKeypairJwk(kp.keyId, kp.privateJwk)
+        }
+        return credentialsKeystore.preparePrfKey(credentialId, prfOutput, prfSalt, hkdfSalt, hkdfInfo)
+    }
+
+    override suspend fun commitPrfKey(prepared: PreparedPrfKey) = credentialsKeystore.commitPrfKey(prepared)
+
     override fun listKeys(): List<KeyInfo> {
         return runBlocking {
             signer.listKeys().map { KeyInfo(it.keyId, it.algorithm, 0L) }
@@ -672,6 +797,10 @@ class WscdKeystoreAdapter private constructor(
 
     override suspend fun clearCredentials() {
         credentialsKeystore.clearCredentials()
+    }
+
+    override suspend fun resetLocalKeys() {
+        signer.resetLocalKeys()
     }
 
     // ── Presentation-history storage (delegated to credentialsKeystore) ─
@@ -845,7 +974,18 @@ class WscdKeystoreAdapter private constructor(
      * Translate SIROS's internal WSCD key-storage/user-authentication
      * vocabulary (`software`/`hardware`/`trusted_execution`/`remote_hsm`,
      * see [SignerSecurityProperties]) into the OID4VCI Key Attestation JWT's
-     * registered `iso_18045_*` attack-potential-resistance values.
+     * registered `iso_18045_*` attack-potential-resistance values, via
+     * [assuranceScheme] - see [WscdAssuranceScheme.labelForKeyStorageType]'s
+     * doc comment for why this goes through the SAME configurable mapping
+     * [WscdPluginCapabilities] uses, instead of its own separate guess (what
+     * this method used to be, independently of
+     * [WscdPluginCapabilities]'s own table - a real, found bug: the two
+     * disagreed about what `"trusted_execution"` meant).
+     *
+     * `"none"`/[omitIfNone] stay local to this method rather than moving
+     * into [assuranceScheme]: whether to emit the claim AT ALL for "no
+     * security property reported" is a decision about this JWT's shape, not
+     * about what an objective fact is worth.
      *
      * Confirmed via a real conformance-test issuer that passing the raw
      * internal string through unmapped (e.g. `"software"`) produces a
@@ -854,21 +994,10 @@ class WscdKeystoreAdapter private constructor(
      * signature itself is cryptographically valid, so an unrecognized enum
      * value reaching a strict validator is the far more likely explanation
      * for a rejection than the signature math.
-     *
-     * Mappings are necessarily approximate (SIROS's vocabulary is coarser
-     * than the ISO 18045 scale) - conservative/lower tiers are preferred
-     * over overclaiming resistance we can't actually back up.
      */
     private fun toIso18045AttackPotential(raw: String, omitIfNone: Boolean = false): String? {
-        if (raw.startsWith("iso_18045_")) return raw // already spec-compliant, pass through
-        return when (raw.lowercase()) {
-            "none" -> if (omitIfNone) null else "iso_18045_basic"
-            "software" -> "iso_18045_basic"
-            "hardware" -> "iso_18045_moderate"
-            "trusted_execution" -> "iso_18045_enhanced-basic"
-            "remote_hsm" -> "iso_18045_high"
-            else -> "iso_18045_basic"
-        }
+        if (raw.equals("none", ignoreCase = true)) return if (omitIfNone) null else assuranceScheme.labelFor(WscdCertificationLevel.UNATTESTED)
+        return assuranceScheme.labelForKeyStorageType(raw)
     }
 
     private fun jwsAlgorithm(algorithm: String): JWSAlgorithm {
@@ -879,16 +1008,13 @@ class WscdKeystoreAdapter private constructor(
         }
     }
 
-    private fun base64Url(obj: Map<String, Any>): String {
-        val jsonObj = kotlinx.serialization.json.JsonObject(
-            obj.mapValues { (_, v) -> toJsonElement(v) }
-        )
-        val json = Json.encodeToString(
-            kotlinx.serialization.json.JsonObject.serializer(),
-            jsonObj
-        )
-        return base64UrlEncode(json.toByteArray(Charsets.UTF_8))
-    }
+    /**
+     * The JWS segment of [obj]: serialised by Nimbus (`JSONObjectUtils`), the same serialiser [JweKeystore] signs through, so a
+     * claim is encoded identically by both keystores (including the escaping of U+2028 / U+2029, which kotlinx.serialization
+     * emits literally).
+     */
+    private fun base64Url(obj: Map<String, Any>): String =
+        base64UrlEncode(com.nimbusds.jose.util.JSONObjectUtils.toJSONString(obj).toByteArray(Charsets.UTF_8))
 
     private fun toJsonElement(value: Any?): kotlinx.serialization.json.JsonElement {
         return when (value) {

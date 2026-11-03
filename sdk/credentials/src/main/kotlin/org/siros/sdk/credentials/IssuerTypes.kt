@@ -122,6 +122,11 @@ data class CredentialConfiguration(
      */
     @SerialName("cryptographic_binding_methods_supported")
     val cryptographicBindingMethodsSupported: List<String>? = null,
+    /**
+     * Credential Auxiliary Data v0.1 advertisement (`{"to_wallet": [...], "to_issuer": [...]}`), kept raw so a value that must
+     * not be there can be told from a slot list; read by [AuxiliaryDataV01.advertisement]. Appended: binary API of a data class.
+     */
+    @SerialName("auxiliary_data_supported") val auxiliaryDataSupported: JsonElement? = null,
 )
 
 /**
@@ -132,12 +137,30 @@ data class CredentialDisplayMetadata(
     val display: List<CredentialDisplayEntry>? = null,
     val claims: List<JsonElement>? = null,
     /**
-     * The `org.siros.secret_seed` member as published: the advertisement of a configuration that delivers a seed
-     * (`{"namespaces": [...]}`), read with [SecretSeedDelivery.classifyAdvertisement]. Kept raw so a value that
-     * must not be there can be told from a list of names.
+     * The PRESENCE of each member of a REMOVED secret-bearing shape in the configuration's public metadata, never its value
+     * ([LegacyMemberPresence]): a configuration that publishes any of them is a superseded shape and is not offered
+     * ([AuxiliaryDataV01.advertisement]). [carriesLegacyMember] is the test.
      */
-    @SerialName("org.siros.secret_seed") val secretSeed: JsonElement? = null,
-)
+    @SerialName("org.siros.secret_seed") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacySecretSeed: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    @SerialName("org.siros.holder_commitments") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacyOrgHolderCommitments: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    @SerialName("org.siros.psc") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacyOrgPsc: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    @SerialName("holder_commitments") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacyHolderCommitments: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    @SerialName("secret_members") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacySecretMembers: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    /**
+     * The Auxiliary Data v0.1 response member as it appears in PUBLIC metadata, where it is forbidden: kept raw only so its
+     * presence can be told ([AuxiliaryDataV01.advertisement] classifies the configuration as malformed). Appended: binary API.
+     */
+    @SerialName("auxiliary_data") val auxiliaryData: JsonElement? = null,
+) {
+    /** Whether any member of a removed secret-bearing shape was present. */
+    val carriesLegacyMember: Boolean
+        get() = listOf(legacySecretSeed, legacyOrgHolderCommitments, legacyOrgPsc, legacyHolderCommitments, legacySecretMembers).any { it == LegacyMemberPresence.PRESENT }
+}
 
 @Serializable
 data class CredentialDisplayEntry(
@@ -148,6 +171,48 @@ data class CredentialDisplayEntry(
     @SerialName("text_color") val textColor: String? = null,
     @SerialName("background_image") val backgroundImage: BackgroundImage? = null,
     val logo: LogoInfo? = null,
+    /**
+     * OID4VCI's optional richer rendering (mirroring `sirosfoundation/vc`'s
+     * `MetadataRendering`/`CredentialMetadataDisplay.Rendering`): a `simple.logo`
+     * alternative to [logo], or a full SVG card template. Before this was added, a
+     * configuration that only advertised [rendering] (no flat [logo]) silently kept
+     * ignoreUnknownKeys' default treatment - type parsed fine, [rendering] vanished,
+     * and the offer fell back to [backgroundColor]/an initial-letter badge even
+     * though the issuer had published a properly designed card (confirmed live for
+     * nym_auth: `display[0]` carries both the legacy flat fields AND
+     * `rendering.svg_templates`, every refresh, not a stale cache - see
+     * [org.siros.sdk.wallet.SirosWallet.buildCredentialOfferFromMetadata], which
+     * reads this field down into [org.siros.sdk.credentials.CredentialOffer.logoUri]).
+     */
+    val rendering: CredentialDisplayRendering? = null,
+)
+
+/** See [CredentialDisplayEntry.rendering]; field-for-field mirror of vc's `MetadataRendering`. */
+@Serializable
+data class CredentialDisplayRendering(
+    val simple: CredentialSimpleRendering? = null,
+    @SerialName("svg_templates") val svgTemplates: List<CredentialSvgTemplate>? = null,
+)
+
+/** mirrors vc's `MetadataSimpleRendering`: a logo alternative to [CredentialDisplayEntry.logo]. */
+@Serializable
+data class CredentialSimpleRendering(
+    val logo: LogoInfo? = null,
+)
+
+/** mirrors vc's `MetadataSvgTemplate`: a full SVG card template, same shape [org.siros.sdk.credentials.logo.LogoSanitizer] already rasterizes as a logo. */
+@Serializable
+data class CredentialSvgTemplate(
+    val uri: String,
+    val properties: CredentialSvgTemplateProperties? = null,
+)
+
+/** mirrors vc's `MetadataSvgTemplateProperties`. */
+@Serializable
+data class CredentialSvgTemplateProperties(
+    val orientation: String? = null,
+    @SerialName("color_scheme") val colorScheme: String? = null,
+    val contrast: String? = null,
 )
 
 @Serializable

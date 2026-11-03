@@ -279,7 +279,9 @@ data class ProofObject(
 data class MatchResponseMessage(
     val type: String = MessageTypes.MATCH_RESPONSE,
     @SerialName("flow_id") val flowId: String,
-    val matches: List<CredentialMatch>,
+    /** Only the query ids the wallet can answer ([MatchRef]): nothing about the credentials themselves. */
+    val matches: List<MatchRef>,
+    /** A [NoMatchCodes] code, never free text. */
     @SerialName("no_match_reason") val noMatchReason: String? = null,
     val error: String? = null,
     val timestamp: String? = null,
@@ -560,13 +562,6 @@ data class SignRequestParams(
     @SerialName("transaction_data") val transactionData: List<TransactionData>? = null,
     /** The OID4VP `response_mode` of the request; required in an SCA key binding JWT (EC TS12 3.6). */
     @SerialName("response_mode") val responseMode: String? = null,
-    /**
-     * Holder commitments the issuer asked for (`["psc"]`), with the
-     * [credentialType] and the exact [credentialIssuer] identifier string
-     * (issuer metadata `credential_issuer`, verbatim) the wallet derives them
-     * for. The wallet puts the claim `org.siros.psc` into the `jwt` proof.
-     */
-    @SerialName("holder_commitments") val holderCommitments: List<String>? = null,
     @SerialName("credential_type") val credentialType: String? = null,
     @SerialName("credential_issuer") val credentialIssuer: String? = null,
     /**
@@ -591,6 +586,12 @@ data class SignRequestParams(
     // Appended last: a data class's property order is part of its binary API (componentN, copy, constructor).
     /** The verifier's `client_metadata` as in [MatchRequestMessage.clientMetadata], when the engine sends it. */
     @SerialName("client_metadata") val clientMetadata: JsonElement? = null,
+    /**
+     * Credential Auxiliary Data v0.1 (`generate_proof`): the issuer's advertised `to_issuer` entries VERBATIM (`type`, `alg`, `path`,
+     * `required`, ...); omitted when none. The wallet puts `{type, alg, path, commitment}` for them in the signed part of every
+     * key proof, and MUST answer every entry with `required: true`. Appended last: a data class's property order is binary API.
+     */
+    @SerialName("auxiliary_data_to_issuer") val auxiliaryDataToIssuer: List<kotlinx.serialization.json.JsonObject>? = null,
 )
 
 @Serializable

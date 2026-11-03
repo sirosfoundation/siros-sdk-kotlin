@@ -19,6 +19,15 @@ interface KeystoreManager {
     val isUnlocked: Boolean
 
     /**
+     * Whether this keystore's WSCD has been ONBOARDED: a token-backed plugin (FIDO2) holds at least
+     * one enrolled key. Callers use it to fail with a clear error BEFORE asking the user for a PIN,
+     * which is meaningless when no token has been onboarded. `false` also means "could not be
+     * determined" (fail closed). The default is `true`: a keystore whose keys need no onboarding
+     * (software keys) has nothing to onboard.
+     */
+    suspend fun isWscdOnboarded(): Boolean = true
+
+    /**
      * Unlock the keystore using PRF-derived key material.
      *
      * @param prfOutput   raw PRF output from the WebAuthn authenticator.
@@ -55,6 +64,32 @@ interface KeystoreManager {
      * [WscdKeystoreAdapter]) need to act on this.
      */
     fun setCredentialId(credentialId: ByteArray) {}
+
+    /**
+     * Wrap this unlocked keystore's main key for an additional passkey
+     * (the wallet-frontend's `keystore.addPrf`), without changing anything yet.
+     *
+     * Returns the container that includes the new passkey's PRF entry, to be
+     * sent to the backend. Only once the backend has accepted it is
+     * [commitPrfKey] called, so a refused enrolment leaves the keystore as it
+     * was. The main key and the wallet state are unchanged: the other passkeys
+     * keep working.
+     *
+     * @throws UnsupportedOperationException for a keystore with no PRF container.
+     * @throws KeystoreException when the keystore is locked.
+     */
+    suspend fun preparePrfKey(
+        credentialId: ByteArray,
+        prfOutput: ByteArray,
+        prfSalt: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ): PreparedPrfKey = throw UnsupportedOperationException("This keystore cannot add a passkey")
+
+    /** Makes the [prepared] PRF entry part of this keystore's container, once the backend stored it. */
+    suspend fun commitPrfKey(prepared: PreparedPrfKey) {
+        throw UnsupportedOperationException("This keystore cannot add a passkey")
+    }
 
     /** Generate a new keypair and return the key ID. */
     suspend fun generateKey(algorithm: String = "ES256"): String
@@ -152,6 +187,26 @@ interface KeystoreManager {
         return generateProof(audience, nonce, freshKey, holderBinding)
     }
 
+    /**
+     * [generateProof] with extra claims of ANY JSON type (the Credential Auxiliary Data v0.1 `auxiliary_data` claim is an array),
+     * signed with the rest. Fail-closed default: claims that are all strings forward to the string form; anything else throws,
+     * because a keystore that cannot place a claim must not return a proof without it.
+     */
+    suspend fun generateProofWithJsonClaims(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+        extraJsonClaims: Map<String, kotlinx.serialization.json.JsonElement>,
+    ): String {
+        val strings = extraJsonClaims.mapValues { (_, v) ->
+            (v as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw KeystoreException(
+                    "This KeystoreManager cannot place a non-string proof claim - refusing rather than returning a proof without it.",
+                )
+        }
+        return generateProof(audience, nonce, freshKey, holderBinding, strings)
+    }
 
     /**
      * Sign a verifiable presentation for OID4VP.
@@ -337,6 +392,21 @@ interface KeystoreManager {
     /** Remove all stored credentials. */
     suspend fun clearCredentials()
 
+    /**
+     * Erase this keystore's own LOCAL private key material (not the stored
+     * credential records [clearCredentials] removes), for when the account
+     * that owns it is deleted. Never a remote or hardware operation: a key
+     * held by an external authenticator (FIDO2 security key) or a remote
+     * HSM (R2PS) cannot be, and is not, erased by this - only in-process
+     * software key material is, and only for a keystore backed by it.
+     *
+     * Default: no-op. [JweKeystore]'s own keys live inside the encrypted
+     * container [clearCredentials]/the keystore lock already handle; only
+     * [WscdKeystoreAdapter] (whose [Signer] can hold key material of its
+     * own, outside that container) overrides this.
+     */
+    suspend fun resetLocalKeys() {}
+
     // ── Presentation-history storage (PRF-encrypted alongside keys) ─
 
     /**
@@ -390,6 +460,28 @@ interface KeystoreManager {
      * plugin (e.g. FIDO2/CTAP2) actually has one to return.
      */
     suspend fun attestationChain(keyId: String): AttestationChain? = null
+
+    /** Whether [generateAttestedKey] works (see [Signer.supportsAttestedKeyGeneration]). Default: no. */
+    val supportsAttestedKeyGeneration: Boolean get() = false
+
+    /** Generate a key whose attestation carries [attestationChallenge] (see [Signer.generateAttestedKey]). Default: unsupported. */
+    suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String =
+        throw UnsupportedOperationException("This keystore cannot generate challenge-attested keys")
+
+    /** Delete a key this keystore generated (for example an instance key that must be replaced). Default: nothing to delete. */
+    suspend fun deleteKey(keyId: String) {}
+
+    /**
+     * Marks [keyId] as the wallet's own instance key (the WIA's `cnf` key), so a keystore that also serves ordinary
+     * credential proofs from the SAME key pool (one shared [Signer], e.g. a hardware keystore with no notion of
+     * "instance" vs "credential" key) never offers it to [generateProofWithJsonClaims]'s auto-selection
+     * (`freshKey = false`): the instance key can be rotated/replaced by the wallet's own retry logic at any time
+     * without knowing a credential has come to depend on it for signing, which would permanently break that
+     * credential's presentation. Call whenever the instance key id is established OR RESTORED (not only when freshly
+     * generated - a key generated in an earlier process run is not remembered as "the instance key" here across a
+     * restart otherwise). Default: no-op (a keystore with separate pools, or no auto-selection, has nothing to mark).
+     */
+    suspend fun markInstanceKey(keyId: String) {}
 
     /**
      * Generate [count] fresh keypairs and build a single OID4VCI `attestation`
@@ -478,4 +570,14 @@ data class KeyInfo(
 data class KeypairInfo(
     val keyId: String,
     val publicKeyJWK: kotlinx.serialization.json.JsonObject,
+)
+
+/**
+ * A container carrying a new passkey's PRF entry that has not been committed
+ * to the keystore yet; see [KeystoreManager.preparePrfKey].
+ */
+class PreparedPrfKey(
+    /** The serialized container to store on the backend. */
+    val container: ByteArray,
+    internal val entry: PrfKeyInfo,
 )

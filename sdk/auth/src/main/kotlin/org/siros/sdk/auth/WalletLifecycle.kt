@@ -124,36 +124,50 @@ enum class WalletLifecycleRefusal(val errorCode: String) {
     }
 }
 
-/**
- * Result of deactivating the wallet (`POST
- * /user/session/instances/revoke-all`) or revoking its last instance.
- *
- * The backend records the revocation before it erases the data, so a call can
- * legitimately end with the instances revoked and the erasure unfinished
- * ([complete] false, after `409 ERASURE_INCOMPLETE` survived the client's
- * retry budget). The wallet is deactivated either way - an administrator
- * finishes the cascade by re-sending the same status through the admin API -
- * so a caller should forget its local account in both cases and use
- * [complete] only to decide what to tell the user.
- */
-data class DeactivationOutcome(
-    /** How many instances this call revoked. A repeated (retry) call answers 0. */
-    val revoked: Int,
-    /** True when the backend confirmed the erasure with a `200`. */
-    val complete: Boolean,
-)
-
-/** Backend error code for a `409` whose status change stands but whose erasure must be retried. */
-const val ERROR_ERASURE_INCOMPLETE: String = "ERASURE_INCOMPLETE"
-
 /** Backend error code for a `credential_id` that is not one of the caller's own passkeys. */
 const val ERROR_CREDENTIAL_NOT_OWNED: String = "CREDENTIAL_NOT_OWNED"
+
+/** WIA refused because the instance-key evidence is wrong (HTTP 400): nothing was recorded; a retry needs a NEW key and challenge. */
+const val ERROR_KEY_ATTESTATION_INVALID: String = "KEY_ATTESTATION_INVALID"
+
+/** The evidence could not be judged right now (HTTP 503, e.g. no fresh revocation list): retry later with a NEW key and challenge. */
+const val ERROR_KEY_ATTESTATION_UNAVAILABLE: String = "KEY_ATTESTATION_UNAVAILABLE"
+
+/**
+ * The instance-key chain is well formed but does not qualify (HTTP 400, body `{"error","message","details":{"reason":R}}`): a HARD
+ * failure for that key; the reason is one of [KEY_ATTESTATION_NOT_QUALIFYING_REASONS].
+ */
+const val ERROR_KEY_ATTESTATION_NOT_QUALIFYING: String = "KEY_ATTESTATION_NOT_QUALIFYING"
+
+/** The reasons the backend names for [ERROR_KEY_ATTESTATION_NOT_QUALIFYING]; anything else is reported as `other`. */
+val KEY_ATTESTATION_NOT_QUALIFYING_REASONS: Set<String> = setOf(
+    "not_configured", "untrusted_root", "software_security_level", "key_not_generated", "no_sign_purpose",
+    "app_not_allowed", "boot_not_verified", "bootloader_unlocked", "patch_level_too_old", "patch_level_missing", "other",
+)
+
+/**
+ * The `details.reason` of a [ERROR_KEY_ATTESTATION_NOT_QUALIFYING] body, restricted to the known enum (anything else, or no reason,
+ * is `other`): the only part of such a failure that is ever logged.
+ */
+fun BackendApiException.keyAttestationNotQualifyingReason(): String {
+    val reason = try {
+        (errorJson.parseToJsonElement(body.orEmpty()) as? kotlinx.serialization.json.JsonObject)
+            ?.get("details")?.let { it as? kotlinx.serialization.json.JsonObject }
+            ?.get("reason")?.let { it as? kotlinx.serialization.json.JsonPrimitive }?.takeIf { it.isString }?.content
+    } catch (e: Exception) {
+        null
+    }
+    return reason?.takeIf { it in KEY_ATTESTATION_NOT_QUALIFYING_REASONS } ?: "other"
+}
+
+/** The backend does not know this `key_attestation` type (HTTP 400, before the challenge is consumed): retry without evidence. */
+const val ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED: String = "KEY_ATTESTATION_TYPE_UNSUPPORTED"
 
 private val errorJson = Json { ignoreUnknownKeys = true }
 
 /**
  * The backend's stable `error` code from this exception's JSON body (e.g.
- * `ERASURE_INCOMPLETE`, `CREDENTIAL_NOT_OWNED`), or null when the body is
+ * `STEP_UP_FAILED`, `CREDENTIAL_NOT_OWNED`), or null when the body is
  * absent, not JSON, or carries no `error` field. Lets callers branch on the
  * protocol's error codes without each re-parsing the body.
  */

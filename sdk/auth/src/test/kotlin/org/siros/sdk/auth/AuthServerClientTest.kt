@@ -182,6 +182,36 @@ class AuthServerClientTest {
         assertEquals("after clearTokenCache the token is minted again", 2, server.requestCount)
     }
 
+    /**
+     * [AuthServerClient.clearTokenCache] alone never touches the AS session
+     * cookie - [AuthServerClient.clearCookies] is the one that does, directly
+     * on the jar, without a network call (so it works even with no session
+     * active, and never races a concurrent logout request).
+     */
+    @Test
+    fun `clearCookies empties the cookie jar without a network call`() = runBlocking {
+        val jar = InMemoryCookieJar()
+        val jarClient = AuthServerClient(
+            baseUrl = server.url("/").toString().trimEnd('/'),
+            tenantId = "test-tenant",
+            httpClient = okhttp3.OkHttpClient.Builder().cookieJar(jar).build(),
+        )
+        server.enqueue(
+            MockResponse()
+                .setBody("""{"challengeId":"c1","getOptions":{"publicKey":{}}}""")
+                .addHeader("Set-Cookie", "as_session=abc123; Path=/")
+                .setHeader("Content-Type", "application/json"),
+        )
+        jarClient.loginBegin()
+        val url = server.url("/")
+        assertEquals("the session cookie was stored", 1, jar.loadForRequest(url).size)
+
+        jarClient.clearCookies()
+
+        assertEquals("clearCookies dropped it", 0, jar.loadForRequest(url).size)
+        assertEquals("no request was made to clear it", 1, server.requestCount)
+    }
+
     @Test
     fun `requestAccessToken caches token`() = runBlocking {
         val exp = (System.currentTimeMillis() / 1000) + 3600

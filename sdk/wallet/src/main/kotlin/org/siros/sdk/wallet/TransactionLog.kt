@@ -92,11 +92,14 @@ interface TransactionLogStore {
  * @param read the stored text, or `null` if empty; throws if storage is unreadable.
  * @param write stores the text (`null` clears); returns whether it was stored.
  * @param keepCorrupt keeps a copy of text that did not parse.
+ * @param clearCorrupt removes whatever [keepCorrupt] kept, so [clear] does not
+ *   leave that backup slot holding transaction data behind.
  */
 internal class JsonTransactionLogStore(
     private val read: () -> String?,
     private val write: (String?) -> Boolean,
     private val keepCorrupt: (String) -> Unit = {},
+    private val clearCorrupt: () -> Unit = {},
     private val maxEntries: Int = 500,
     private val maxRefused: Int = 100,
     private val refusalDedupMillis: Long = 60_000,
@@ -156,6 +159,7 @@ internal class JsonTransactionLogStore(
         withContext(Dispatchers.IO) {
             synchronized(lock) {
                 if (!write(null)) throw IOException("The transaction log could not be cleared")
+                clearCorrupt()
             }
         }
     }

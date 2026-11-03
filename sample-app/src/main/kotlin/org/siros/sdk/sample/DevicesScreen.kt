@@ -43,7 +43,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import org.siros.sdk.auth.DeactivationOutcome
 import org.siros.sdk.auth.WalletInstance
 import org.siros.sdk.auth.WalletInstanceStatus
 
@@ -62,14 +61,9 @@ import org.siros.sdk.auth.WalletInstanceStatus
 fun DevicesScreen(
     instances: List<WalletInstance>,
     loading: Boolean,
-    busyInstanceId: String?,
-    deactivating: Boolean,
-    deactivationOutcome: DeactivationOutcome?,
     errorMessage: String?,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
-    onSetStatus: (instanceId: String, status: WalletInstanceStatus, reason: String?) -> Unit,
-    onDeactivateWallet: (reason: String?) -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -126,12 +120,7 @@ fun DevicesScreen(
                 )
 
                 else -> instances.forEach { instance ->
-                    DeviceRow(
-                        instance = instance,
-                        busy = busyInstanceId == instance.id,
-                        enabled = busyInstanceId == null && !deactivating,
-                        onSetStatus = onSetStatus,
-                    )
+                    DeviceRow(instance)
                     Spacer(Modifier.height(12.dp))
                 }
             }
@@ -139,32 +128,18 @@ fun DevicesScreen(
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
                 onClick = onRefresh,
-                enabled = !loading && busyInstanceId == null && !deactivating,
+                enabled = !loading,
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 shape = RoundedCornerShape(12.dp),
             ) { Text(stringResource(R.string.devices_refresh)) }
 
-            Spacer(Modifier.height(32.dp))
-            DeactivateWalletFooter(
-                deactivating = deactivating,
-                outcome = deactivationOutcome,
-                enabled = busyInstanceId == null,
-                onDeactivateWallet = onDeactivateWallet,
-            )
             Spacer(Modifier.height(24.dp))
         }
     }
 }
 
 @Composable
-private fun DeviceRow(
-    instance: WalletInstance,
-    busy: Boolean,
-    enabled: Boolean,
-    onSetStatus: (String, WalletInstanceStatus, String?) -> Unit,
-) {
-    var confirmRemove by remember { mutableStateOf(false) }
-
+private fun DeviceRow(instance: WalletInstance) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -201,181 +176,7 @@ private fun DeviceRow(
                 DeviceDetail(stringResource(R.string.devices_status_reason), it)
             }
 
-            Spacer(Modifier.height(12.dp))
-            if (busy) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp))
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    when (instance.statusEnum) {
-                        WalletInstanceStatus.ACTIVE -> OutlinedButton(
-                            onClick = { onSetStatus(instance.id, WalletInstanceStatus.SUSPENDED, null) },
-                            enabled = enabled,
-                        ) { Text(stringResource(R.string.devices_suspend)) }
-
-                        WalletInstanceStatus.SUSPENDED -> OutlinedButton(
-                            onClick = { onSetStatus(instance.id, WalletInstanceStatus.ACTIVE, null) },
-                            enabled = enabled,
-                        ) { Text(stringResource(R.string.devices_reactivate)) }
-
-                        // Revoked is terminal: nothing to offer but the record.
-                        else -> Unit
-                    }
-                    // Only for a status this SDK understands: a value a newer
-                    // backend introduced is not "not revoked, so removable" -
-                    // offering a terminal transition for a state we cannot
-                    // reason about is exactly the guess not to make.
-                    if (instance.statusEnum == WalletInstanceStatus.ACTIVE ||
-                        instance.statusEnum == WalletInstanceStatus.SUSPENDED
-                    ) {
-                        OutlinedButton(
-                            onClick = { confirmRemove = true },
-                            enabled = enabled,
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error,
-                            ),
-                        ) { Text(stringResource(R.string.devices_remove)) }
-                    }
-                }
-            }
-
-            // Suspending this device signs it out until someone else
-            // reactivates it - the SDK re-logs in after the write and lands in
-            // LifecycleBlocked(SUSPENDED). Say so before the tap, not after.
-            if (instance.isThisDevice && instance.statusEnum == WalletInstanceStatus.ACTIVE) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    stringResource(R.string.devices_suspend_self_warning),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
-    }
-
-    if (confirmRemove) {
-        AlertDialog(
-            onDismissRequest = { confirmRemove = false },
-            title = { Text(stringResource(R.string.devices_remove_confirm_title)) },
-            text = {
-                Text(stringResource(R.string.devices_remove_confirm_message, deviceLabel(instance)))
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmRemove = false
-                    onSetStatus(instance.id, WalletInstanceStatus.REVOKED, null)
-                }) { Text(stringResource(R.string.devices_remove), color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmRemove = false }) {
-                    Text(stringResource(R.string.devices_cancel))
-                }
-            },
-        )
-    }
-}
-
-@Composable
-private fun DeactivateWalletFooter(
-    deactivating: Boolean,
-    outcome: DeactivationOutcome?,
-    enabled: Boolean,
-    onDeactivateWallet: (String?) -> Unit,
-) {
-    var showDialog by remember { mutableStateOf(false) }
-    var typed by remember { mutableStateOf("") }
-    var reason by remember { mutableStateOf("") }
-    val confirmWord = stringResource(R.string.devices_deactivate_confirm_word)
-
-    Text(
-        stringResource(R.string.devices_deactivate_title),
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Spacer(Modifier.height(4.dp))
-    Text(
-        stringResource(R.string.devices_deactivate_description),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Spacer(Modifier.height(12.dp))
-
-    if (outcome != null) {
-        Text(
-            if (outcome.complete) {
-                stringResource(R.string.devices_deactivate_complete, outcome.revoked)
-            } else {
-                stringResource(R.string.devices_deactivate_incomplete, outcome.revoked)
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = if (outcome.complete) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.error
-            },
-        )
-        Spacer(Modifier.height(12.dp))
-    }
-
-    OutlinedButton(
-        onClick = { showDialog = true; typed = ""; reason = "" },
-        enabled = enabled && !deactivating,
-        modifier = Modifier.fillMaxWidth().height(48.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-    ) {
-        if (deactivating) {
-            CircularProgressIndicator(modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-        }
-        Text(stringResource(R.string.devices_deactivate_button))
-    }
-
-    if (showDialog) {
-        AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text(stringResource(R.string.devices_deactivate_confirm_title)) },
-            text = {
-                Column {
-                    Text(stringResource(R.string.devices_deactivate_confirm_message, confirmWord))
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = typed,
-                        onValueChange = { typed = it },
-                        singleLine = true,
-                        label = { Text(confirmWord) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = reason,
-                        onValueChange = { reason = it },
-                        singleLine = true,
-                        label = { Text(stringResource(R.string.devices_reason_optional)) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = typed.trim().equals(confirmWord, ignoreCase = true),
-                    onClick = {
-                        showDialog = false
-                        onDeactivateWallet(reason.trim().takeIf { it.isNotEmpty() })
-                    },
-                ) {
-                    Text(
-                        stringResource(R.string.devices_deactivate_button),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDialog = false }) {
-                    Text(stringResource(R.string.devices_cancel))
-                }
-            },
-        )
     }
 }
 

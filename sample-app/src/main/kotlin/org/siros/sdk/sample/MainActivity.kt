@@ -152,12 +152,47 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel(factory = vmFactory)
                     LaunchedEffect(Unit) {
                         dispatchIncomingUri(intent?.data)
+                        // The launching intent is handled once: an activity re-created later (a configuration change, a return from the
+                        // browser) would otherwise deliver the same deep link again from getIntent().
+                        setIntent(android.content.Intent(intent).apply { data = null })
                         pendingWscaIntent?.let {
                             dispatchWscaTestAction(it)
                             pendingWscaIntent = null
                         }
                     }
-                    WalletScreen(viewModel)
+                    var showVerifier by rememberSaveable { mutableStateOf(false) }
+                    val verifierViewModel = remember {
+                        VerifierViewModel(
+                            transportFactory = { engagement, _ ->
+                                openMdocBleTransport(this@MainActivity, engagement)
+                            },
+                            nfcHandoverReader = {
+                                org.siros.sdk.verifier.mdoc.proximity.ndef.android.MdocNfcEngagementReader(
+                                    this@MainActivity,
+                                ).read()
+                            },
+                        )
+                    }
+                    if (showVerifier) {
+                        val verifierState by verifierViewModel.state.collectAsState()
+                        MdocVerifierScreen(
+                            state = verifierState,
+                            onEndpointChange = verifierViewModel::updateEndpoint,
+                            onTenantChange = verifierViewModel::updateTenant,
+                            onStartScan = verifierViewModel::startScan,
+                            onStartNfc = verifierViewModel::startNfc,
+                            onBluetoothPermissionsDenied = verifierViewModel::bluetoothPermissionsDenied,
+                            onQrScanned = verifierViewModel::onQrScanned,
+                            onCancelScan = verifierViewModel::cancelScan,
+                            onClear = verifierViewModel::clear,
+                            onBack = {
+                                verifierViewModel.cancelVerification()
+                                showVerifier = false
+                            },
+                        )
+                    } else {
+                        WalletScreen(viewModel, onVerify = { showVerifier = true })
+                    }
                 }
             }
         }
@@ -226,14 +261,41 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private suspend fun openMdocBleTransport(
+    context: android.content.Context,
+    engagement: org.siros.sdk.verifier.mdoc.proximity.MdocEngagement,
+): org.siros.sdk.verifier.mdoc.proximity.MdocMessageTransport {
+    val election = org.siros.sdk.verifier.mdoc.proximity.MdocBleTransportFactory.start(context, engagement)
+    try {
+        val transport = election.await()
+        return object : org.siros.sdk.verifier.mdoc.proximity.MdocMessageTransport {
+            override suspend fun send(message: ByteArray) = transport.send(message)
+
+            override suspend fun receive(): ByteArray = transport.receive()
+
+            override suspend fun close() {
+                try {
+                    transport.close()
+                } finally {
+                    election.close()
+                }
+            }
+        }
+    } catch (error: Throwable) {
+        election.close()
+        throw error
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WalletScreen(viewModel: WalletViewModel) {
+fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val walletState by viewModel.state.collectAsState()
     val r2psServerUrl by viewModel.r2psServerUrl.collectAsState()
     val showAddCredential by viewModel.showAddCredential.collectAsState()
     val showIDVPreparation by viewModel.showIDVPreparation.collectAsState()
     val availableCredentials by viewModel.availableCredentials.collectAsState()
+    val isRefreshingOffers by viewModel.isRefreshingOffers.collectAsState()
     val isLoadingOffers by viewModel.isLoadingOffers.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -244,6 +306,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val pendingPinEntry by viewModel.pendingPinEntry.collectAsState()
     val pendingTransportChoice by viewModel.pendingTransportChoice.collectAsState()
     val fido2AwaitingPresentation by viewModel.fido2AwaitingPresentation.collectAsState()
+    val fido2EnrolmentDiscovering by viewModel.fido2EnrolmentDiscovering.collectAsState()
     val fido2TransportMode by viewModel.fido2TransportMode.collectAsState()
     val pendingAutoEnrollOffer by viewModel.pendingAutoEnrollOffer.collectAsState()
     val presentationHistory by viewModel.presentationHistory.collectAsState()
@@ -337,6 +400,16 @@ fun WalletScreen(viewModel: WalletViewModel) {
         )
     }
 
+    // Enrolment's first tap: the SDK is describing the key, before any PIN dialog (or, for a key without a PIN, before the
+    // ceremony itself) takes over - see WalletViewModel.fido2EnrolmentDiscovering's doc comment.
+    if (fido2EnrolmentDiscovering) {
+        Fido2PresentKeyGuide(
+            mode = fido2TransportMode,
+            discovering = true,
+            onCancel = viewModel::cancelWscdLifecycleOp,
+        )
+    }
+
     // Offered once per process right after a successful login - see
     // WalletViewModel.maybeOfferWscdAutoEnroll's doc comment. Rendered here
     // (not inside one specific screen) for the same reason as the other
@@ -390,6 +463,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
             onLoginAccount = { account -> viewModel.login(account.accountId) },
             onForgetAccount = viewModel::forgetAccount,
             onRegister = { name -> viewModel.register(name) },
+            onVerify = onVerify,
             onUpdateBackendUrl = viewModel::updateBackendUrl,
             onUpdateTenantId = viewModel::updateTenantId,
             onUpdateEngineUrl = viewModel::updateEngineUrl,
@@ -490,14 +564,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
             showDevices -> DevicesScreen(
                 instances = viewModel.walletInstances.collectAsState().value,
                 loading = viewModel.devicesLoading.collectAsState().value,
-                busyInstanceId = viewModel.devicesBusyInstanceId.collectAsState().value,
-                deactivating = viewModel.deactivating.collectAsState().value,
-                deactivationOutcome = viewModel.deactivationOutcome.collectAsState().value,
                 errorMessage = viewModel.devicesError.collectAsState().value,
                 onBack = viewModel::closeDevices,
                 onRefresh = viewModel::refreshDevices,
-                onSetStatus = viewModel::setWalletInstanceStatus,
-                onDeactivateWallet = viewModel::deactivateWallet,
             )
 
             // Consolidated WSCD settings sub-screen (one tab per plugin -
@@ -596,12 +665,22 @@ fun WalletScreen(viewModel: WalletViewModel) {
                     AddCredentialScreen(
                         offers = availableCredentials,
                         isLoading = isLoadingOffers,
+                        isRefreshing = isRefreshingOffers,
                         onOfferSelected = viewModel::selectCredentialOffer,
                         pendingOffer = pendingOffer,
                         onConfirmIssuance = viewModel::confirmIssuance,
                         onCancelIssuance = viewModel::cancelIssuance,
                         onStartIDV = viewModel::openIDVPreparation,
-                        onRetry = viewModel::openAddCredential,
+                        // Same QR-scanning entry point Home's "Activate" ball
+                        // uses (see WalletViewModel.openActivate/ActivateMode's
+                        // doc comment) - promoted here to a peer top-level
+                        // option alongside Scan Passport, stacked over this
+                        // screen exactly like IDV above rather than
+                        // duplicating any scanning logic.
+                        onScanQr = viewModel::openActivate,
+                        // NOT openAddCredential, which now only reads the cache (#298 review): the empty-state Retry
+                        // button must actually fetch, or it does nothing during the cache's TTL window.
+                        onRetry = viewModel::retryAvailableCredentials,
                         modifier = Modifier.padding(padding),
                     )
                 }
@@ -682,6 +761,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             zkCircuitUrls = viewModel.zkCircuitUrls.collectAsState().value,
                             presentationCount = presentationHistory.size,
                             onDisconnect = viewModel::disconnect,
+                            deletingAccount = viewModel.deletingAccount.collectAsState().value,
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
                             onShowWscdSettings = viewModel::openWscaDeveloper,
@@ -689,6 +769,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
+                            addingPasskey = viewModel.addingPasskey.collectAsState().value,
+                            onAddPasskey = viewModel::addPasskey,
                             showCredentialDetails = showCredentialDetails,
                             onUpdateShowCredentialDetails = viewModel::updateShowCredentialDetails,
                             showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
@@ -795,6 +877,21 @@ fun WalletScreen(viewModel: WalletViewModel) {
                     color = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clickable { onVerify() },
+            ) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = "Verify",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Verify",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
         }
@@ -829,6 +926,7 @@ fun LoginScreen(
     onLoginAccount: (org.siros.sdk.wallet.CachedAccount) -> Unit,
     onForgetAccount: (String) -> Unit,
     onRegister: (String) -> Unit,
+    onVerify: () -> Unit,
     onUpdateBackendUrl: (String) -> Unit,
     onUpdateTenantId: (String) -> Unit,
     onUpdateEngineUrl: (String) -> Unit,
@@ -1022,10 +1120,19 @@ fun LoginScreen(
                         }
                     }
                 }
-            } // Column
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onVerify,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                enabled = !isLoading,
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text("Verify nearby mdoc (no account required)")
+            }
+        } // Column
         } // Box
     } // Scaffold padding
-    } // Scaffold
 } // LoginScreen
 
 // ── Pre-Login Settings Bottom Sheet ────────────────────────────────
@@ -1384,13 +1491,16 @@ fun SettingsTab(
     zkCircuitUrls: List<String> = listOf(org.siros.sdk.credentials.ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
     presentationCount: Int,
     onDisconnect: () -> Unit,
-    onDeleteAccount: () -> Unit,
+    deletingAccount: Boolean = false,
+    onDeleteAccount: (confirmation: String) -> Unit,
     onShowHistory: () -> Unit,
     onShowWscdSettings: () -> Unit,
     onShowDevices: () -> Unit = {},
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
+    addingPasskey: Boolean = false,
+    onAddPasskey: ((String) -> Unit)? = null,
     onUpdateUseWmpProtocol: ((Boolean) -> Unit)? = null,
     showCredentialDetails: Boolean = false,
     onUpdateShowCredentialDetails: ((Boolean) -> Unit)? = null,
@@ -1847,6 +1957,43 @@ fun SettingsTab(
                         }
                     }
                 }
+                if (onAddPasskey != null) {
+                    var showAdd by remember { mutableStateOf(false) }
+                    var newNickname by remember { mutableStateOf("") }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { newNickname = ""; showAdd = true },
+                        enabled = !addingPasskey,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(stringResource(R.string.add_passkey_button))
+                    }
+                    if (showAdd) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { showAdd = false },
+                            title = { Text(stringResource(R.string.add_passkey_button)) },
+                            text = {
+                                OutlinedTextField(
+                                    value = newNickname,
+                                    onValueChange = { newNickname = it },
+                                    singleLine = true,
+                                    label = { Text(stringResource(R.string.add_passkey_nickname)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    enabled = newNickname.isNotBlank(),
+                                    onClick = { showAdd = false; onAddPasskey(newNickname.trim()) },
+                                ) { Text(stringResource(R.string.add_passkey_confirm)) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showAdd = false }) { Text(stringResource(R.string.add_passkey_cancel)) }
+                            },
+                        )
+                    }
+                }
             }
         }
 
@@ -1912,30 +2059,47 @@ fun SettingsTab(
         // Delete account
         Spacer(modifier = Modifier.height(8.dp))
         var showDeleteConfirm by remember { mutableStateOf(false) }
+        var typedConfirmation by remember { mutableStateOf("") }
         OutlinedButton(
-            onClick = { showDeleteConfirm = true },
+            onClick = { typedConfirmation = ""; showDeleteConfirm = true },
+            enabled = !deletingAccount,
             modifier = Modifier.fillMaxWidth().height(48.dp),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
         ) {
-            Text("Delete Account")
+            Text(stringResource(R.string.delete_account_button))
         }
         if (showDeleteConfirm) {
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
-                title = { Text("Delete Account?") },
-                text = { Text("This will remove all local data, credentials, and passkeys. This cannot be undone.") },
+                title = { Text(stringResource(R.string.delete_account_title)) },
+                text = {
+                    Column {
+                        Text(stringResource(R.string.delete_account_message))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        androidx.compose.material3.OutlinedTextField(
+                            value = typedConfirmation,
+                            onValueChange = { typedConfirmation = it },
+                            singleLine = true,
+                            label = { Text("DELETE") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirm = false
-                        onDeleteAccount()
-                    }) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    TextButton(
+                        enabled = typedConfirmation == "DELETE",
+                        onClick = {
+                            showDeleteConfirm = false
+                            onDeleteAccount(typedConfirmation)
+                        },
+                    ) {
+                        Text(stringResource(R.string.delete_account_confirm), color = MaterialTheme.colorScheme.error)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showDeleteConfirm = false }) {
-                        Text("Cancel")
+                        Text(stringResource(R.string.delete_account_cancel))
                     }
                 },
             )

@@ -42,6 +42,15 @@ interface Signer {
     suspend fun beginScaSign(keyId: String): ScaSignSession =
         throw ScaSignSession.insufficient("This signer does not report the authentication it applies")
 
+    /**
+     * Whether the WSCD this signer needs has been ONBOARDED (a token-backed plugin holds an
+     * enrolled key), answered WITHOUT prompting. A PIN is only meaningful for an onboarded token,
+     * so callers refuse before asking when this is `false`. Anything that cannot be determined is
+     * `false` (fail closed). The default is `true`: a signer whose keys need no onboarding
+     * (software keys, a remote service) has nothing to onboard.
+     */
+    suspend fun isWscdOnboarded(): Boolean = true
+
     /** List all keys managed by this signer. */
     suspend fun listKeys(): List<SignerKeyInfo>
 
@@ -57,6 +66,17 @@ interface Signer {
      * over. For software keys, returns null.
      */
     suspend fun attestationChain(keyId: String): AttestationChain?
+
+    /** Whether [generateAttestedKey] works: this signer can bind a key to an attestation challenge and report its chain. */
+    val supportsAttestedKeyGeneration: Boolean get() = false
+
+    /**
+     * Generate a keypair whose key attestation carries [attestationChallenge] (the Android Keystore's
+     * `setAttestationChallenge`), so [attestationChain] proves the key and the challenge. Only a signer with
+     * [supportsAttestedKeyGeneration] implements it.
+     */
+    suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String =
+        throw UnsupportedOperationException("This signer cannot generate challenge-attested keys")
 
     /**
      * Export the public key in JWK format (JSON-encoded bytes).
@@ -104,6 +124,21 @@ interface Signer {
      * to accept keys back.
      */
     suspend fun importPrivateKeypairs(keypairs: List<ExportedPrivateKeypair>) {}
+
+    /**
+     * Erase every LOCAL private key this signer directly holds (in-process
+     * key material only), for when the account that owns them is deleted.
+     *
+     * This is never a remote or hardware operation: a hardware-backed key
+     * (FIDO2 security key) or a remote-HSM-backed one (R2PS) cannot be, and
+     * is not, erased by this - only the signer's own in-process software key
+     * material is. It is also distinct from a lifecycle's own deliberate
+     * remote-revoke/destroy path, which this never triggers.
+     *
+     * Default: no-op, since a signer with no in-process key material (a
+     * plain hardware/remote-backed one) has nothing local to erase.
+     */
+    suspend fun resetLocalKeys() {}
 }
 
 /**
@@ -147,7 +182,18 @@ data class SignerKeyInfo(
 data class AttestationChain(
     val certificates: List<ByteArray>,
     val clientDataHash: ByteArray,
-)
+    /**
+     * What [certificates] is: [FORMAT_FIDO2_PACKED] (one raw CBOR attestationObject, with [clientDataHash]) or
+     * [FORMAT_ANDROID_KEY] (an X.509 chain, DER, LEAF FIRST, as the Android Keystore returns it; [clientDataHash] is empty
+     * because the attestation challenge is carried inside the leaf).
+     */
+    val format: String = FORMAT_FIDO2_PACKED,
+) {
+    companion object {
+        const val FORMAT_FIDO2_PACKED = "fido2-packed"
+        const val FORMAT_ANDROID_KEY = "android-key"
+    }
+}
 
 /**
  * Extended key metadata including plugin association and creation timestamp.

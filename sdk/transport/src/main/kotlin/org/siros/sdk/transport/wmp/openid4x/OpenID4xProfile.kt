@@ -298,13 +298,6 @@ data class SignSubFlowParams(
     @SerialName("dpop_nonce") val dpopNonce: String? = null,
     val ath: String? = null,
     @SerialName("key_id") val keyId: String? = null,
-    /**
-     * Holder commitments the issuer asked for (`["psc"]`), with the
-     * [credentialType] and the exact [credentialIssuer] identifier string
-     * (issuer metadata `credential_issuer`, verbatim) the wallet derives them
-     * for. The wallet puts the claim `org.siros.psc` into the `jwt` proof.
-     */
-    @SerialName("holder_commitments") val holderCommitments: List<String>? = null,
     @SerialName("credential_type") val credentialType: String? = null,
     @SerialName("credential_issuer") val credentialIssuer: String? = null,
     /** Same members, same meaning as the legacy transport's [org.siros.sdk.transport.engine.SignRequestParams]. */
@@ -316,6 +309,8 @@ data class SignSubFlowParams(
     val state: String? = null,
     /** See [org.siros.sdk.transport.engine.SignRequestParams.verifiedRequest]. */
     @SerialName("verified_request") val verifiedRequest: org.siros.sdk.transport.VerifiedRequest? = null,
+    /** Credential Auxiliary Data v0.1: the advertised `to_issuer` entries verbatim (same meaning as the legacy transport's). Appended last. */
+    @SerialName("auxiliary_data_to_issuer") val auxiliaryDataToIssuer: List<kotlinx.serialization.json.JsonObject>? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -859,8 +854,13 @@ class OpenID4xProfile(
     internal fun matchResultJson(result: MatchResult): JsonObject {
         val ctx = peer ?: throw IllegalStateException("profile is not attached to a peer")
         return buildJsonObject {
-            put("matches", ctx.codec.json.encodeToJsonElement(ListSerializer(CredentialMatch.serializer()), result.matches))
-            result.noMatchReason?.let { put("no_match_reason", JsonPrimitive(it)) }
+            // Only the query ids, and a reason CODE: the engine learns nothing about the wallet's credentials.
+            put("matches", ctx.codec.json.encodeToJsonElement(
+                ListSerializer(org.siros.sdk.transport.engine.MatchRef.serializer()),
+                result.matches.map { org.siros.sdk.transport.engine.MatchRef(it.credentialQueryId) },
+            ))
+            org.siros.sdk.transport.engine.NoMatchCodes.wire(result.noMatchReason)
+                ?.let { put("no_match_reason", JsonPrimitive(it)) }
         }
     }
 
@@ -883,10 +883,7 @@ class OpenID4xProfile(
         return WmpMethods.FLOW_ACTION to ctx.codec.encodeParams(
             FlowActionParams(
                 wmp = WmpMeta(), flowId = flowId, action = OID4Action.CREDENTIALS_MATCHED,
-                params = buildJsonObject {
-                    put("matches", ctx.codec.json.encodeToJsonElement(ListSerializer(CredentialMatch.serializer()), result.matches))
-                    result.noMatchReason?.let { put("no_match_reason", JsonPrimitive(it)) }
-                },
+                params = matchResultJson(result),
             ),
         )
     }

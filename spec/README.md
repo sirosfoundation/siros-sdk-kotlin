@@ -1,5 +1,8 @@
 # Bridge capability vocabulary
 
+[`mdoc-verifier.md`](mdoc-verifier.md) is the cross-platform behavioral contract for the standalone verifier and mirrors `siros-sdk-swift/spec/mdoc-verifier.md`; update both copies together.
+
+
 `bridge-capabilities.json` is the single source of truth for the capability
 descriptor a SIROS web-view wrapper app advertises to the page it hosts. It is
 the SDK's half of the native capability bridge: the wrapper (Kotlin or Swift)

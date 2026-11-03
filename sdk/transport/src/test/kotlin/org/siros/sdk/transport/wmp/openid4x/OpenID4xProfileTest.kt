@@ -453,30 +453,56 @@ class OpenID4xProfileTest {
         assertEquals("f2", capturedFlowId)
         assertNotNull(capturedPayload!!["dcql_query"])
         val result = ctx.completedResult("sub-2")
-        // The engine's MatchResponseMessage: `matches` with credential_id / credential_query_id.
+        // The engine's MatchResponseMessage contains only the query id, never wallet-local credential details.
         val match = result["matches"]!!.jsonArray.single().jsonObject
-        assertEquals(JsonPrimitive("cred-1"), match["credential_id"])
+        assertEquals(setOf("credential_query_id"), match.keys)
         assertEquals(JsonPrimitive("q1"), match["credential_query_id"])
         assertTrue(ctx.notifications.none { it.first == WmpMethods.FLOW_ACTION })
     }
 
     @Test
+    fun theMatchResultCarriesOnlyQueryIds_andAFreeTextReasonBecomesUnspecified() = runBlocking {
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onMatchRequest = { _, _ ->
+                    MatchResult(
+                        matches = listOf(CredentialMatch(
+                            credentialId = "4711",
+                            credentialQueryId = "pid_1_8",
+                            disclosedClaims = listOf("given_name"),
+                        )),
+                        noMatchReason = "free text with the requested types and 3 credentials stored",
+                    )
+                },
+            ),
+        )
+
+        profile.startFlow(matchStart(subFlowId = "sub-min", parent = "f-min"))
+
+        val result = ctx.completedResult("sub-min")
+        val match = result["matches"]!!.jsonArray.single().jsonObject
+        assertEquals("only the query id", setOf("credential_query_id"), match.keys)
+        assertEquals(JsonPrimitive("pid_1_8"), match["credential_query_id"])
+        assertEquals(JsonPrimitive("unspecified"), result["no_match_reason"])
+    }
+
+    @Test
     fun emptyMatchSetIsAlsoReportedAsCredentialsMatchedWithItsReason() = runBlocking {
-        val reason = "This wallet holds no credential matching the request"
+        val reason = org.siros.sdk.transport.engine.NoMatchCodes.NO_MATCHING_CREDENTIAL
         val (profile, ctx) = attached(
             OpenID4xConfig(onMatchRequest = { _, _ -> MatchResult(matches = emptyList(), noMatchReason = reason) }),
         )
 
         profile.startFlow(matchStart(subFlowId = "sub-2", parent = "f-nomatch"))
 
-        assertEquals(JsonPrimitive(reason), ctx.completedResult("sub-2")["no_match_reason"])
+        assertEquals(JsonPrimitive("no_matching_credential"), ctx.completedResult("sub-2")["no_match_reason"])
         // credentials_matched is an action on the PARENT flow; go-wmp's FlowActionParams carries its members under
         // `params` (methods.go:184-189), which is where the engine takes its payload from (wmphandler.go FlowAction).
         val action = ctx.sent(WmpMethods.FLOW_ACTION).single()
         assertEquals(JsonPrimitive(OID4Action.CREDENTIALS_MATCHED), action["action"])
         assertEquals(JsonPrimitive("f-nomatch"), action["flow_id"])
         val members = action["params"]!!.jsonObject
-        assertEquals(JsonPrimitive(reason), members["no_match_reason"])
+        assertEquals(JsonPrimitive("no_matching_credential"), members["no_match_reason"])
         assertEquals(0, members["matches"]!!.jsonArray.size)
         assertNull("members are not flat next to `action`", action["no_match_reason"])
     }

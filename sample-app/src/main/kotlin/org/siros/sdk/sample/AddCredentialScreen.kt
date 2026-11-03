@@ -10,8 +10,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Contactless
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.ui.layout.ContentScale
@@ -28,6 +30,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.layout.Arrangement
@@ -62,23 +65,49 @@ import androidx.compose.ui.unit.dp
 import org.siros.sdk.credentials.CredentialOffer
 
 /**
- * Credential picker list — shows available credentials from all issuers.
+ * Add-credential entry point — a top-level 3-way chooser (requested live
+ * during gdc e2e testing, replacing a single flat list that mixed the IDV
+ * path and every issuer's offers into one undifferentiated scroll):
  *
- * Modeled after the wallet-frontend's AddCredentials page:
- * each row shows the credential name, issuer badge, and format.
+ * 1. [ScanPhysicalIDCard] - the existing IDV/physical-document flow, shown
+ *    whenever [onStartIDV] is non-null. Tapping it is unchanged: it drives
+ *    straight into the real, top-level IDV preparation screen
+ *    ([WalletViewModel.openIDVPreparation]/[IDVPreparationScreen]) exactly
+ *    as before, stacked over this screen rather than living inside it.
+ * 2. "Scan QR code" - [onScanQr], routed by the caller to the same
+ *    QR-scanning entry point ([WalletViewModel.openActivate]/
+ *    [ActivateScreen]) Home uses, stacked over this screen the same way as
+ *    IDV above.
+ * 3. "All known credentials" - the old flat offer list, now reached by
+ *    tapping through rather than shown inline by default. This one stays
+ *    local to this composable (see [showAllCredentials] below) since it's
+ *    not a separate top-level destination, just a sub-view of Add
+ *    Credential itself.
+ *
+ * Modeled after the wallet-frontend's AddCredentials page for the list
+ * itself: each row shows the credential name, issuer badge, and format.
  */
 @Composable
 fun AddCredentialScreen(
     offers: List<CredentialOffer>,
     isLoading: Boolean,
+    isRefreshing: Boolean = false,
     onOfferSelected: (CredentialOffer) -> Unit,
     pendingOffer: CredentialOffer? = null,
     onConfirmIssuance: () -> Unit = {},
     onCancelIssuance: () -> Unit = {},
     onStartIDV: (() -> Unit)? = null,
+    onScanQr: () -> Unit = {},
     onRetry: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // Which of the chooser's 3 options is showing: false is the top-level
+    // chooser itself (options 1 and 2 route straight out to their own
+    // top-level screens and never flip this), true is the "All known
+    // credentials" sub-view (option 3). rememberSaveable so a config change
+    // (rotation) while browsing the sub-list doesn't silently bounce the
+    // user back to the chooser.
+    var showAllCredentials by rememberSaveable { mutableStateOf(false) }
     // Long-press detail modal — lets the user inspect an offer's full
     // description/format before committing to the issuance-consent dialog
     // below, without the row's own tap target already starting that flow.
@@ -168,7 +197,172 @@ fun AddCredentialScreen(
         )
     }
 
+    if (showAllCredentials) {
+        AllKnownCredentialsList(
+            offers = offers,
+            isLoading = isLoading,
+            isRefreshing = isRefreshing,
+            onOfferSelected = onOfferSelected,
+            onOfferLongClick = { detailOffer = it },
+            onRetry = onRetry,
+            onBack = { showAllCredentials = false },
+            modifier = modifier,
+        )
+    } else {
+        AddCredentialChooser(
+            onStartIDV = onStartIDV,
+            onScanQr = onScanQr,
+            onShowAllCredentials = { showAllCredentials = true },
+            modifier = modifier,
+        )
+    }
+}
+
+/**
+ * Top-level 3-way chooser: "Scan passport" (when IDV is configured for this
+ * tenant), "Scan QR code", and "All known credentials". Unlike the old flat
+ * list, none of these three rows depends on `offers` having loaded or being
+ * non-empty - in particular, [ScanPhysicalIDCard] is conditioned solely on
+ * [onStartIDV] being non-null, never on `offers`, which is what keeps task
+ * #275's fix intact: a tenant whose only catalog offer is the plain
+ * "siros_id" one (filtered out by `openAddCredential` precisely because this
+ * IDV row is the one, unified path to that same credential) still always
+ * sees this row regardless of how many offers remain afterward.
+ */
+@Composable
+private fun AddCredentialChooser(
+    onStartIDV: (() -> Unit)?,
+    onScanQr: () -> Unit,
+    onShowAllCredentials: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // A plain Column, not a LazyColumn, since it's always exactly 3 rows -
+    // but still wrapped in verticalScroll rather than left to clip: at large
+    // accessibility font scales, or in a short landscape/split-screen
+    // viewport, 3 rows (each with a title + subtitle) can exceed the space
+    // below the TopAppBar even though 3 fixed items would never need
+    // lazy/windowed layout otherwise.
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+    ) {
+        if (onStartIDV != null) {
+            ScanPhysicalIDCard(onClick = onStartIDV)
+            HorizontalDivider()
+        }
+        AddCredentialOptionRow(
+            icon = Icons.Filled.QrCodeScanner,
+            title = stringResource(R.string.add_credential_option_scan_qr_title),
+            subtitle = stringResource(R.string.add_credential_option_scan_qr_subtitle),
+            onClick = onScanQr,
+        )
+        HorizontalDivider()
+        AddCredentialOptionRow(
+            icon = Icons.AutoMirrored.Filled.List,
+            title = stringResource(R.string.add_credential_option_all_title),
+            subtitle = stringResource(R.string.add_credential_option_all_subtitle),
+            onClick = onShowAllCredentials,
+        )
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun AddCredentialOptionRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * Option 3's sub-view: the full flat catalog of issuer offers, exactly as it
+ * rendered before this redesign (same loading/empty/list states), just
+ * reached by tapping through from [AddCredentialChooser] instead of showing
+ * inline by default. [ScanPhysicalIDCard] is deliberately NOT part of this
+ * view any more - it's a top-level chooser option now (see
+ * [AddCredentialScreen]'s doc comment), so the old
+ * "offers.isEmpty() && onStartIDV == null" combined empty-check no longer
+ * applies here: this view's own empty state only ever depends on `offers`.
+ */
+@Composable
+private fun AllKnownCredentialsList(
+    offers: List<CredentialOffer>,
+    isLoading: Boolean,
+    isRefreshing: Boolean = false,
+    onOfferSelected: (CredentialOffer) -> Unit,
+    onOfferLongClick: (CredentialOffer) -> Unit,
+    onRetry: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.add_credential_all_back),
+                )
+            }
+            Text(
+                text = stringResource(R.string.add_credential_option_all_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        HorizontalDivider()
+
+        // The list shown is the SDK's cached catalog; this only says that it is being refreshed in the background.
+        if (isRefreshing && !isLoading) {
+            androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
         if (isLoading) {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -180,14 +374,7 @@ fun AddCredentialScreen(
                     Text(stringResource(R.string.add_credential_loading))
                 }
             }
-        } else if (offers.isEmpty() && onStartIDV == null) {
-            // Truly nothing to show - no generic offers AND no IDV path
-            // either. Must NOT be reached just because `offers` is empty on
-            // its own (real bug this replaced: openAddCredential filters out
-            // the plain siros_id offer - see task #275 - so a tenant whose
-            // ONLY offer is SIROS ID hit this branch and lost the one path
-            // meant to actually issue it, since ScanPhysicalIDCard below was
-            // previously only reachable when offers was non-empty).
+        } else if (offers.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -209,41 +396,13 @@ fun AddCredentialScreen(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                // Scan Physical ID card (when IDV is available) - always
-                // shown here regardless of whether `offers` is empty, so
-                // it's never hidden behind the empty-state branch above.
-                if (onStartIDV != null) {
-                    item {
-                        ScanPhysicalIDCard(onClick = onStartIDV)
-                        HorizontalDivider(thickness = 2.dp)
-                    }
-                }
-                if (offers.isEmpty()) {
-                    item {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(32.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Text(
-                                text = stringResource(R.string.add_credential_empty),
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Button(onClick = onRetry) {
-                                Text(stringResource(R.string.add_credential_retry))
-                            }
-                        }
-                    }
-                } else {
-                    items(offers) { offer ->
-                        CredentialOfferRow(
-                            offer = offer,
-                            onClick = { onOfferSelected(offer) },
-                            onLongClick = { detailOffer = offer },
-                        )
-                        HorizontalDivider()
-                    }
+                items(offers) { offer ->
+                    CredentialOfferRow(
+                        offer = offer,
+                        onClick = { onOfferSelected(offer) },
+                        onLongClick = { onOfferLongClick(offer) },
+                    )
+                    HorizontalDivider()
                 }
             }
         }
@@ -286,56 +445,15 @@ private fun CredentialOfferRow(
                     .background(bgColor),
                 contentAlignment = Alignment.Center,
             ) {
-                val initial = @Composable {
-                    Text(
-                        text = offer.credentialName.take(1).uppercase(),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = fgColor,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-                if (offer.logoUri != null) {
-                    val logo = rememberNormalizedLogoModel(offer.logoUri!!)
-                    // Full-bleed raster background (if any) drawn underneath the
-                    // (now `<image>`-free) SVG - see NormalizedLogo's doc comment;
-                    // without this, an offer whose logo SVG has an embedded
-                    // full-card raster <image> mis-renders via AndroidSVG with a
-                    // dark band roughly 30% down (the same bug already fixed for
-                    // full-size stored-credential cards).
-                    logo.backgroundImageBytes?.let { backgroundBytes ->
-                        coil.compose.AsyncImage(
-                            model = backgroundBytes,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                        )
-                    }
-                    // SubcomposeAsyncImage, not AsyncImage: a plain AsyncImage
-                    // renders nothing at all while loading or on a failed fetch
-                    // (a real issue found via live device testing - offers whose
-                    // logo URI didn't resolve showed a blank square instead of
-                    // ever falling back to the initial-letter placeholder).
-                    coil.compose.SubcomposeAsyncImage(
-                        model = logo.model,
-                        contentDescription = offer.credentialName,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    ) {
-                        if (painter.state is coil.compose.AsyncImagePainter.State.Success) {
-                            SubcomposeAsyncImageContent()
-                        } else {
-                            // SubcomposeAsyncImage's content slot doesn't inherit the
-                            // outer Box's contentAlignment - without this, the
-                            // fallback letter rendered top-left instead of centered
-                            // (confirmed via live device screenshot).
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                initial()
-                            }
-                        }
-                    }
-                } else {
-                    initial()
-                }
+                IssuerLogo(
+                    uri = offer.logoUri,
+                    initial = offer.credentialName,
+                    contentDescription = offer.credentialName,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    initialColor = fgColor,
+                    initialStyle = MaterialTheme.typography.titleMedium,
+                )
             }
             Spacer(modifier = Modifier.height(4.dp))
             CapabilityIconRow(capabilityFlagsFor(offer.format))

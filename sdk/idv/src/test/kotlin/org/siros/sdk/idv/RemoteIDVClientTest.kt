@@ -68,6 +68,27 @@ class RemoteIDVClientTest {
     }
 
     @Test
+    fun `chip_photo_mismatch has a typed exception`() {
+        val e = idvExceptionFor422("chip_photo_mismatch", "the face does not match the chip photo", "{}", fallback)
+        assertTrue(e is IDVException.ChipPhotoMismatch)
+        assertEquals("idv_chip_photo_mismatch", e.errorCode)
+        assertEquals("the face does not match the chip photo", e.message)
+    }
+
+    @Test
+    fun `chip_data_unverified has a typed exception`() {
+        val e = idvExceptionFor422(
+            "chip_data_unverified",
+            "no verified chip identity",
+            "{}",
+            fallback,
+        )
+        assertTrue(e is IDVException.ChipDataUnverified)
+        assertEquals("idv_chip_data_unverified", e.errorCode)
+        assertEquals("no verified chip identity", e.message)
+    }
+
+    @Test
     fun `codes without a typed exception have no mapping`() {
         for (code in listOf("match_failed", "policy_rejected", "document_unreadable", "liveness_failed", "issuance_failed", "internal_error", "new_code")) {
             assertEquals(code, null, idvExceptionForCode(code, "m"))
@@ -95,7 +116,13 @@ class RemoteIDVClientTest {
     fun startServer() {
         server = MockWebServer().apply { start() }
         client = RemoteIDVClient(
-            RemoteIDVClient.Config(serverUrl = server.url("/").toString(), authToken = "Bearer test"),
+            RemoteIDVClient.Config(
+                serverUrl = server.url("/").toString(),
+                authToken = "Bearer test",
+                sessionTokenPath = "/v1/session-token",
+                livenessPath = "/v1/liveness",
+                idScanPath = "/v1/id-scan",
+            ),
         )
     }
 
@@ -148,6 +175,8 @@ class RemoteIDVClientTest {
             "chip_untrusted" to "idv_chip_untrusted",
             "document_expired" to "idv_document_expired",
             "session_expired" to "idv_session_expired",
+            "chip_photo_mismatch" to "idv_chip_photo_mismatch",
+            "chip_data_unverified" to "idv_chip_data_unverified",
         )
         for ((code, errorCode) in cases) {
             val e = thrownBy(422, """{"error":"refused: $code","error_code":"$code"}""") {

@@ -61,12 +61,64 @@ class LocalAuthProvider(
      */
     fun rollbackLastRegistration() {
         val credId = lastCredentialId ?: return
-        val alias = keyAlias(credId)
-        credStore.delete(b64url(credId))
+        forgetCredential(credId)
+    }
+
+    /**
+     * Remove a specific registered credential from local storage, by id.
+     *
+     * Unlike [rollbackLastRegistration], this never reads [lastCredentialId]
+     * to decide what to delete: that field is shared, mutable state that any
+     * concurrent register/authenticate call on this same provider can
+     * overwrite, so "the last registration" may by now be a DIFFERENT
+     * ceremony's credential than the one the caller is trying to undo (e.g.
+     * addPasskey for account A failed after account B has since logged in on
+     * the same provider instance). This always targets exactly
+     * [credentialId], and only clears the "last" cache fields if they still
+     * point at it - never wiping out a different, more recent ceremony's
+     * state.
+     */
+    fun forgetCredential(credentialId: ByteArray) {
+        val alias = keyAlias(credentialId)
+        credStore.delete(b64url(credentialId))
         try { keyStore.deleteEntry(alias) } catch (_: Exception) {}
+        if (lastCredentialId?.contentEquals(credentialId) == true) {
+            lastCredentialId = null
+            lastPrfOutput = null
+        }
+        Timber.i("LocalAuthProvider: forgot credential ${b64url(credentialId)}")
+    }
+
+    /**
+     * Delete every passkey this provider holds: its Keystore keys and the
+     * metadata that maps to them. Used when the account they belong to is
+     * deleted, since nothing can use them afterwards.
+     *
+     * Every alias is attempted even if one fails. An entry whose Keystore
+     * deletion fails keeps its metadata so a later call can retry it, rather
+     * than being wiped from the store with its key still present; the
+     * aggregated failure is thrown so the caller's wipe step is reported as
+     * incomplete instead of falsely complete.
+     */
+    fun deleteAllCredentials() {
+        val failures = mutableListOf<Pair<String, Exception>>()
+        credStore.getAll().forEach { entry ->
+            try {
+                keyStore.deleteEntry(entry.keyAlias)
+                credStore.delete(entry.credentialId)
+            } catch (e: Exception) {
+                failures += entry.keyAlias to e
+            }
+        }
         lastCredentialId = null
         lastPrfOutput = null
-        Timber.i("LocalAuthProvider: rolled back last registration")
+        if (failures.isNotEmpty()) {
+            throw IllegalStateException(
+                "Failed to delete ${failures.size} local passkey Keystore alias(es): " +
+                    failures.joinToString { it.first },
+                failures.first().second,
+            )
+        }
     }
 
     override suspend fun register(options: RegisterOptions): RegisterResult {

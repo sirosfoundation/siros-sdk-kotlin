@@ -422,6 +422,20 @@ object CredentialMatcher {
     /**
      * Parse the `credential_sets` array from a DCQL query (OID4VP §6.2).
      *
+     * Each option is ALWAYS an array of credential query ids per the spec, even a single-element
+     * one (`[["mdl"], ["pid_1_8"]]`, never `["mdl", "pid_1_8"]`) - but a one-element option has
+     * been seen, live, relayed as a bare string instead of a one-element array (gdc e2e, nym_auth:
+     * a required credential_sets entry of five single-credential alternatives,
+     * `"options": ["mdl", "photoid", "pid_1_5", "pid_1_8", "pid_mdoc_id"]` rather than
+     * `[["mdl"], ["photoid"], ...]`). Reading only `JsonArray` for an option silently dropped every
+     * one of them - `options.isEmpty()` below then dropped the WHOLE credential_sets entry, which
+     * is exactly the failure [org.siros.sdk.wallet.PresentationRequest.exclusiveChoiceGroups] exists
+     * to prevent: with `credentialSets` null, `satisfiableOptions` is never populated and a consent
+     * UI has nothing to group its alternatives on, falling straight back into the pre-#353 "every
+     * matching alternative is a free-standing, independently checkable step" union bug for exactly
+     * the request this was supposed to catch. A bare string is accepted as a one-element option;
+     * anything else (a number, an object, `null`) is still dropped, as before.
+     *
      * @return Parsed credential set queries, or null if `credential_sets` is absent
      */
     fun parseCredentialSets(dcqlQuery: JsonObject): List<CredentialSetQuery>? {
@@ -431,8 +445,13 @@ object CredentialMatcher {
         return setsArray.mapNotNull { element ->
             val obj = element as? JsonObject ?: return@mapNotNull null
             val options = (obj["options"] as? JsonArray)?.mapNotNull { optElement ->
-                (optElement as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }
-                    ?.takeIf { it.isNotEmpty() }
+                when {
+                    optElement is JsonArray -> optElement.mapNotNull { it.jsonPrimitive.contentOrNull }.takeIf { it.isNotEmpty() }
+                    // `isString` excludes JsonNull (also a JsonPrimitive) and a bare number/boolean -
+                    // only an actual string is a plausible one-element option.
+                    optElement is JsonPrimitive && optElement.isString -> optElement.contentOrNull?.let { listOf(it) }
+                    else -> null
+                }
             } ?: return@mapNotNull null
             if (options.isEmpty()) return@mapNotNull null
 

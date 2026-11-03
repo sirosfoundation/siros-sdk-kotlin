@@ -714,6 +714,17 @@ class JweKeystore(
         keys[kid] = ECKey.Builder(ECKey.parse(jwk)).keyID(kid).build()
     }
 
+    /**
+     * Forget a keypair previously folded in by [importKeypairJwk] (or generated here), so it is gone from the next
+     * [exportEncryptedContainer] and the next [exportKeypairJwks] - see [WscdKeystoreAdapter.deleteKey]'s doc comment:
+     * without this, a key an exportable WSCD signer reports deleted stays in this keystore's own `S.keypairs` forever
+     * and `unlock()` imports it straight back into that signer, resurrecting a key its own plugin says is gone.
+     */
+    suspend fun removeKeypair(kid: String) = mutex.withLock {
+        keys.remove(kid)
+        Unit
+    }
+
     override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String): ByteArray = mutex.withLock {
         requireUnlocked()
         val key = keys[keyId] ?: throw KeystoreException("Key not found: $keyId")
@@ -741,8 +752,18 @@ class JweKeystore(
         freshKey: Boolean,
         holderBinding: HolderBinding?,
         extraClaims: Map<String, String>,
+    ): String = generateProofWithJsonClaims(audience, nonce, freshKey, holderBinding, extraClaims.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) })
+
+    override suspend fun generateProofWithJsonClaims(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+        extraJsonClaims: Map<String, kotlinx.serialization.json.JsonElement>,
     ): String = mutex.withLock {
         requireUnlocked()
+        // Converted (and refused) BEFORE any key is registered: a rejected request must not leave a key behind.
+        val converted = ProofClaims.toJava(extraJsonClaims)
         // `freshKey` means batch issuance: each credential in the batch must
         // be bound to its own key, or every copy shares one holder key and
         // presenting them is linkable. Honouring it also keeps the recorded
@@ -795,7 +816,7 @@ class JweKeystore(
             .issueTime(Date())
             .claim("nonce", nonce)
         did?.let { claimsBuilder.issuer(it) }
-        extraClaims.forEach { (k, v) -> claimsBuilder.claim(k, v) }
+        converted.forEach { (k, v) -> claimsBuilder.claim(k, v) }
         val claims = claimsBuilder.build()
 
         val headerBuilder = JWSHeader.Builder(JWSAlgorithm.ES256)
@@ -1022,6 +1043,44 @@ class JweKeystore(
     }
 
     override suspend fun exportEncryptedContainer(): ByteArray = mutex.withLock {
+        exportContainerLocked(extraPrfKey = null)
+    }
+
+    override suspend fun preparePrfKey(
+        credentialId: ByteArray,
+        prfOutput: ByteArray,
+        prfSalt: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ): PreparedPrfKey = mutex.withLock {
+        requireUnlocked()
+        val meta = containerMetadata ?: throw KeystoreException("No container metadata")
+        val mainKeyInfo = meta.mainKey ?: throw KeystoreException("Container missing mainKey")
+        val prfKey = EncryptedContainer.derivePrfKey(prfOutput, hkdfSalt, hkdfInfo)
+        val encapsulation = EncryptedContainer.wrapMainKey(prfKey, mainKey!!, mainKeyInfo)
+        val entry = PrfKeyInfo(
+            credentialId = credentialId,
+            transports = null,
+            prfSalt = prfSalt,
+            hkdfSalt = hkdfSalt,
+            hkdfInfo = hkdfInfo,
+            algorithm = AesGcmKeyAlgorithm("AES-GCM", 256),
+            keypair = encapsulation.keypair,
+            unwrapKey = encapsulation.unwrapKey,
+        )
+        PreparedPrfKey(exportContainerLocked(extraPrfKey = entry), entry)
+    }
+
+    override suspend fun commitPrfKey(prepared: PreparedPrfKey) = mutex.withLock {
+        requireUnlocked()
+        val meta = containerMetadata ?: throw KeystoreException("No container metadata")
+        if (meta.prfKeys.none { it.credentialId.contentEquals(prepared.entry.credentialId) }) {
+            containerMetadata = meta.copy(prfKeys = meta.prfKeys + prepared.entry)
+        }
+    }
+
+    /** [exportEncryptedContainer]'s body; the caller holds [mutex]. [extraPrfKey] is serialized but not retained. */
+    private fun exportContainerLocked(extraPrfKey: PrfKeyInfo?): ByteArray {
         requireUnlocked()
         val currentMainKey = mainKey!!
 
@@ -1060,7 +1119,9 @@ class JweKeystore(
         val updatedContainer = meta.copy(jwe = jweString)
         containerMetadata = updatedContainer
 
-        EncryptedContainer.serialize(updatedContainer)
+        return EncryptedContainer.serialize(
+            if (extraPrfKey == null) updatedContainer else updatedContainer.copy(prfKeys = updatedContainer.prfKeys + extraPrfKey),
+        )
     }
 
     /**

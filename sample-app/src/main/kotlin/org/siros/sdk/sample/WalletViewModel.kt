@@ -54,6 +54,8 @@ import org.siros.sdk.keystore.UniFFISigner
 import org.siros.sdk.keystore.UsbCtap2Transport
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
+import org.siros.sdk.wallet.AddPasskeyResult
+import org.siros.sdk.wallet.DeleteAccountResult
 import org.siros.sdk.wallet.RememberScope
 import org.siros.sdk.wallet.RequestWscdChoice
 import org.siros.sdk.wallet.SirosWallet
@@ -105,6 +107,8 @@ data class PendingWscdChoice(
  */
 data class PendingPinEntry(
     val pluginId: String,
+    /** What the SDK is asking (enter / choose / confirm, and why again): the dialog only renders it. */
+    val request: org.siros.sdk.keystore.PinRequest = org.siros.sdk.keystore.PinRequest.Enter(pluginId),
     /** Call with the entered PIN to submit, or null to cancel. */
     val respond: (pin: String?) -> Unit,
 )
@@ -625,6 +629,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _isLoadingOffers = MutableStateFlow(false)
     val isLoadingOffers: StateFlow<Boolean> = _isLoadingOffers
 
+    /** The SDK is refreshing the issuer catalog in the background while a (cached) list is already shown: a subtle indicator only. */
+    private val _isRefreshingOffers = MutableStateFlow(false)
+    val isRefreshingOffers: StateFlow<Boolean> = _isRefreshingOffers
+    private var offersJob: kotlinx.coroutines.Job? = null
+
     private val _showAddCredential = MutableStateFlow(false)
     val showAddCredential: StateFlow<Boolean> = _showAddCredential
 
@@ -898,6 +907,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val fido2StateRestored: MutableSet<WscdManager> =
         java.util.Collections.newSetFromMap(java.util.IdentityHashMap<WscdManager, Boolean>())
 
+    // Declared BEFORE [wallet]: its initializer builds the WalletConfig, which fills this (buildWscdKeystore). Kotlin initializes properties
+    // in textual order, so a declaration below [wallet] is not yet initialized then (an NPE that buildWscdKeystore's catch turns into a
+    // dropped keystore).
+    /** The keystore adapter built for each plugin of the current [WalletConfig.availableKeystores]: the one an issuance with it signs through. */
+    private val wscdAdapterByPlugin = java.util.concurrent.ConcurrentHashMap<String, WscdManager>()
+
     // ── Wallet ──────────────────────────────────────────────────────
 
     private var wallet: SirosWallet = SirosWallet.create(
@@ -1122,6 +1137,22 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 openVerifierRedirect(redirectUri)
             }
 
+            override fun onAuxiliaryDataConflict(flowId: String, error: org.siros.sdk.wallet.AuxiliaryDataConflictException) {
+                showNonRetryableFlowError(flowId, activity.getString(error.userMessageRes), error.errorCode)
+            }
+
+            override fun onAuxiliaryDataRefused(flowId: String, error: org.siros.sdk.wallet.AuxiliaryDataRefusedException) {
+                showNonRetryableFlowError(flowId, activity.getString(error.userMessageRes), "${error.errorCode}:${error.reason.code}")
+            }
+
+            /** A refusal the same request would meet again: the SDK's localised sentence and NO Retry. Only the fixed code is logged. */
+            private fun showNonRetryableFlowError(flowId: String, message: String, code: String?) {
+                Log.e(TAG, "Flow $flowId refused by the issuer (non-retryable): $code")
+                if (pendingAuthFlowId == flowId) pendingAuthFlowId = null
+                receivedCredentialCount = 0
+                _flowErrorDialog.value = FlowErrorInfo(message, canRetry = false)
+            }
+
             override fun onCredentialReceived(credential: StoredCredential) {
                 receivedCredentialCount++
             }
@@ -1324,9 +1355,118 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _showIDVPreparation.value = false
     }
 
-    /** Delete the current account - also removes it from the cached "Welcome back" list. */
-    fun deleteAccount() {
-        wallet.deleteAccount()
+    private val _deletingAccount = MutableStateFlow(false)
+    val deletingAccount: StateFlow<Boolean> = _deletingAccount
+
+    /**
+     * Delete the account on the server and wipe this device. The SDK asks for
+     * the passkey assertion through the wallet's own provider and wipes only
+     * when the account is gone; this just reports each outcome.
+     */
+    fun deleteAccount(confirmation: String) {
+        viewModelScope.launch {
+            _deletingAccount.value = true
+            try {
+                when (val result = wallet.deleteAccount(confirmation)) {
+                    is DeleteAccountResult.Deleted -> {
+                        resetAccountScreens()
+                        _infoMessage.value = if (result.localWipe.complete) {
+                            activity.getString(R.string.delete_account_done)
+                        } else {
+                            activity.getString(R.string.delete_account_wipe_incomplete)
+                        }
+                    }
+                    is DeleteAccountResult.CleanupPending -> {
+                        resetAccountScreens()
+                        _infoMessage.value = if (result.localWipe.complete) {
+                            activity.getString(R.string.delete_account_cleanup_pending)
+                        } else {
+                            activity.getString(R.string.delete_account_wipe_incomplete)
+                        }
+                    }
+                    is DeleteAccountResult.OperatorRequired -> {
+                        resetAccountScreens()
+                        _errorMessage.value = if (result.localWipe.complete) {
+                            activity.getString(R.string.delete_account_operator_required)
+                        } else {
+                            activity.getString(R.string.delete_account_wipe_incomplete)
+                        }
+                    }
+                    is DeleteAccountResult.RetryNeeded ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_retry)
+                    is DeleteAccountResult.ConfirmationRequired ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_confirmation_required)
+                    is DeleteAccountResult.StepUpUnavailable ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_step_up_unavailable)
+                    is DeleteAccountResult.StepUpRequired,
+                    is DeleteAccountResult.StepUpFailed ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_step_up_failed)
+                    is DeleteAccountResult.StepUpExpired ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_step_up_expired)
+                    is DeleteAccountResult.SessionRevoked ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_session_revoked)
+                    is DeleteAccountResult.NoPasskey ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_no_passkey)
+                    is DeleteAccountResult.InsufficientScope ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_insufficient_scope)
+                    is DeleteAccountResult.NotFound ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_not_found)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "deleteAccount failed", e)
+                _errorMessage.value = localizedErrorMessage(e)
+            } finally {
+                _deletingAccount.value = false
+            }
+        }
+    }
+
+    private val _addingPasskey = MutableStateFlow(false)
+    val addingPasskey: StateFlow<Boolean> = _addingPasskey
+
+    /**
+     * Add a passkey to this account. The SDK asks an existing passkey to
+     * authorise it, creates the new one and syncs its PRF entry; this only
+     * reports the outcome.
+     */
+    fun addPasskey(nickname: String) {
+        viewModelScope.launch {
+            _addingPasskey.value = true
+            try {
+                when (val result = wallet.addPasskey(nickname)) {
+                    is AddPasskeyResult.Added -> _infoMessage.value = activity.getString(R.string.add_passkey_done)
+                    is AddPasskeyResult.AuthorizerUnavailable ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_authorizer_unavailable)
+                    is AddPasskeyResult.PasskeyCreationUnavailable ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_creation_unavailable)
+                    is AddPasskeyResult.AuthorizationRequired,
+                    is AddPasskeyResult.AuthorizationFailed ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_authorization_failed)
+                    is AddPasskeyResult.PrfUnsupported ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_prf_unsupported)
+                    is AddPasskeyResult.RetryNeeded ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_retry)
+                    is AddPasskeyResult.PrivateDataConflict ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_conflict)
+                    is AddPasskeyResult.RegistrationRejected ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_rejected)
+                    is AddPasskeyResult.WalletLocked ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_locked)
+                    is AddPasskeyResult.InsufficientScope ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_insufficient_scope)
+                    is AddPasskeyResult.SessionRevoked ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_session_revoked)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "addPasskey failed", e)
+                _errorMessage.value = localizedErrorMessage(e)
+            } finally {
+                _addingPasskey.value = false
+            }
+        }
+    }
+
+    private fun resetAccountScreens() {
         _showAddCredential.value = false
         _availableCredentials.value = emptyList()
         _showDevices.value = false
@@ -1352,25 +1492,55 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         wallet.renamePasskey(credentialId, nickname)
     }
 
-    /** Open the add-credential screen — fetches available offers from issuers. */
+    /**
+     * Open the add-credential screen. The SDK keeps a stale-while-revalidate catalog of the issuers' offers: a cached list is shown at
+     * once (also after a cold start) and replaced when the background refresh finishes; only a first-ever load shows the spinner.
+     */
     fun openAddCredential() {
         _showAddCredential.value = true
-        _isLoadingOffers.value = true
-        viewModelScope.launch {
+        // Filter out the plain "siros_id" offer: the "Scan Physical ID card" row above the list (onStartIDV/startIDV()) is the one,
+        // unified path to a SIROS ID credential - it drives real FaceTec identity verification before issuance. Leaving the
+        // no-questions-asked issuer offer alongside it would give the user two competing, confusing routes to the same credential,
+        // one of which silently skips verification.
+        fun shown(offers: List<CredentialOffer>) = offers.filterNot { it.credentialConfigurationId == SIROS_ID_CREDENTIAL_CONFIGURATION_ID }
+        val cached = shown(wallet.availableCredentials.value.offers)
+        if (cached.isNotEmpty()) _availableCredentials.value = cached
+        _isLoadingOffers.value = cached.isEmpty()
+        offersJob?.cancel()
+        offersJob = viewModelScope.launch {
+            // Updates (the refresh finishing) reach the list while the screen is open.
+            launch {
+                wallet.availableCredentials.collect { catalog ->
+                    _isRefreshingOffers.value = catalog.refreshing
+                    // An empty list is a legitimate result too (the last issuer or configuration was removed); a failed refresh
+                    // keeps the stale offers in the SDK, so it never arrives here as an empty list.
+                    if (catalog.fetchedAtMillis > 0L) _availableCredentials.value = shown(catalog.offers)
+                }
+            }
             try {
-                // Filter out the plain "siros_id" offer: the "Scan Physical ID
-                // card" row above the list (onStartIDV/startIDV()) is the one,
-                // unified path to a SIROS ID credential - it drives real
-                // FaceTec identity verification before issuance. Leaving the
-                // no-questions-asked issuer offer alongside it would give the
-                // user two competing, confusing routes to the same
-                // credential, one of which silently skips verification.
-                _availableCredentials.value = wallet.getAvailableCredentials()
-                    .filterNot { it.credentialConfigurationId == SIROS_ID_CREDENTIAL_CONFIGURATION_ID }
+                _availableCredentials.value = shown(wallet.getAvailableCredentials())
                 android.util.Log.d("SIROS_VM", "Available credentials: ${_availableCredentials.value.size}")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 android.util.Log.e("SIROS_VM", "getAvailableCredentials failed", e)
-                _availableCredentials.value = emptyList()
+                if (_availableCredentials.value.isEmpty()) _errorMessage.value = e.message ?: "Failed to load available credentials"
+            } finally {
+                _isLoadingOffers.value = false
+            }
+        }
+    }
+
+    /** Retry from the empty/error state of the add-credential screen: an explicit refresh, not a cache read. */
+    fun retryAvailableCredentials() {
+        _isLoadingOffers.value = _availableCredentials.value.isEmpty()
+        viewModelScope.launch {
+            try {
+                wallet.refreshAvailableCredentials()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("SIROS_VM", "refreshAvailableCredentials failed", e)
                 _errorMessage.value = e.message ?: "Failed to load available credentials"
             } finally {
                 _isLoadingOffers.value = false
@@ -1381,6 +1551,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /** Close the add-credential screen. */
     fun closeAddCredential() {
         _showAddCredential.value = false
+        offersJob?.cancel()
+        offersJob = null
+        _isRefreshingOffers.value = false
     }
 
     /** User picked a credential to issue. */
@@ -1597,6 +1770,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _fido2AwaitingPresentation = MutableStateFlow(false)
     val fido2AwaitingPresentation: StateFlow<Boolean> = _fido2AwaitingPresentation
 
+    /**
+     * Enrolment's FIRST tap is discovering the key (the SDK's `describe`, no PIN yet): `fido2AwaitingPresentation` only
+     * turns on from `onSecondTap`, so without this the user who just accepted an auto-enroll offer sees nothing at all
+     * until either a PIN dialog or (for a key without one) the ceremony's own activity - discovery can silently time
+     * out with no indication the wallet is waiting for anything. Cleared on the first PIN prompt (tap 1 resolved) or,
+     * for a key without PIN support, when the ceremony itself starts; always cleared in `enrollWscd`'s `finally`.
+     */
+    private val _fido2EnrolmentDiscovering = MutableStateFlow(false)
+    val fido2EnrolmentDiscovering: StateFlow<Boolean> = _fido2EnrolmentDiscovering
+
     /** The currently in-flight enroll/rotate coroutine, if any - lets [cancelWscdLifecycleOp] abort it. */
     private var wscdLifecycleJob: kotlinx.coroutines.Job? = null
 
@@ -1605,7 +1788,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * user backing out of [Fido2PresentKeyGuide] instead of presenting the
      * key. Cancelling the job still runs its `finally` block (resetting
      * [wscdLifecycleBusy]/[fido2AwaitingPresentation] and clearing
-     * [prefetchedFido2Pin]), so this can't leave the screen stuck the way an
+     * [typedAheadPin]), so this can't leave the screen stuck the way an
      * unbounded hang used to.
      */
     fun cancelWscdLifecycleOp() {
@@ -1831,40 +2014,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * Identity binding is handled separately via OID4VCI credential issuance
      * (deferred flow + key attestation), not at this layer.
      */
+    /** The FIDO2 enrolment in progress: its collected PIN answers the ceremony's PIN prompts (see [requestFido2Pin]). */
+    @Volatile
+    private var fido2Enrolment: org.siros.sdk.keystore.Fido2EnrolmentSession? = null
+
     fun enrollWscd() {
         if (_wscdLifecycleBusy.value) return
         _wscdLifecycleBusy.value = true
         _enrollmentInProgress.value = true
         wscdLifecycleJob = viewModelScope.launch {
             try {
-                // Collect the FIDO2 PIN BEFORE touching the transport at all
-                // - see _fido2AwaitingPresentation's doc comment for why
-                // this can't happen mid-ceremony (the old behavior) without
-                // forcing the user to set an NFC key down to type.
-                if (activePluginId == "fido2") {
-                    val pin = awaitFido2PinEntry()
-                    if (pin == null) {
-                        _errorMessage.value = "Enrollment cancelled"
-                        return@launch
-                    }
-                    prefetchedFido2Pin = pin.toByteArray()
-                    _fido2AwaitingPresentation.value = true
-                }
-                // A hard ceiling on the WHOLE operation, not just its
-                // individual sub-steps: CompositeCtap2Transport's USB/NFC
-                // race (and each transport's own internal waits) already
-                // time out on their own, but a bug in any of that racing
-                // logic could still hang indefinitely - confirmed on real
-                // hardware (an NFC reconnect cascade left this coroutine
-                // stuck, silently blocking every later Enroll/Rotate/Destroy
-                // tap since wscdLifecycleBusy never got a chance to reset).
-                // Without an outer bound here, that kind of hang is
-                // unrecoverable without restarting the app.
-                kotlinx.coroutines.withTimeout(WSCD_LIFECYCLE_OP_TIMEOUT_MS) {
                 val manager = wallet.wscdManager
                 if (manager == null) {
                     _errorMessage.value = "WSCD signer not initialized"
-                    return@withTimeout
+                    return@launch
                 }
                 val pluginId = activePluginId
                 // Lazily register R2PS plugin if switching at runtime
@@ -1876,48 +2039,89 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     // new one.
                     registerFido2OnSigner(manager, savedFido2State())
                 }
-                val contextId = lifecycleContextId
-                val factorKind = when (pluginId) {
-                    "r2ps" -> FactorKind.Opaque
-                    else -> FactorKind.RawSign
-                }
-
-                val regOutcome = manager.registerLifecycle(
-                    RegisterLifecycleRequest(
-                        pluginId = pluginId,
-                        contextId = contextId,
-                        factorKind = factorKind,
-                    ),
-                )
-                _lifecycleState.value = regOutcome.state
-                Log.i(TAG, "Lifecycle registered: context=$contextId state=${regOutcome.state}")
-
-                val actOutcome = manager.activateLifecycle(
-                    ActivateLifecycleRequest(
-                        pluginId = pluginId,
-                        contextId = contextId,
-                    ),
-                )
-                _lifecycleState.value = actOutcome.state
-                Log.i(TAG, "Lifecycle activated: context=$contextId state=${actOutcome.state}")
-                if (pluginId == "fido2") saveFido2PluginState(manager)
-                Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"ok","state":"${actOutcome.state}","context_id":"$contextId"}""")
+                if (pluginId == "fido2") {
+                    // Discover, then ask: the SDK describes the key (no PIN dialog), shows the dialog that fits it, re-describes
+                    // on the second tap and runs the ceremony. The app only shows the dialogs and the hints.
+                    _fido2EnrolmentDiscovering.value = true
+                    val session = org.siros.sdk.keystore.Fido2EnrolmentSession(manager) { request ->
+                        // Tap 1 resolved: a PIN dialog takes over from here.
+                        _fido2EnrolmentDiscovering.value = false
+                        awaitFido2PinEntry(request)?.toByteArray()
+                    }
+                    fido2Enrolment = session
+                    val enrolment = session.enrol(
+                        onSecondTap = { _fido2AwaitingPresentation.value = typesPinAheadFor(_fido2TransportMode.value) },
+                    ) {
+                        // A key without PIN support never raises a PIN prompt: discovery's own dialog ends once the ceremony starts.
+                        _fido2EnrolmentDiscovering.value = false
+                        // A hard ceiling on the CEREMONY (not on the user typing): see enrollCeremony.
+                        kotlinx.coroutines.withTimeout(WSCD_LIFECYCLE_OP_TIMEOUT_MS) { enrollCeremony(manager, pluginId) }
+                    }
+                    Log.i(TAG, "Enrolled FIDO2 authenticator ${enrolment.info.aaguidString}")
+                } else {
+                    kotlinx.coroutines.withTimeout(WSCD_LIFECYCLE_OP_TIMEOUT_MS) { enrollCeremony(manager, pluginId) }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "WSCD enrollment failed", e)
                 Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
                 _errorMessage.value = if (e is kotlinx.coroutines.TimeoutCancellationException) {
                     "Enrollment timed out - no security key detected in time"
+                } else if (e is org.siros.sdk.keystore.WscdPinException) {
+                    // The SDK's own short localised text; nothing to interpret here.
+                    activity.getString(e.failure.messageRes)
+                } else if (e is org.siros.sdk.keystore.Fido2EnrolmentException) {
+                    activity.getString(e.failure.messageRes) + (e.reason?.let { " ($it)" } ?: "")
                 } else {
                     "Enrollment failed: ${e.message}"
                 }
             } finally {
+                fido2Enrolment?.clear()
+                fido2Enrolment = null
                 _enrollmentInProgress.value = false
                 _wscdLifecycleBusy.value = false
                 _fido2AwaitingPresentation.value = false
-                prefetchedFido2Pin = null
+                _fido2EnrolmentDiscovering.value = false
+                typedAheadPin.clear()
             }
         }
+    }
+
+    /**
+     * The enrolment ceremony proper. A hard ceiling on the WHOLE ceremony, not just its individual sub-steps:
+     * CompositeCtap2Transport's USB/NFC race (and each transport's own internal waits) already time out on their own, but a bug
+     * in any of that racing logic could still hang indefinitely - confirmed on real hardware (an NFC reconnect cascade left this
+     * coroutine stuck, silently blocking every later Enroll/Rotate/Destroy tap since wscdLifecycleBusy never got a chance to
+     * reset). Without an outer bound, that kind of hang is unrecoverable without restarting the app.
+     */
+    private suspend fun enrollCeremony(manager: WscdManager, pluginId: String) {
+        // The context of the CAPTURED pluginId, never the live tab (see contextIdFor's doc comment): registerFido2OnSigner and
+        // the describe/ask ceremony above already ran against this plugin, however long that took.
+        val contextId = contextIdFor(pluginId)
+        val factorKind = when (pluginId) {
+            "r2ps" -> FactorKind.Opaque
+            else -> FactorKind.RawSign
+        }
+
+        val regOutcome = manager.registerLifecycle(
+            RegisterLifecycleRequest(
+                pluginId = pluginId,
+                contextId = contextId,
+                factorKind = factorKind,
+            ),
+        )
+        _lifecycleState.value = regOutcome.state
+        Log.i(TAG, "Lifecycle registered: context=$contextId state=${regOutcome.state}")
+
+        val actOutcome = manager.activateLifecycle(
+            ActivateLifecycleRequest(
+                pluginId = pluginId,
+                contextId = contextId,
+            ),
+        )
+        _lifecycleState.value = actOutcome.state
+        Log.i(TAG, "Lifecycle activated: context=$contextId state=${actOutcome.state}")
+        if (pluginId == "fido2") saveFido2PluginState(manager)
+        Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"ok","state":"${actOutcome.state}","context_id":"$contextId"}""")
     }
 
     // ── Devices screen state (wallet instance lifecycle, SID-AUTH-06) ──
@@ -1931,28 +2135,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _devicesLoading = MutableStateFlow(false)
     val devicesLoading: StateFlow<Boolean> = _devicesLoading
 
-    /** The instance whose status write is in flight, so its row can show a spinner. */
-    private val _devicesBusyInstanceId = MutableStateFlow<String?>(null)
-    val devicesBusyInstanceId: StateFlow<String?> = _devicesBusyInstanceId
-
     private val _devicesError = MutableStateFlow<String?>(null)
     val devicesError: StateFlow<String?> = _devicesError
 
-    private val _deactivating = MutableStateFlow(false)
-    val deactivating: StateFlow<Boolean> = _deactivating
-
-    /**
-     * What the last `deactivateWallet` call reported. Kept so the screen can
-     * say whether the backend confirmed the erasure - an incomplete one still
-     * deactivated the wallet, but leaves residual server-side data for an
-     * administrator, and the user should be told which of the two happened.
-     */
-    private val _deactivationOutcome = MutableStateFlow<org.siros.sdk.auth.DeactivationOutcome?>(null)
-    val deactivationOutcome: StateFlow<org.siros.sdk.auth.DeactivationOutcome?> = _deactivationOutcome
-
     fun openDevices() {
         _showDevices.value = true
-        _deactivationOutcome.value = null
         refreshDevices()
     }
 
@@ -1965,14 +2152,6 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         viewModelScope.launch { loadDevices() }
     }
 
-    /**
-     * The listing itself. Suspending rather than launching, so a caller that
-     * must not re-enable its buttons until the list is current (see
-     * [setWalletInstanceStatus]) can await it in the same coroutine - a
-     * fire-and-forget refresh would let a second status write start against a
-     * list still showing the pre-write state, and the two refreshes could then
-     * land out of order.
-     */
     private suspend fun loadDevices() {
         _devicesLoading.value = true
         _devicesError.value = null
@@ -1983,72 +2162,6 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             _devicesError.value = localizedErrorMessage(e)
         } finally {
             _devicesLoading.value = false
-        }
-    }
-
-    /**
-     * Suspend, reactivate or revoke one instance. The SDK re-logs in after the
-     * write (the change cuts this session's tokens off), so when the target is
-     * this device the wallet may land in [WalletState.LifecycleBlocked] and
-     * this screen disappears behind the blocked login screen - which is the
-     * truthful outcome, not an error to report here.
-     */
-    fun setWalletInstanceStatus(
-        instanceId: String,
-        status: org.siros.sdk.auth.WalletInstanceStatus,
-        reason: String? = null,
-    ) {
-        viewModelScope.launch {
-            _devicesBusyInstanceId.value = instanceId
-            _devicesError.value = null
-            try {
-                wallet.setWalletInstanceStatus(instanceId, status, reason)
-                loadDevices()
-            } catch (e: Exception) {
-                Log.w(TAG, "setWalletInstanceStatus failed", e)
-                _devicesError.value = localizedErrorMessage(e)
-            } finally {
-                _devicesBusyInstanceId.value = null
-            }
-        }
-    }
-
-    /**
-     * Deactivate the wallet. The SDK forgets the local account in both
-     * outcomes (the revocations stand even when the erasure cascade did not
-     * finish), so this screen closes either way and the result is kept only to
-     * be shown once before it does.
-     */
-    fun deactivateWallet(reason: String? = null) {
-        viewModelScope.launch {
-            _deactivating.value = true
-            _devicesError.value = null
-            try {
-                val outcome = wallet.deactivateWallet(reason)
-                _deactivationOutcome.value = outcome
-                _walletInstances.value = emptyList()
-                _showAddCredential.value = false
-                _availableCredentials.value = emptyList()
-                _showDevices.value = false
-                // deactivateWallet also forgets the account and logs out, so
-                // this screen is gone by the next recomposition. Report the
-                // outcome through the app-wide banner instead, which the login
-                // screen renders too - otherwise a user who deactivated with
-                // an unfinished erasure would never learn that their provider
-                // still has cleanup to do.
-                if (outcome.complete) {
-                    _infoMessage.value =
-                        activity.getString(R.string.devices_deactivate_complete, outcome.revoked)
-                } else {
-                    _errorMessage.value =
-                        activity.getString(R.string.devices_deactivate_incomplete, outcome.revoked)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "deactivateWallet failed", e)
-                _devicesError.value = localizedErrorMessage(e)
-            } finally {
-                _deactivating.value = false
-            }
         }
     }
 
@@ -2079,7 +2192,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * accumulate multiple simultaneous enrollments per plugin.
      */
     private val lifecycleContextId: String
-        get() = "ctx-$activePluginId"
+        get() = contextIdFor(activePluginId)
+
+    /**
+     * The context ID of [pluginId] specifically - for a coroutine that captured a plugin ID earlier (e.g. [enrollWscd]'s
+     * `pluginId`) and must keep using THAT one even if the user switches tabs while the operation (discovery, a PIN
+     * ceremony) is in flight. [lifecycleContextId] reads the CURRENT tab and must not be used once a plugin ID has been
+     * captured - a tab switch mid-enrolment used to register/activate the key under the new tab's context, which no
+     * later status/rotation/destruction call (all keyed on the captured session's own plugin) would ever look up.
+     */
+    private fun contextIdFor(pluginId: String) = "ctx-$pluginId"
 
     /** The plugin ID used for the current lifecycle session. */
     private val activePluginId: String
@@ -2310,10 +2432,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * forced the user to set the key down to type, which could drop the
      * NFC session entirely.
      */
-    private suspend fun awaitFido2PinEntry(): String? = withContext(Dispatchers.Main.immediate) {
+    private suspend fun awaitFido2PinEntry(
+        request: org.siros.sdk.keystore.PinRequest = org.siros.sdk.keystore.PinRequest.Enter("fido2"),
+    ): String? = withContext(Dispatchers.Main.immediate) {
+        // A PIN prompt means the presentation guide ("PIN accepted, hold the key") no longer holds - the key was described again and
+        // differs, or the ceremony asks once more - so it is closed before every prompt.
+        _fido2AwaitingPresentation.value = false
         suspendCancellableCoroutine { continuation ->
             val pending = PendingPinEntry(
                 pluginId = "fido2",
+                request = request,
                 respond = { pin ->
                     _pendingPinEntry.value = null
                     if (continuation.isActive) {
@@ -2336,8 +2464,25 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * in place. Cleared in the `finally` block of whichever operation set
      * it, so a PIN never outlives the one operation it was collected for.
      */
-    @Volatile
-    private var prefetchedFido2Pin: ByteArray? = null
+    private val typedAheadPin = org.siros.sdk.keystore.TypedAheadPin()
+
+    /**
+     * Whether the PIN is typed BEFORE the ceremony: for NFC (and AUTO, which may end up on NFC) because holding a key to the phone
+     * leaves no hand for typing. Over USB the key is plugged in already when the PIN is needed, so it is asked AFTER the key is
+     * connected, mid-ceremony, not typed ahead.
+     */
+    private fun typesPinAheadFor(mode: Fido2TransportMode): Boolean = mode != Fido2TransportMode.USB
+
+    /**
+     * The transport an operation will actually use: the one its manager's FIDO2 plugin was REGISTERED with (changing the selection
+     * later does not re-register it), else the current selection. Rotation and issuance use the registered one; enrollment
+     * re-registers from the current selection first, so the selection is its transport.
+     */
+    private fun registeredFido2Mode(manager: WscdManager?): Fido2TransportMode = synchronized(fido2RegisteredTransport) {
+        // THAT manager's registration only: another keystore's entry (a different signer's USB registration, say) says nothing about it.
+        manager?.let { fido2RegisteredTransport[it] } ?: _fido2TransportMode.value
+    }
+
 
     /**
      * Bridges [org.siros.sdk.keystore.AuthProvider.requestPin] (synchronous,
@@ -2345,17 +2490,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * a Compose dialog, via [_pendingPinEntry]. `runBlocking` here is safe
      * for the same reason it's safe in [Ctap2TransportBridge].
      *
-     * Prefers [prefetchedFido2Pin] when set (the normal case for
+     * Prefers [typedAheadPin] when set (the normal case for
      * [enrollWscd]/[rotateLifecycle], which prefetch it up front - see that
      * field's doc comment) so this returns instantly without ever showing a
      * dialog mid-ceremony. Falls back to the blocking dialog for any call
      * path that didn't prefetch (e.g. a FIDO2 signature requested during
      * real credential presentation, outside the dev-screen flows).
      */
-    private fun requestFido2Pin(): ByteArray {
-        prefetchedFido2Pin?.let { return it }
+    private fun requestFido2Pin(request: org.siros.sdk.keystore.PinRequest = org.siros.sdk.keystore.PinRequest.Enter("fido2")): ByteArray {
+        // An enrolment in progress answers first (the SDK checks the prompt is the kind its dialog was built for), then the typed-ahead
+        // PIN of a rotation (the FIRST request only, and only a first ENTER, then it is gone).
+        fido2Enrolment?.answer(request)?.let { return it }
+        typedAheadPin.take(request)?.let { return it }
         return kotlinx.coroutines.runBlocking(Dispatchers.Main.immediate) {
-            val pin = awaitFido2PinEntry()
+            val pin = awaitFido2PinEntry(request)
             pin ?: throw RuntimeException("PIN entry cancelled")
         }.toByteArray()
     }
@@ -2387,13 +2535,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 // See enrollWscd's identical prefetch step for why the PIN
                 // must be collected before any transport work starts.
-                if (activePluginId == "fido2") {
+                if (activePluginId == "fido2" && typesPinAheadFor(registeredFido2Mode(wallet.wscdManager))) {
                     val pin = awaitFido2PinEntry()
                     if (pin == null) {
                         _errorMessage.value = "Rotation cancelled"
                         return@launch
                     }
-                    prefetchedFido2Pin = pin.toByteArray()
+                    typedAheadPin.hold(pin.toByteArray())
                     _fido2AwaitingPresentation.value = true
                 }
                 kotlinx.coroutines.withTimeout(WSCD_LIFECYCLE_OP_TIMEOUT_MS) {
@@ -2426,7 +2574,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             } finally {
                 _wscdLifecycleBusy.value = false
                 _fido2AwaitingPresentation.value = false
-                prefetchedFido2Pin = null
+                typedAheadPin.clear()
             }
         }
     }
@@ -2483,6 +2631,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun handleQrResult(uri: String) {
         closeActivate()
+        // "Scan QR code" is now reachable from the Add Credential chooser
+        // (see AddCredentialScreen's onScanQr), not just from Home - so a
+        // flow actually starting here must leave Add Credential entirely,
+        // the same way startIDV() above clears _showAddCredential for the
+        // sibling "Scan passport" option. Without this, _showAddCredential
+        // stays true for the rest of the flow, and MainActivity's top-level
+        // `when` checks `showAddCredential` before it ever reaches the
+        // WalletState.FlowActive branch that would otherwise show
+        // FlowActiveView - the chooser screen is drawn forever over a flow
+        // that's silently progressing underneath it.
+        _showAddCredential.value = false
         lastFlowRetry = { handleQrResult(uri) }
 
         // Classification is pure/synchronous (see DeepLinkClassifier.kt), so it's
@@ -2516,13 +2675,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     }
                     is DeepLinkType.PresentationRequest -> {
                         Log.i(TAG, "Routing to presentation")
-                        wallet.startPresentation(link.uri)
+                        // false: the SDK ignored a redelivered duplicate of a request already started; nothing will come through
+                        // the wallet state for this attempt, so its "contacting the verifier" indicator must not stay up.
+                        if (!wallet.startPresentation(link.uri)) _flowStarting.value = null
                     }
                     else -> {
                         // Fallback: treat unclassified URIs as presentation requests
                         // (covers plain https://...?request_uri= patterns from QR codes)
                         Log.i(TAG, "Routing to presentation (unclassified)")
-                        wallet.startPresentation(uri)
+                        if (!wallet.startPresentation(uri)) _flowStarting.value = null
                     }
                 }
             } catch (e: Exception) {
@@ -2543,6 +2704,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val currentState = current.state.value
         if (currentState is WalletState.Disconnected || currentState is WalletState.Error) {
             current.destroy()
+            // Review of #298: the add-credential chooser's offersJob (see openAddCredential) collects the OLD
+            // wallet's availableCredentials StateFlow by reference - left running, it would silently go on
+            // watching a destroyed wallet that can never emit again, so neither its background refresh nor a
+            // user-triggered Retry would ever reach the screen. closeAddCredential() also resets the chooser's
+            // own visible state, which a stale snapshot from the previous account would otherwise leave showing.
+            closeAddCredential()
             wallet = SirosWallet.create(
                 activity,
                 buildWalletConfig(),
@@ -2593,6 +2760,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                             else -> "test-pin-1234".toByteArray()
                         }
                     }
+                    // The SDK does the confirmation, the length check and the retry; this only shows what it asks.
+                    override fun requestPin(request: org.siros.sdk.keystore.PinRequest): ByteArray = when (request.pluginId) {
+                        "fido2" -> requestFido2Pin(request)
+                        else -> requestPin(request.pluginId)
+                    }
+
                     override fun requestWebauthnAssertion(
                         pluginId: String,
                         challenge: ByteArray,
@@ -2610,7 +2783,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             }
             Log.i(TAG, "WSCD keystore initialized with plugin: $pluginId")
             if (trackAsDiagnosticSigner) wscdSigner = signer
-            WscdKeystoreAdapter(signer)
+            val adapter = WscdKeystoreAdapter(signer)
+            // The plugin was registered on the signer; the wallet reaches it through this adapter (and enrollment/rotation re-register
+            // through it), so the registered transport is recorded for the adapter too.
+            synchronized(fido2RegisteredTransport) {
+                fido2RegisteredTransport[signer]?.let { fido2RegisteredTransport[adapter] = it }
+            }
+            wscdAdapterByPlugin[pluginId] = adapter
+            adapter
         } catch (e: Exception) {
             Log.w(TAG, "Failed to initialize WSCD keystore for plugin $pluginId, falling back to default", e)
             null
@@ -2705,17 +2885,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             // with no "present your key now" cue for the transport-connect
             // wait that happens first.
             onWscdOperationStart = { pluginId ->
-                if (pluginId == "fido2") {
+                if (pluginId == "fido2" && typesPinAheadFor(registeredFido2Mode(wscdAdapterByPlugin["fido2"]))) {
                     val pin = awaitFido2PinEntry()
                     if (pin != null) {
-                        prefetchedFido2Pin = pin.toByteArray()
+                        typedAheadPin.hold(pin.toByteArray())
                         _fido2AwaitingPresentation.value = true
                     }
                 }
             },
             onWscdOperationEnd = {
                 _fido2AwaitingPresentation.value = false
-                prefetchedFido2Pin = null
+                typedAheadPin.clear()
             },
         )
         // The user's request-policy settings (non-disclosure, circuit_zk, DC API origin rules, verifier ids).
@@ -2785,6 +2965,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             "idv_nfc_chip_read_failed" to R.string.error_idv_nfc_chip_read_failed,
             "idv_nfc_not_authenticated" to R.string.error_idv_nfc_not_authenticated,
             "idv_chip_untrusted" to R.string.error_idv_chip_untrusted,
+            "idv_chip_photo_mismatch" to R.string.error_idv_chip_photo_mismatch,
+            "idv_chip_data_unverified" to R.string.error_idv_chip_data_unverified,
             "idv_document_expired" to R.string.error_idv_document_expired,
             "idv_session_expired" to R.string.error_idv_session_expired,
             "ctap2_not_available" to R.string.error_ctap2_not_available,
