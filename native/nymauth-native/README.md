@@ -45,8 +45,8 @@ the native side computed.
 
 ## Build and test
 
-`nym-longfellow` is taken by path from a readdit-demo checkout next to siros-sdk-kotlin (`../readdit-demo` from the repository root) (AltmannPeter/readdit-demo, `main` or `launchpad-perf` from commit `50c47ac`, which adds
-`Circuits::from_pair` and `Layout::parse`).
+`nym-longfellow` is a git dependency on AltmannPeter/readdit-demo, pinned to commit `50c47ac98e37f65003a71e75059fd49ce6f91916`
+(merged to its `main`; adds `Circuits::from_pair` and `Layout::parse`). Cargo fetches it automatically; no sibling checkout is required.
 
 ```sh
 cargo test --release                       # prove with the teen's demo mdoc; this library's verifier and
