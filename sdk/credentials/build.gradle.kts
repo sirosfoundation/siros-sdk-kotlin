@@ -42,7 +42,7 @@ val zkCredLongfellowVersion: String = providers.gradleProperty("zkCredLongfellow
 // nymauth-native (native/nymauth-native in this repository): Longfellow on Google's longfellow-zk runtime, the default
 // `longfellow-nymauth` implementation. Until it is published, build it with native/nymauth-native/scripts/build-android.sh,
 // which puts this version in ~/.m2.
-val nymauthNativeVersion: String = providers.gradleProperty("nymauthNativeVersion").getOrElse("0.1.0")
+val nymauthNativeVersion: String = providers.gradleProperty("nymauthNativeVersion").getOrElse("0.2.0")
 
 // The matcher at rulebook v0.4 (`zkp_req`): siros-dc-matcher v0.11.0 (merge 09ac62fb). Its Kotlin bindings (vendored below
 // uniffi/) and the vectors in spec/zkp-req-vectors are the ones of that tag.

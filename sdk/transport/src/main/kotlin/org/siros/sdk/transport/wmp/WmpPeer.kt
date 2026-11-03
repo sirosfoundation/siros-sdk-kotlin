@@ -80,14 +80,41 @@ class WmpPeer(
 
     /** Close the session and stop dispatching. */
     suspend fun close(reason: String = "complete") {
-        session.close(reason)
-        scope.cancel()
+        try {
+            session.close(reason)
+        } finally {
+            // Stopping local work never depends on the server having been told: a failed close still cancels the dispatch loop
+            // and stops what a profile runs of its own (sub-flow answers).
+            scope.cancel()
+            registry.profiles().forEach {
+                try {
+                    (it as? AutoCloseable)?.close()
+                } catch (e: Exception) {
+                    Timber.w("Closing a WMP profile failed (${e.javaClass.simpleName})")
+                }
+            }
+        }
     }
 
     // ---- PeerContext (outgoing) ----
 
     override suspend fun notify(method: String, params: JsonObject?) {
         session.sendNotification(method, params)
+        // A flow this peer finishes itself (a sub-flow it answered) never gets an inbound complete/error to
+        // clear its tracked type, so clear it here.
+        if (method == WmpMethods.FLOW_COMPLETE || method == WmpMethods.FLOW_ERROR) {
+            (params?.get("flow_id") as? JsonPrimitive)?.content?.let { forgetFlowType(it) }
+        }
+    }
+
+    override fun forgetFlow(flowId: String) = forgetFlowType(flowId)
+
+    override suspend fun notifyIf(method: String, params: JsonObject?, wanted: () -> Boolean): Boolean {
+        val sent = session.sendNotificationIf(method, params, wanted)
+        if (sent && (method == WmpMethods.FLOW_COMPLETE || method == WmpMethods.FLOW_ERROR)) {
+            (params?.get("flow_id") as? JsonPrimitive)?.content?.let { forgetFlowType(it) }
+        }
+        return sent
     }
 
     override suspend fun call(method: String, params: JsonObject?): JsonRpcResponse {
@@ -142,6 +169,8 @@ class WmpPeer(
 
     /** Send a flow cancel notification. */
     suspend fun cancelFlow(flowId: String, reason: String? = null) {
+        // Work the flow's handler started stops before the flow's state is released.
+        registry.flowHandler(lookupFlowType(flowId))?.flowEnded(flowId)
         val params = codec.encodeParams(
             FlowCancelParams(wmp = WmpMeta(), flowId = flowId, reason = reason)
         )
@@ -220,7 +249,16 @@ class WmpPeer(
                 val handler = registry.flowHandler(p.flowType)
                 if (handler != null) {
                     trackFlowType(p.flowId, p.flowType)
-                    val result = handler.startFlow(p)
+                    val result = try {
+                        handler.startFlow(p)
+                    } catch (e: FlowStartRefusedException) {
+                        // The handler refuses the request itself: an error response, nothing started, nothing tracked.
+                        forgetFlowType(p.flowId)
+                        if (msg.id != null) {
+                            session.sendErrorResponse(msg.id, WmpErrorCodes.FLOW_ERROR, e.message ?: "flow start refused")
+                        }
+                        return
+                    }
                     if (msg.id != null) {
                         session.sendResponse(msg.id, codec.encodeParams(result))
                     }

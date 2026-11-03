@@ -5,7 +5,7 @@ The `circuit_zk` prover for the `nymauth-*` circuits runs in two native librarie
 `feat/nymauth-prove`, PR #13). Until those are released, build the AARs from the PR heads and point Gradle at them.
 
 The default `longfellow-nymauth` implementation is a third library, `nymauth-native` (Google's longfellow-zk), built in
-this repository: `native/nymauth-native/scripts/build-android.sh` builds `org.siros:nymauth-native:0.1.0` into `~/.m2`
+this repository: `native/nymauth-native/scripts/build-android.sh` builds `org.siros:nymauth-native:0.2.0` into `~/.m2`
 and regenerates its Kotlin bindings (vendored under `sdk/credentials/src/main/kotlin/uniffi/nymauth_native`). See
 `native/nymauth-native/README.md`. zk-cred-longfellow stays a dependency: it is the alternative implementation
 (`UniffiNymAuthNativeProver.withBindings(ZkCredLongfellowNymAuthBinding)`) and carries the legacy ZK presentation path.
@@ -56,14 +56,14 @@ See the table in the pull request description (updated with every build of these
 resolution error in a compile task, when an AAR cannot be resolved, and when it resolves to an older build of the same
 version that has no nymauth entry points.
 
-CI and CodeQL build `org.siros:nymauth-native:0.1.0` once through `.github/workflows/nymauth-native.yml` and share its Maven
+CI and CodeQL build `org.siros:nymauth-native:0.2.0` once through `.github/workflows/nymauth-native.yml` and share its Maven
 repository with every Gradle job; no sibling checkout or pre-published AAR is needed. Release and Play Store builds use the
 same reusable workflow. The other native artifacts keep their existing repositories and coordinates:
 
 - `org.siros:zk-cred-vega:0.0.7` (the PR branch's Cargo.toml still says 0.0.6, which is released and has no nymauth: bump it to 0.0.7 before tagging)
 - `org.siros:zk-cred-longfellow:0.1.2` (Cargo.toml says 0.1.1: bump to 0.1.2 before tagging)
 
-Before tagging the SDK, publish `org.siros:nymauth-native:0.1.0` (AAR and POM) to Maven Central after confirming all linked
+Before tagging the SDK, publish `org.siros:nymauth-native:0.2.0` (AAR and POM) to Maven Central after confirming all linked
 third-party licenses. `publish-maven` checks both files and stops before uploading any SDK artifact when they are absent, so
 a release cannot publish credentials POMs with an unresolvable native dependency. Regenerate the vendored bindings from the
 same tagged native build and keep the version defaults in `sdk/credentials/build.gradle.kts` aligned.
