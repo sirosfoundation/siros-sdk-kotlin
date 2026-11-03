@@ -221,4 +221,43 @@ class WmpSessionTest {
         assertTrue(withCaps, withCaps.contains("\"capabilities_offered\":{\"transaction_data\":{\"versions\":[1]}}"))
         assertTrue(without, !without.contains("transaction_data"))
     }
+
+    /** A transport whose first send waits on [release], holding the session's send lock meanwhile. */
+    private class HoldingTransport(private val release: kotlinx.coroutines.CompletableDeferred<Unit>) : org.siros.sdk.transport.Transport {
+        val sent = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val holding = kotlinx.coroutines.CompletableDeferred<Unit>()
+        override val state = kotlinx.coroutines.flow.MutableStateFlow(org.siros.sdk.transport.TransportState.CONNECTED)
+        override suspend fun connect() {}
+        override suspend fun send(message: ByteArray) {
+            if (sent.isEmpty()) {
+                holding.complete(Unit)
+                release.await()
+            }
+            sent.add(String(message))
+        }
+        override fun incoming() = kotlinx.coroutines.flow.emptyFlow<ByteArray>()
+        override suspend fun disconnect() {}
+    }
+
+    @Test
+    fun aNotificationQueuedBehindAnotherSendIsCheckedAgainOnceItHoldsTheSendLock() = runBlocking {
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val transport = HoldingTransport(release)
+        val session = WmpSession(transport)
+        val first = launch { session.sendNotification("test.first", null) }
+        withTimeout(5_000) { transport.holding.await() }
+
+        val wanted = java.util.concurrent.atomic.AtomicBoolean(true)
+        val queued = async { session.sendNotificationIf("test.second", null) { wanted.get() } }
+        delay(100) // the second send is waiting for the lock the first one holds
+        wanted.set(false)
+        release.complete(Unit)
+        first.join()
+
+        assertEquals("not sent: it was no longer wanted when it got the lock", false, withTimeout(5_000) { queued.await() })
+        assertEquals(1, transport.sent.size)
+        // A send that is still wanted goes out.
+        assertEquals(true, session.sendNotificationIf("test.third", null) { true })
+        assertEquals(2, transport.sent.size)
+    }
 }
