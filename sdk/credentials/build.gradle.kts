@@ -71,9 +71,9 @@ val checkNativeLibraries = tasks.register("checkNativeLibraries") {
                 if (artifact == "nymauth-native") {
                     throw GradleException(
                         "The native library $coordinates cannot be resolved.\n" +
-                            "It is built in this repository and not published yet. Build it (Rust, cargo-ndk, the NDK; " +
-                            "readdit-demo next to siros-sdk-kotlin) and it lands in ~/.m2:\n" +
+                            "It is built in this repository. Build it (Rust, cargo-ndk and the NDK) and it lands in ~/.m2:\n" +
                             "  native/nymauth-native/scripts/build-android.sh\n" +
+                            "Or point -PsirosNativeRepo at a staged Maven repository; CI uses .github/workflows/nymauth-native.yml.\n" +
                             "See native/nymauth-native/README.md. (-PnymauthNativeVersion selects another version.)\n" +
                             "Gradle said: ${e.message?.lineSequence()?.firstOrNull().orEmpty()}",
                     )

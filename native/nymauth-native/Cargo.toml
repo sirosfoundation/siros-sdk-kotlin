@@ -15,6 +15,7 @@ name = "nymauth-native"
 version = "0.1.0"
 edition = "2024"
 description = "Native nymauth provers for the SIROS SDKs: Longfellow on Google's longfellow-zk Rust runtime"
+license = "BSD-2-Clause"
 publish = false
 
 [lib]

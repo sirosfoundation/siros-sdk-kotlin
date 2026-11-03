@@ -54,13 +54,16 @@ See the table in the pull request description (updated with every build of these
 
 `checkNativeLibraries` (runs before every build of the SDK modules) fails with the coordinates and the way out, instead of a
 resolution error in a compile task, when an AAR cannot be resolved, and when it resolves to an older build of the same
-version that has no nymauth entry points. For CI to build without `-PsirosNativeRepo` these must be published to GitHub
-Packages (each library's own Maven repository), from the merged and tagged native PRs:
+version that has no nymauth entry points.
+
+CI and CodeQL build `org.siros:nymauth-native:0.1.0` once through `.github/workflows/nymauth-native.yml` and share its Maven
+repository with every Gradle job; no sibling checkout or pre-published AAR is needed. Release and Play Store builds use the
+same reusable workflow. The other native artifacts keep their existing repositories and coordinates:
 
 - `org.siros:zk-cred-vega:0.0.7` (the PR branch's Cargo.toml still says 0.0.6, which is released and has no nymauth: bump it to 0.0.7 before tagging)
 - `org.siros:zk-cred-longfellow:0.1.2` (Cargo.toml says 0.1.1: bump to 0.1.2 before tagging)
-- `org.siros:nymauth-native:0.1.0` (from `native/nymauth-native`; it builds against readdit-demo's `nym-longfellow` by path, which
-  has to become a git or vendored dependency first)
 
-and the vendored bindings regenerated from those tagged builds, with `zkCredVegaVersion` / `zkCredLongfellowVersion` defaults
-in `sdk/credentials/build.gradle.kts` matching.
+Before tagging the SDK, publish `org.siros:nymauth-native:0.1.0` (AAR and POM) to Maven Central after confirming all linked
+third-party licenses. `publish-maven` checks both files and stops before uploading any SDK artifact when they are absent, so
+a release cannot publish credentials POMs with an unresolvable native dependency. Regenerate the vendored bindings from the
+same tagged native build and keep the version defaults in `sdk/credentials/build.gradle.kts` aligned.

@@ -60,4 +60,5 @@ scripts/build-android.sh                   # arm64-v8a and x86_64 .so (PMULL che
 
 - Google's longfellow-zk runtime (Apache-2.0, vendored in community-demo's `native/longfellow/vendor`).
 - `nym-longfellow` and the circuits are community-demo's, from the SIROS nym-auth-circuits archive.
-- This library's own license is to be decided.
+- This library's own code is BSD-2-Clause, like the SDK (see the repository-root `LICENSE`). Linked third-party components
+  remain under their own licenses; confirm the upstream `nym-longfellow` and circuit licenses before publishing the AAR.
