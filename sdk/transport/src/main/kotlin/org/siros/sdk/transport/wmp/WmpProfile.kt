@@ -29,6 +29,24 @@ interface WmpPeerContext {
     /** Send a JSON-RPC 2.0 notification (fire-and-forget). */
     suspend fun notify(method: String, params: JsonObject?)
 
+    /**
+     * Send a notification only while [wanted] still holds, checked at the last moment: an implementation that serialises its
+     * sends (a lock around the transport) checks again once it holds the lock, so a message queued behind another send is not
+     * sent after what it answers has ended. Returns whether it was sent. The default checks once, then sends.
+     */
+    suspend fun notifyIf(method: String, params: JsonObject?, wanted: () -> Boolean): Boolean {
+        if (!wanted()) return false
+        notify(method, params)
+        return true
+    }
+
+    /**
+     * Forget everything the peer tracks for [flowId] (which handler a later frame for it is routed to), without sending anything.
+     * A handler calls it for a flow it stopped itself, one that will never send the terminal frame that clears it. The default
+     * does nothing.
+     */
+    fun forgetFlow(flowId: String) {}
+
     /** Send a JSON-RPC 2.0 request and wait for the response. */
     suspend fun call(method: String, params: JsonObject?): JsonRpcResponse
 
@@ -61,6 +79,12 @@ interface WmpFlowHandler {
 
     /** Called for wmp.flow.cancel on a flow managed by this handler. */
     suspend fun handleCancel(params: FlowCancelParams)
+
+    /**
+     * Called when this peer itself ends [flowId] (a local cancel), before it releases the flow's state, so work the handler
+     * started for the flow can stop first. Inbound terminal frames reach [handleComplete], [handleError] and [handleCancel].
+     */
+    fun flowEnded(flowId: String) {}
 }
 
 /**
@@ -84,3 +108,10 @@ interface WmpResolveHandler {
     /** Process a resolve request for a supported type. */
     suspend fun handleResolve(params: ResolveParams): ResolveResult
 }
+
+/**
+ * Thrown from [WmpFlowHandler.startFlow] to refuse a `wmp.flow.start` request outright (for example when the handler has no room):
+ * [WmpPeer] answers the request with an error response carrying [message] and starts nothing, so a refusal needs no flow of its own
+ * and nothing that could be sent after the flow it concerns has ended.
+ */
+class FlowStartRefusedException(message: String) : Exception(message)

@@ -176,6 +176,23 @@ class WmpSession(
         }
     }
 
+    /** [sendNotification] that checks [wanted] again once it holds the send lock; false when it was not sent. */
+    internal suspend fun sendNotificationIf(
+        method: String,
+        params: kotlinx.serialization.json.JsonObject?,
+        wanted: () -> Boolean,
+    ): Boolean {
+        val message = codec.encodeNotification(method, params)
+        return sendMutex.withLock {
+            if (!wanted()) {
+                false
+            } else {
+                transport.send(message)
+                true
+            }
+        }
+    }
+
     /**
      * Send a JSON-RPC 2.0 response for a server-initiated request.
      * Used when the peer acts as the responder for inbound requests.
