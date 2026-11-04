@@ -67,3 +67,6 @@ Before tagging the SDK, publish `org.siros:nymauth-native:0.2.0` (AAR and POM) t
 third-party licenses. `publish-maven` checks both files and stops before uploading any SDK artifact when they are absent, so
 a release cannot publish credentials POMs with an unresolvable native dependency. Regenerate the vendored bindings from the
 same tagged native build and keep the version defaults in `sdk/credentials/build.gradle.kts` aligned.
+
+`nymauth-native` implements only the nym_auth profile. Generic circuit-ZK composition and additional profile
+registration are documented in `docs/CIRCUIT_ZK_PROFILES.md`.

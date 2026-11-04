@@ -4,8 +4,10 @@ package org.siros.sdk.keystore
 import com.upokecenter.cbor.CBORObject
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.siros.sdk.credentials.CircuitZkFunction
@@ -56,6 +58,14 @@ class PredicateFunctionHandlerTest {
     }
 
     @Test
+    fun `profile metadata is optional and does not change the existing handler interface`() {
+        val baseMethods = CircuitZkFunctionHandler::class.java.methods.map { it.name }.toSet()
+        assertFalse("consentItems" in baseMethods)
+        assertFalse("resultKind" in baseMethods)
+        assertTrue(CircuitZkProfileFunctionHandler::class.java.isAssignableFrom(PredicateFunctionHandler::class.java))
+    }
+
+    @Test
     fun `age_check holds for the birth date in range, and is judged like any other declared predicate`() {
         val h = PredicateFunctionHandler(PredicateFunctions.AGE_CHECK)
         assertTrue(h.holds(fn("age_check", """{"ge":"1999-01-01","le":"2005-01-01"}"""), mdoc()))
@@ -70,6 +80,17 @@ class PredicateFunctionHandlerTest {
         assertFalse(h.holds(fn("number_range", """{"claim":"score","ge":10,"le":20}"""), mdoc(score = CBORObject.FromObject(25L))))
         // An absent claim cannot satisfy it.
         assertFalse(h.holds(fn("number_range", """{"claim":"nope","ge":10,"le":20}"""), mdoc()))
+    }
+
+    @Test
+    fun `a declared predicate delegates its consent and result metadata to the same declaration`() {
+        val h = PredicateFunctionHandler(numberRange)
+        val f = fn("number_range", """{"claim":"score","ge":10,"le":20}""")
+        val item = h.consentItems(f, null, java.time.LocalDate.parse("2026-10-19"), emptyList(), null)?.single() as org.siros.sdk.credentials.ConsentItem.Predicate
+        assertEquals("number_range", item.functionId)
+        assertEquals(listOf("score"), item.claim.path)
+        assertEquals(CircuitZkResultKind.PREDICATE_TRUE, h.resultKind(f))
+        assertNull(h.consentItems(fn("number_range", """{}"""), null, java.time.LocalDate.parse("2026-10-19"), emptyList(), null))
     }
 
     @Test

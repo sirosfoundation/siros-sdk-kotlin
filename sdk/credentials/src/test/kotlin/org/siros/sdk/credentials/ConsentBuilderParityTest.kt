@@ -62,4 +62,28 @@ class ConsentBuilderParityTest {
         assertFalse(PredicateFunctions.spanAtLeast(ValueType.NUMBER, "1", "1e999999999", 10))
         assertTrue(PredicateFunctions.spanAtLeast(ValueType.NUMBER, "0", "1e100", 10))
     }
+
+    private val profilePlan = CircuitZkPlan(listOf(CircuitZkFunction("profile_function", "p")))
+    private val profileItem = ConsentItem.Claim("profile_claim")
+
+    @Test
+    fun aProfileResolverSuppliesStructuredItemsOnlyForOtherwiseUnknownFunctions() {
+        val items = ConsentItems.build(profilePlan, null, today, profileItems = { _, _, _, _, _ -> listOf(profileItem) })
+        assertEquals(listOf(profileItem), items)
+        assertNull(ConsentItems.build(profilePlan, null, today))
+    }
+
+    @Test
+    fun nullEmptyOrFailingProfileConsentMetadataIsRefused() {
+        assertNull(ConsentItems.build(profilePlan, null, today, profileItems = { _, _, _, _, _ -> null }))
+        assertNull(ConsentItems.build(profilePlan, null, today, profileItems = { _, _, _, _, _ -> emptyList() }))
+        assertNull(ConsentItems.build(profilePlan, null, today, profileItems = { _, _, _, _, _ -> error("resolver failed") }))
+    }
+
+    @Test
+    fun aMalformedDeclaredPredicateNeverFallsBackToTheProfileResolver() {
+        val malformed = CircuitZkPlan(listOf(CircuitZkFunction("age_check", "a")))
+        val items = ConsentItems.build(malformed, null, today, profileItems = { _, _, _, _, _ -> listOf(profileItem) })
+        assertNull(items)
+    }
 }

@@ -25,7 +25,7 @@ private fun elementBytes(document: DocumentMdoc, name: String): ByteArray? {
  * `pseudonym`: needs the seed its config derives from (the device `private_seed` or the
  * issuer-delivered `secret_seed`) and a user value where the config takes one.
  */
-object PseudonymFunctionHandler : CircuitZkFunctionHandler {
+object PseudonymFunctionHandler : CircuitZkProfileFunctionHandler {
     override val functionId = "pseudonym"
 
     override fun witnessNeeds(function: CircuitZkFunction): Set<CircuitZkWitnessKind> {
@@ -44,6 +44,8 @@ object PseudonymFunctionHandler : CircuitZkFunctionHandler {
     }
 
     override fun holds(function: CircuitZkFunction, credential: DocumentMdoc) = true
+
+    override fun resultKind(function: CircuitZkFunction): CircuitZkResultKind = CircuitZkResultKind.PSEUDONYM
 
     // The circuit reads ssc and birth_date from the doctype namespace and does not check that no other namespace holds
     // an attribute of the same name: a credential with a decoy or extra namespace is never proved.

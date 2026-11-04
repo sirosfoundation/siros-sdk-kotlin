@@ -25,10 +25,8 @@ object SecretSeedCommitment {
      * element is absent or the element occurs more than once there. The same element name in another
      * namespace is never consulted.
      */
-    fun doctypeElement(document: DocumentMdoc, name: String): CBORObject? {
-        val matches = document.issuerSigned.nameSpaces[document.docType].orEmpty().filter { it.item.elementIdentifier == name }
-        return matches.singleOrNull()?.item?.elementValue
-    }
+    fun doctypeElement(document: DocumentMdoc, name: String): CBORObject? =
+        MdocElements.single(document, document.docType, name)
 
     /** Whether `SHA256(seed) == ssc`, compared in constant time. False for any wrong length. */
     fun opens(seed: ByteArray, ssc: ByteArray): Boolean {

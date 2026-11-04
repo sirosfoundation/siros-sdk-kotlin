@@ -8346,6 +8346,8 @@ class SirosWalletTest {
         functionsPerQuery: ((Int) -> List<org.siros.sdk.credentials.CircuitZkFunction>)? = null,
         /** The predicate functions the wallet can describe; null is the wallet's default (age_check only). */
         predicates: org.siros.sdk.credentials.PredicateFunctions? = null,
+        /** Additional profile adapters and function handlers registered through WalletConfig. */
+        profiles: List<org.siros.sdk.keystore.CircuitZkProfile> = emptyList(),
         /** Functions (id) the circuit and the validator accept besides the rulebook ones: their rules are empty. */
         extraFunctions: Set<String> = emptySet(),
         /** Called with the client_metadata the planner is given for each query. */
@@ -8411,6 +8413,7 @@ class SirosWalletTest {
                 backendUrl = "https://backend.example",
                 readerTrustEvaluationMode = if (localOnlyTrust) MdocTrustEvaluationMode.LOCAL_ONLY else null,
                 circuitZkPredicateFunctions = predicates ?: org.siros.sdk.credentials.PredicateFunctions.DEFAULT,
+                circuitZkProfiles = profiles,
             ),
             "circuitZkSupport" to (if (flagOn) support else null),
             *(if (defaultProver) arrayOf("defaultCircuitZkProverHolder" to defaultCatalogProverHolder()) else arrayOf("circuitZkProver" to prover)),
@@ -10649,8 +10652,12 @@ class SirosWalletTest {
         declared: Boolean = true,
         consent: suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean = { false },
         innerProver: org.siros.sdk.keystore.CircuitZkProver? = null,
+        profiles: List<org.siros.sdk.keystore.CircuitZkProfile> = emptyList(),
+        handles: List<String> = listOf("p"),
     ) = czkSetup(
-        functions = listOf(org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement(params).jsonObject)),
+        functions = handles.map { handle ->
+            org.siros.sdk.credentials.CircuitZkFunction("number_range", handle, Json.parseToJsonElement(params).jsonObject)
+        },
         credentials = listOf(StoredCredential(
             id = 1L, format = "mso_mdoc",
             raw = CzkFixtures.mdoc(extra = listOf("score" to scoreValue)),
@@ -10660,6 +10667,7 @@ class SirosWalletTest {
         extraFunctions = setOf("number_range"),
         consent = consent,
         innerProver = innerProver,
+        profiles = profiles,
     )
 
     @Test
@@ -10742,6 +10750,130 @@ class SirosWalletTest {
         override suspend fun prove(input: org.siros.sdk.keystore.CircuitZkProveInput) = org.siros.sdk.keystore.CircuitZkProveOutput(
             proof = byteArrayOf(1), results = input.plan.functions.associate { it.handle to org.siros.sdk.credentials.ResultValue.Predicate },
         )
+    }
+
+    private class ProfilePredicateHandler(
+        override val functionId: String,
+        private val withConsent: Boolean = true,
+        private val withResult: Boolean = true,
+        private val resultHandles: Set<String>? = null,
+        private val throwResult: Boolean = false,
+    ) : org.siros.sdk.keystore.CircuitZkProfileFunctionHandler {
+        override fun witnessNeeds(function: org.siros.sdk.credentials.CircuitZkFunction) = emptySet<org.siros.sdk.keystore.CircuitZkWitnessKind>()
+        override fun holds(function: org.siros.sdk.credentials.CircuitZkFunction, credential: org.siros.sdk.credentials.mdoc.DocumentMdoc) = true
+        override fun consentItems(
+            function: org.siros.sdk.credentials.CircuitZkFunction,
+            verifierId: String?,
+            today: java.time.LocalDate,
+            claims: List<org.siros.sdk.credentials.ClaimMeta>,
+            namespace: String?,
+        ): List<org.siros.sdk.credentials.ConsentItem>? = if (withConsent) {
+            listOf(
+                org.siros.sdk.credentials.ConsentItem.Predicate(
+                    functionId,
+                    org.siros.sdk.credentials.ClaimRef(listOf("score"), "Credit score"),
+                    org.siros.sdk.credentials.ValueType.NUMBER,
+                    listOf(org.siros.sdk.credentials.Condition(org.siros.sdk.credentials.ComparisonOp.GE, listOf("10"))),
+                    null,
+                ),
+            )
+        } else {
+            null
+        }
+
+        override fun resultKind(function: org.siros.sdk.credentials.CircuitZkFunction): org.siros.sdk.keystore.CircuitZkResultKind? {
+            if (throwResult) error("result metadata failed")
+            return if (withResult && (resultHandles == null || function.handle in resultHandles)) {
+                org.siros.sdk.keystore.CircuitZkResultKind.PREDICATE_TRUE
+            } else {
+                null
+            }
+        }
+    }
+
+    private val profileTestAdapter = object : org.siros.sdk.keystore.CircuitZkSystemAdapter {
+        override val systems = setOf(org.siros.sdk.keystore.CircuitZkSystemKey("example-profile", "1"))
+        override fun admits(circuit: org.siros.sdk.credentials.CircuitZkCircuit, plan: org.siros.sdk.credentials.CircuitZkPlan) = true
+        override suspend fun prove(
+            descriptor: org.siros.sdk.credentials.ZkCircuitDescriptor,
+            input: org.siros.sdk.keystore.CircuitZkProveInput,
+        ): org.siros.sdk.keystore.CircuitZkProveOutput = throw UnsupportedOperationException("the custom prover is used in this test")
+    }
+
+    private fun profilePredicate(handler: org.siros.sdk.keystore.CircuitZkFunctionHandler) =
+        org.siros.sdk.keystore.CircuitZkProfile(profileTestAdapter, listOf(handler))
+
+    @Test
+    fun circuitZkConsent_aProfileOnlyPredicateCompletesWithoutAGlobalPredicateDeclaration() = runTest(dispatcher) {
+        val s = czkScoreSetup(
+            15,
+            declared = false,
+            consent = { true },
+            innerProver = predicateOnlyProver,
+            profiles = listOf(profilePredicate(ProfilePredicateHandler("number_range"))),
+        )
+        val result = czkRun(s, czkRequest())
+
+        assertEquals(listOf(1L), result.credentialIds)
+        assertEquals(1, s.prover.calls)
+        val item = s.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.Predicate
+        assertEquals("number_range", item.functionId)
+        assertEquals(org.siros.sdk.credentials.ResultValue.Predicate, czkDecoded(result.responseJson).results["p"])
+    }
+
+    @Test
+    fun circuitZkConsent_aProfileWithoutConsentMetadataIsRefusedBeforeConsentOrProof() = runTest(dispatcher) {
+        val s = czkScoreSetup(
+            15,
+            declared = false,
+            consent = { true },
+            innerProver = predicateOnlyProver,
+            profiles = listOf(profilePredicate(ProfilePredicateHandler("number_range", withConsent = false))),
+        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        assertTrue(s.consents.isEmpty())
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkConsent_aProfileWithoutResultMetadataNeverEmitsAToken() = runTest(dispatcher) {
+        val s = czkScoreSetup(
+            15,
+            declared = false,
+            consent = { true },
+            innerProver = predicateOnlyProver,
+            profiles = listOf(profilePredicate(ProfilePredicateHandler("number_range", withResult = false))),
+        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+        assertEquals(1, s.consents.size)
+        assertEquals(1, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkConsent_oneSameIdOccurrenceCannotAuthorizeAnotherOccurrencesMissingResultMetadata() = runTest(dispatcher) {
+        val s = czkScoreSetup(
+            15,
+            declared = false,
+            consent = { true },
+            innerProver = predicateOnlyProver,
+            profiles = listOf(profilePredicate(ProfilePredicateHandler("number_range", resultHandles = setOf("p")))),
+            handles = listOf("p", "p2"),
+        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+        assertEquals(1, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkConsent_throwingResultMetadataIsARefusalNotAnEscapedException() = runTest(dispatcher) {
+        val s = czkScoreSetup(
+            15,
+            declared = false,
+            consent = { true },
+            innerProver = predicateOnlyProver,
+            profiles = listOf(profilePredicate(ProfilePredicateHandler("number_range", throwResult = true))),
+        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+        assertEquals(1, s.prover.calls)
     }
 
     @Test

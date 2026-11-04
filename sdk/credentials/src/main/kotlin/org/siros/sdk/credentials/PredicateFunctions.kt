@@ -345,16 +345,18 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
         private fun same(type: ValueType, a: String, b: String) = if (type == ValueType.STRING || type == ValueType.BOOL) a == b else compare(type, a, b) == 0
 
         /**
-         * A claim reader over an mdoc: only a one-element path in the credential's own doctype namespace (the
-         * namespace nym_auth binds) is read; anything else is [ClaimLookup.Unsupported]. A duplicated element is
-         * absent; a value of another CBOR type than [ValueType] is a [ClaimLookup.Found] of a mismatching type
-         * (so no comparison holds).
+         * A claim reader over an mdoc. A one-element path names an element in the credential's doctype
+         * namespace (the nym_auth layout). A two-element path is `[namespace, element]`, for profiles
+         * such as mDL whose namespace differs from their doctype. Anything else is
+         * [ClaimLookup.Unsupported]. A duplicated element is absent; a value of another CBOR type than
+         * [ValueType] is a [ClaimLookup.Found] of a mismatching type (so no comparison holds).
          */
         fun mdocReader(document: DocumentMdoc): (List<String>, ValueType) -> ClaimLookup = { path, type ->
-            if (path.size != 1) {
+            if (path.size != 1 && path.size != 2) {
                 ClaimLookup.Unsupported
             } else {
-                val v = SecretSeedCommitment.doctypeElement(document, path[0])
+                val namespace = if (path.size == 1) document.docType else path[0]
+                val v = MdocElements.single(document, namespace, path.last())
                 if (v == null) ClaimLookup.Absent else ClaimLookup.Found(read(v, type))
             }
         }

@@ -77,17 +77,36 @@ class LongfellowZkProofSystem(
          * whether the proof itself succeeded).
          */
         private const val PSEUDONYM_SEED_ELEMENT = "pseudonym_seed"
+
+        private val BUILT_IN_CREDENTIAL_TYPES = setOf(
+            CredentialTypeRef(CredentialFormat.MSO_MDOC, "org.iso.18013.5.1.mDL"),
+            CredentialTypeRef(CredentialFormat.MSO_MDOC, "eu.europa.ec.eudi.pid.1"),
+        )
     }
+
+    /**
+     * Additional mdoc types supported by the configured circuits. The original three-argument
+     * constructor keeps the built-in mDL/PID defaults; this overload adds another profile without
+     * changing any existing JVM signature.
+     */
+    constructor(
+        zkCircuitClient: ZkCircuitClient,
+        pseudonymDeriver: ZkPseudonymDeriver = DefaultZkPseudonymDeriver,
+        residency: ZkProverResidency = ZkProverResidency(),
+        additionalTypes: Set<CredentialTypeRef>,
+    ) : this(zkCircuitClient, pseudonymDeriver, residency) {
+        additionalCredentialTypes = additionalTypes.toSet()
+    }
+
+    private var additionalCredentialTypes: Set<CredentialTypeRef> = emptySet()
 
     override val systemId: String = "longfellow-libzk-v1"
 
     // mdoc only: this system proves over a DeviceResponse, and its native
     // prover parses CBOR. Declaring the format explicitly is what keeps an
     // SD-JWT VC or JWP credential of the same type from being routed here.
-    override val supportedCredentialTypes: Set<CredentialTypeRef> = setOf(
-        CredentialTypeRef(CredentialFormat.MSO_MDOC, "org.iso.18013.5.1.mDL"),
-        CredentialTypeRef(CredentialFormat.MSO_MDOC, "eu.europa.ec.eudi.pid.1"),
-    )
+    override val supportedCredentialTypes: Set<CredentialTypeRef>
+        get() = BUILT_IN_CREDENTIAL_TYPES + additionalCredentialTypes
 
     /**
      * Residency key: (circuit id, attribute count) - a circuit is compiled

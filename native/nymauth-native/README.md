@@ -2,6 +2,12 @@
 
 Native nymauth provers for the SIROS SDKs (Kotlin first), through UniFFI.
 
+This crate implements the **nym_auth credential profile**, not the generic circuit-ZK engine. Generic
+profile registration and Longfellow/Vega composition live in `CatalogCircuitZkProver` and
+`CircuitZkSystemRegistry`; see `docs/CIRCUIT_ZK_PROFILES.md`. Its nym-specific doctype, statement,
+approved circuits, seed handling and pseudonym layout are deliberately not generalized by accepting a
+caller-supplied doctype.
+
 **Longfellow** proves the nym_auth mdoc circuits (the nym-auth-circuits archive's LFC2 pair: the age range and
 the `known-offender-matching-ssc` pseudonym with `prf` `sha-256`) on **Google's longfellow-zk Rust runtime**
 (`61a8a73`). It does so through community-demo's own `nym-longfellow` crate, the code community-demo's verifier

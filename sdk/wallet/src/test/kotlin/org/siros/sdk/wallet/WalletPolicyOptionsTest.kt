@@ -191,11 +191,13 @@ class WalletPolicyOptionsTest {
     }
 
     @Test
-    fun `a blank, repeated or unknown proof system preference is refused when the configuration is built`() {
+    fun `a blank, untrimmed or repeated proof system preference is refused when the configuration is built`() {
         fun build(vararg p: String) = WalletConfig(backendUrl = "https://wallet.example.com", zkProofSystemPreference = p.toList())
         build()
         build("vega-v1", "urn:circuits:longfellow:nym_auth:v1")
-        for (bad in listOf(arrayOf(""), arrayOf("  "), arrayOf("vega-v1", "vega-v1"), arrayOf("urn:circuits:other:v1"), arrayOf("vega-v1", "nope"))) {
+        // Other profiles and future proof systems can register new identifiers.
+        build("urn:circuits:other:v1", "future-proof-system-v1")
+        for (bad in listOf(arrayOf(""), arrayOf("  "), arrayOf(" vega-v1"), arrayOf("vega-v1 "), arrayOf("vega-v1", "vega-v1"))) {
             val e = runCatching { build(*bad) }.exceptionOrNull()
             assertTrue("${bad.toList()} must be refused", e is IllegalArgumentException)
         }

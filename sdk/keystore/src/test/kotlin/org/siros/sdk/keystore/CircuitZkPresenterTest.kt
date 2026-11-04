@@ -962,6 +962,7 @@ class CircuitZkPresenterTest {
         val ssc = fn("known-offender-matching-ssc")
         val psc = fn("known-offender-matching-psc")
         assertTrue(PseudonymFunctionHandler.needsVerifierId(ssc))
+        assertEquals(CircuitZkResultKind.PSEUDONYM, PseudonymFunctionHandler.resultKind(ssc))
         assertTrue(PseudonymFunctionHandler.needsSecretSeed(ssc))
         assertFalse(PseudonymFunctionHandler.needsSecretSeed(psc))
         assertFalse(PseudonymFunctionHandler.needsVerifierId(fn("user-managed-pseudonym-xsite-ssc")))
