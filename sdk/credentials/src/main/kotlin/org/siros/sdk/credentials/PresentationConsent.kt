@@ -107,6 +107,15 @@ sealed interface ConsentItem {
     data class LegacyPseudonym(val verifierContext: String?) : ConsentItem
 }
 
+/** Resolves structured consent items for an otherwise-unknown profile function; null or empty refuses consent. */
+typealias CircuitZkConsentItemResolver = (
+    CircuitZkFunction,
+    String?,
+    LocalDate,
+    List<ClaimMeta>,
+    String?,
+) -> List<ConsentItem>?
+
 /**
  * Builds a [PresentationConsentRequest] from what phase 1 of a `circuit_zk` request established. Pure.
  * The cross-SDK vectors (`spec/circuit-zk-consent-vectors.json`) pin its output.
@@ -148,9 +157,39 @@ object ConsentRequests {
         today: LocalDate,
         locale: String,
         predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
+    ): PresentationConsentRequest? = build(
+        queries,
+        trust,
+        verifiedClientIdDisplayName,
+        attestedOrigin,
+        verifierIdType,
+        requestSigned,
+        today,
+        locale,
+        predicates,
+        { _, _, _, _, _ -> null },
+    )
+
+    /** The profile-aware form of [build]. [profileItems] is consulted only for otherwise-unknown functions. */
+    fun build(
+        queries: List<Query>,
+        trust: Trust,
+        verifiedClientIdDisplayName: String?,
+        attestedOrigin: String,
+        verifierIdType: String?,
+        requestSigned: Boolean,
+        today: LocalDate,
+        locale: String,
+        predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
+        profileItems: CircuitZkConsentItemResolver,
     ): PresentationConsentRequest? {
         if (queries.isEmpty()) return null
-        val entries = queries.map { q -> ConsentEntry(q.credential, ConsentItems.build(q.plan, q.verifierId, today, q.claims, predicates, q.namespace) ?: return null) }
+        val entries = queries.map { q ->
+            ConsentEntry(
+                q.credential,
+                ConsentItems.build(q.plan, q.verifierId, today, q.claims, predicates, q.namespace, profileItems) ?: return null,
+            )
+        }
         return PresentationConsentRequest(
             verifier = ConsentVerifier(
                 label = label(trust.entityName, verifiedClientIdDisplayName, attestedOrigin),
@@ -193,6 +232,17 @@ object ConsentItems {
         claims: List<ClaimMeta> = emptyList(),
         predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
         namespace: String? = null,
+    ): List<ConsentItem>? = build(plan, verifierId, today, claims, predicates, namespace) { _, _, _, _, _ -> null }
+
+    /** The profile-aware form of [build], with no fallback for a malformed declared predicate. */
+    fun build(
+        plan: CircuitZkPlan,
+        verifierId: String?,
+        today: LocalDate,
+        claims: List<ClaimMeta> = emptyList(),
+        predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
+        namespace: String? = null,
+        profileItems: CircuitZkConsentItemResolver,
     ): List<ConsentItem>? {
         val items = ArrayList<ConsentItem>()
         for (f in plan.functions) {
@@ -210,8 +260,20 @@ object ConsentItems {
                     legacy.claims.forEach { items += ConsentItem.Claim(it) }
                     if (legacy.pseudonym) items += ConsentItem.LegacyPseudonym(legacy.verifierContext)
                 }
-                // Any other function must be a declared predicate function: one we cannot describe is refused.
-                else -> items += predicates.item(f, claims, today, namespace) ?: return null
+                else -> {
+                    val resolved = if (f.id in predicates.ids) {
+                        // A declared predicate that cannot be parsed never falls through to a second interpretation.
+                        predicates.item(f, claims, today, namespace)?.let { listOf(it) }
+                    } else {
+                        val custom = try {
+                            profileItems(f, verifierId, today, claims, namespace)
+                        } catch (_: Exception) {
+                            null
+                        }
+                        custom?.takeIf { it.isNotEmpty() }
+                    }
+                    items += resolved ?: return null
+                }
             }
         }
         return items.takeIf { it.isNotEmpty() }

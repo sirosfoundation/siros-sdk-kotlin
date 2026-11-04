@@ -42,6 +42,13 @@ app with its own protocol client) compose `sdk:keystore`, `sdk:auth` and
 pulls `sdk:flow` and the engine conversation in. Both are supported and
 covered by the API dump; see [docs/TWO-APIS.md](docs/TWO-APIS.md).
 
+## Circuit-ZK composition
+
+nym_auth is one registered credential/circuit profile, not the generic engine. The catalog dispatcher,
+presenter, and wallet compose profiles through `CircuitZkProfile` and `CircuitZkSystemRegistry`, with
+Longfellow and Vega supplied through the separate `ZkProofSystemRegistry`. Additional profiles are
+registered through `WalletConfig.circuitZkProfiles`; see [docs/CIRCUIT_ZK_PROFILES.md](docs/CIRCUIT_ZK_PROFILES.md).
+
 ## Module Responsibilities
 
 ### sdk:transport

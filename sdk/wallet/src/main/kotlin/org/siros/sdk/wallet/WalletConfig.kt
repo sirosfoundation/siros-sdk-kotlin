@@ -387,7 +387,8 @@ data class WalletConfig(
      * ISRG's `zk-cred-longfellow` is `UniffiNymAuthNativeProver.withBindings(ZkCredLongfellowNymAuthBinding)`. A build
      * whose native libraries lack the nymauth entry points refuses every nymauth request instead of crashing. To swap
      * the implementation of one system and keep the others, pass `UniffiNymAuthNativeProver.withBindings(yourBinding)`
-     * ([org.siros.sdk.keystore.NymAuthBinding]).
+     * ([org.siros.sdk.keystore.NymAuthBinding]). This configures only the nym_auth profile; other
+     * credential/circuit profiles are supplied through [circuitZkProfiles].
      */
     val circuitZkNativeProver: org.siros.sdk.keystore.NymAuthNativeProver? = null,
     /**
@@ -458,8 +459,9 @@ data class WalletConfig(
      * `urn:circuits:longfellow:nym_auth:v1`) or proof systems (`vega-v1`, `longfellow-libzk-v1`). Empty (the default) is no preference:
      * the first offered circuit in catalog order, as before. A non-empty list narrows the choice to the systems it names, tried in its
      * order: a system that is not listed is never chosen, and when the verifier offered none of the listed ones the request is
-     * refused like any request nothing offered can answer. It never reaches outside what the verifier offered. Blank, repeated or
-     * unknown entries are refused when the configuration is built.
+     * refused like any request nothing offered can answer. It never reaches outside what the verifier offered. Blank, untrimmed or
+     * repeated entries are refused when the configuration is built. Unknown profile/proof-system ids are allowed here and select
+     * nothing unless the verifier offers them, the catalog publishes them and a registered profile admits them.
      */
     val zkProofSystemPreference: List<String> = emptyList(),
     /**
@@ -486,17 +488,27 @@ data class WalletConfig(
      * here. See [WscdAssuranceScheme]'s doc comment for why this is a
      * deployment decision the SDK (never `siros-wscd-manager`) owns.
      *
-     * Deliberately the LAST constructor parameter (not grouped next to the
-     * other WSCD-related fields above): [WalletConfig] is a public `data
-     * class` whose `component*`/`copy`/constructor signatures are generated
-     * in declaration order, so inserting a new field anywhere but the end
-     * would silently renumber every later one, breaking binary compatibility
-     * for already-compiled callers - the exact class of bug a Copilot review
-     * caught on [WscdSelectionPolicy]'s constructor during this same change.
+     * Deliberately not grouped next to the other WSCD-related fields above:
+     * [WalletConfig] is a public `data class` whose `component*`/`copy`/constructor
+     * signatures are generated in declaration order. New fields are appended
+     * rather than inserted, so existing field numbers and binary call sites are
+     * preserved - the exact class of bug a Copilot review caught on
+     * [WscdSelectionPolicy]'s constructor during this same change. Hidden compatibility overloads below
+     * retain the previous constructor and `copy` JVM descriptors as well.
      */
     val wscdAssuranceScheme: WscdAssuranceScheme = Iso18045AssuranceScheme.DEFAULT,
+    /**
+     * Additional credential/circuit profiles for the standard catalog prover and presenter. The
+     * built-in nym_auth and legacy mdoc Longfellow/Vega profiles stay registered; these adapters
+     * and their function handlers are appended. Duplicate catalog `(system, systemVersion)` keys or
+     * function ids are rejected at construction. This is the generic circuit-ZK extension point;
+     * [circuitZkNativeProver] configures only the built-in nym_auth adapter's native implementation.
+     * Appended last to preserve the constructor-field order of this public data class.
+     */
+    val circuitZkProfiles: List<org.siros.sdk.keystore.CircuitZkProfile> = emptyList(),
 ) {
     init {
+        org.siros.sdk.keystore.CircuitZkProfile.validateAdditional(circuitZkProfiles, circuitZkPredicateFunctions)
         wscdPluginClaims.forEach { (keystoreId, claim) ->
             require(availableKeystores?.containsKey(keystoreId) == true) { "wscdPluginClaims names a keystore that is not registered in availableKeystores" }
             require(Regex("[a-z0-9_-]{1,64}").matches(claim)) { "a wscdPluginClaims value must be 1-64 characters of [a-z0-9_-]" }
@@ -507,6 +519,226 @@ data class WalletConfig(
             "credentialTierCatalog needs availableKeystores: the tier is met by one of the registered keystores"
         }
     }
+
+    /**
+     * The pre-[circuitZkProfiles] constructor, retained only for already-compiled callers. Hiding it
+     * from Kotlin overload resolution keeps the new primary constructor unambiguous while preserving
+     * both the old ordinary and default-mask JVM descriptors.
+     */
+    @Deprecated("Binary compatibility with the pre-circuitZkProfiles constructor", level = DeprecationLevel.HIDDEN)
+    constructor(
+        backendUrl: String,
+        tenantId: String = "default",
+        redirectUri: String = "",
+        useSystemCredentialManager: Boolean = true,
+        credentialStore: CredentialStore? = null,
+        httpClient: OkHttpClient? = null,
+        urlRewriter: ((String) -> String)? = null,
+        requireUserAuth: Boolean = true,
+        keystore: KeystoreManager? = null,
+        nativeAttestationProvider: NativeAttestationProvider? = null,
+        engineUrl: String? = null,
+        useWmpProtocol: Boolean = false,
+        availableKeystores: Map<String, KeystoreManager>? = null,
+        defaultWscdMapping: Map<String, String>? = null,
+        requestWscdChoice: RequestWscdChoice? = null,
+        registryUrl: String? = null,
+        zkCircuitUrls: List<String> = listOf(ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
+        bbsCredentialTypes: Set<String> = emptySet(),
+        readerTrustRootCertificatesPem: List<String> = emptyList(),
+        preferLocalReaderTrustEvaluation: Boolean = false,
+        issuerTrustRootCertificatesPem: List<String> = emptyList(),
+        preferLocalIssuerTrustEvaluation: Boolean = false,
+        onWscdOperationStart: (suspend (pluginId: String) -> Unit)? = null,
+        onWscdOperationEnd: (suspend () -> Unit)? = null,
+        readerTrustEvaluationMode: MdocTrustEvaluationMode? = null,
+        issuerTrustEvaluationMode: MdocTrustEvaluationMode? = null,
+        useLegacyAuth: Boolean = false,
+        transactionDataEnabled: Boolean = false,
+        interopProfile: InteropProfile = InteropProfile.DEFAULT,
+        issuerInteropProfiles: Map<String, InteropProfile> = emptyMap(),
+        diipProfile: DiipProfile = DiipProfile.LATEST,
+        clockToleranceSeconds: Long = 60,
+        vegaProfilingEnabled: Boolean = false,
+        dcApiExpectedOrigins: ExpectedOriginsMode = ExpectedOriginsMode.OFF,
+        dcApiRequiresSignedRequest: (kotlinx.serialization.json.JsonObject?) -> Boolean =
+            DCAPIRequestRules.DEFAULT_REQUIRES_SIGNED_REQUEST,
+        circuitZk: Boolean = false,
+        circuitZkPlanner: CircuitZkPlanner? = null,
+        circuitZkValidator: CircuitZkRequestValidator? = null,
+        circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = null,
+        circuitZkNativeProver: org.siros.sdk.keystore.NymAuthNativeProver? = null,
+        circuitZkVerifierIdTypes: List<String> = VerifierIdTypeOrder.DEFAULT,
+        circuitZkVerifierIdSources: List<VerifierIdSource> = emptyList(),
+        circuitZkPredicateFunctions: org.siros.sdk.credentials.PredicateFunctions = org.siros.sdk.credentials.PredicateFunctions.DEFAULT,
+        nonDisclosurePolicy: org.siros.sdk.credentials.NonDisclosurePolicy = org.siros.sdk.credentials.NonDisclosurePolicy.DEFAULT,
+        circuitZkCircuits: CircuitZkCircuitSource? = null,
+        trustDecisionCacheTtl: java.time.Duration = java.time.Duration.ofMinutes(5),
+        wscdPluginClaims: Map<String, String> = emptyMap(),
+        zkProofSystemPreference: List<String> = emptyList(),
+        credentialTierCatalog: org.siros.sdk.credentials.CredentialTierCatalog? = null,
+        wscdAssuranceScheme: WscdAssuranceScheme = Iso18045AssuranceScheme.DEFAULT,
+    ) : this(
+        backendUrl = backendUrl,
+        tenantId = tenantId,
+        redirectUri = redirectUri,
+        useSystemCredentialManager = useSystemCredentialManager,
+        credentialStore = credentialStore,
+        httpClient = httpClient,
+        urlRewriter = urlRewriter,
+        requireUserAuth = requireUserAuth,
+        keystore = keystore,
+        nativeAttestationProvider = nativeAttestationProvider,
+        engineUrl = engineUrl,
+        useWmpProtocol = useWmpProtocol,
+        availableKeystores = availableKeystores,
+        defaultWscdMapping = defaultWscdMapping,
+        requestWscdChoice = requestWscdChoice,
+        registryUrl = registryUrl,
+        zkCircuitUrls = zkCircuitUrls,
+        bbsCredentialTypes = bbsCredentialTypes,
+        readerTrustRootCertificatesPem = readerTrustRootCertificatesPem,
+        preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation,
+        issuerTrustRootCertificatesPem = issuerTrustRootCertificatesPem,
+        preferLocalIssuerTrustEvaluation = preferLocalIssuerTrustEvaluation,
+        onWscdOperationStart = onWscdOperationStart,
+        onWscdOperationEnd = onWscdOperationEnd,
+        readerTrustEvaluationMode = readerTrustEvaluationMode,
+        issuerTrustEvaluationMode = issuerTrustEvaluationMode,
+        useLegacyAuth = useLegacyAuth,
+        transactionDataEnabled = transactionDataEnabled,
+        interopProfile = interopProfile,
+        issuerInteropProfiles = issuerInteropProfiles,
+        diipProfile = diipProfile,
+        clockToleranceSeconds = clockToleranceSeconds,
+        vegaProfilingEnabled = vegaProfilingEnabled,
+        dcApiExpectedOrigins = dcApiExpectedOrigins,
+        dcApiRequiresSignedRequest = dcApiRequiresSignedRequest,
+        circuitZk = circuitZk,
+        circuitZkPlanner = circuitZkPlanner,
+        circuitZkValidator = circuitZkValidator,
+        circuitZkProver = circuitZkProver,
+        circuitZkNativeProver = circuitZkNativeProver,
+        circuitZkVerifierIdTypes = circuitZkVerifierIdTypes,
+        circuitZkVerifierIdSources = circuitZkVerifierIdSources,
+        circuitZkPredicateFunctions = circuitZkPredicateFunctions,
+        nonDisclosurePolicy = nonDisclosurePolicy,
+        circuitZkCircuits = circuitZkCircuits,
+        trustDecisionCacheTtl = trustDecisionCacheTtl,
+        wscdPluginClaims = wscdPluginClaims,
+        zkProofSystemPreference = zkProofSystemPreference,
+        credentialTierCatalog = credentialTierCatalog,
+        wscdAssuranceScheme = wscdAssuranceScheme,
+        circuitZkProfiles = emptyList(),
+    )
+
+    /** The old-shape `copy` and its generated `copy$default`, for binary callers only. */
+    @Deprecated("Binary compatibility with the pre-circuitZkProfiles copy", level = DeprecationLevel.HIDDEN)
+    @Suppress("DEPRECATION")
+    fun copy(
+        backendUrl: String = this.backendUrl,
+        tenantId: String = this.tenantId,
+        redirectUri: String = this.redirectUri,
+        useSystemCredentialManager: Boolean = this.useSystemCredentialManager,
+        credentialStore: CredentialStore? = this.credentialStore,
+        httpClient: OkHttpClient? = this.httpClient,
+        urlRewriter: ((String) -> String)? = this.urlRewriter,
+        requireUserAuth: Boolean = this.requireUserAuth,
+        keystore: KeystoreManager? = this.keystore,
+        nativeAttestationProvider: NativeAttestationProvider? = this.nativeAttestationProvider,
+        engineUrl: String? = this.engineUrl,
+        useWmpProtocol: Boolean = this.useWmpProtocol,
+        availableKeystores: Map<String, KeystoreManager>? = this.availableKeystores,
+        defaultWscdMapping: Map<String, String>? = this.defaultWscdMapping,
+        requestWscdChoice: RequestWscdChoice? = this.requestWscdChoice,
+        registryUrl: String? = this.registryUrl,
+        zkCircuitUrls: List<String> = this.zkCircuitUrls,
+        bbsCredentialTypes: Set<String> = this.bbsCredentialTypes,
+        readerTrustRootCertificatesPem: List<String> = this.readerTrustRootCertificatesPem,
+        preferLocalReaderTrustEvaluation: Boolean = this.preferLocalReaderTrustEvaluation,
+        issuerTrustRootCertificatesPem: List<String> = this.issuerTrustRootCertificatesPem,
+        preferLocalIssuerTrustEvaluation: Boolean = this.preferLocalIssuerTrustEvaluation,
+        onWscdOperationStart: (suspend (pluginId: String) -> Unit)? = this.onWscdOperationStart,
+        onWscdOperationEnd: (suspend () -> Unit)? = this.onWscdOperationEnd,
+        readerTrustEvaluationMode: MdocTrustEvaluationMode? = this.readerTrustEvaluationMode,
+        issuerTrustEvaluationMode: MdocTrustEvaluationMode? = this.issuerTrustEvaluationMode,
+        useLegacyAuth: Boolean = this.useLegacyAuth,
+        transactionDataEnabled: Boolean = this.transactionDataEnabled,
+        interopProfile: InteropProfile = this.interopProfile,
+        issuerInteropProfiles: Map<String, InteropProfile> = this.issuerInteropProfiles,
+        diipProfile: DiipProfile = this.diipProfile,
+        clockToleranceSeconds: Long = this.clockToleranceSeconds,
+        vegaProfilingEnabled: Boolean = this.vegaProfilingEnabled,
+        dcApiExpectedOrigins: ExpectedOriginsMode = this.dcApiExpectedOrigins,
+        dcApiRequiresSignedRequest: (kotlinx.serialization.json.JsonObject?) -> Boolean = this.dcApiRequiresSignedRequest,
+        circuitZk: Boolean = this.circuitZk,
+        circuitZkPlanner: CircuitZkPlanner? = this.circuitZkPlanner,
+        circuitZkValidator: CircuitZkRequestValidator? = this.circuitZkValidator,
+        circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = this.circuitZkProver,
+        circuitZkNativeProver: org.siros.sdk.keystore.NymAuthNativeProver? = this.circuitZkNativeProver,
+        circuitZkVerifierIdTypes: List<String> = this.circuitZkVerifierIdTypes,
+        circuitZkVerifierIdSources: List<VerifierIdSource> = this.circuitZkVerifierIdSources,
+        circuitZkPredicateFunctions: org.siros.sdk.credentials.PredicateFunctions = this.circuitZkPredicateFunctions,
+        nonDisclosurePolicy: org.siros.sdk.credentials.NonDisclosurePolicy = this.nonDisclosurePolicy,
+        circuitZkCircuits: CircuitZkCircuitSource? = this.circuitZkCircuits,
+        trustDecisionCacheTtl: java.time.Duration = this.trustDecisionCacheTtl,
+        wscdPluginClaims: Map<String, String> = this.wscdPluginClaims,
+        zkProofSystemPreference: List<String> = this.zkProofSystemPreference,
+        credentialTierCatalog: org.siros.sdk.credentials.CredentialTierCatalog? = this.credentialTierCatalog,
+        wscdAssuranceScheme: WscdAssuranceScheme = this.wscdAssuranceScheme,
+    ): WalletConfig = copy(
+        backendUrl = backendUrl,
+        tenantId = tenantId,
+        redirectUri = redirectUri,
+        useSystemCredentialManager = useSystemCredentialManager,
+        credentialStore = credentialStore,
+        httpClient = httpClient,
+        urlRewriter = urlRewriter,
+        requireUserAuth = requireUserAuth,
+        keystore = keystore,
+        nativeAttestationProvider = nativeAttestationProvider,
+        engineUrl = engineUrl,
+        useWmpProtocol = useWmpProtocol,
+        availableKeystores = availableKeystores,
+        defaultWscdMapping = defaultWscdMapping,
+        requestWscdChoice = requestWscdChoice,
+        registryUrl = registryUrl,
+        zkCircuitUrls = zkCircuitUrls,
+        bbsCredentialTypes = bbsCredentialTypes,
+        readerTrustRootCertificatesPem = readerTrustRootCertificatesPem,
+        preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation,
+        issuerTrustRootCertificatesPem = issuerTrustRootCertificatesPem,
+        preferLocalIssuerTrustEvaluation = preferLocalIssuerTrustEvaluation,
+        onWscdOperationStart = onWscdOperationStart,
+        onWscdOperationEnd = onWscdOperationEnd,
+        readerTrustEvaluationMode = readerTrustEvaluationMode,
+        issuerTrustEvaluationMode = issuerTrustEvaluationMode,
+        useLegacyAuth = useLegacyAuth,
+        transactionDataEnabled = transactionDataEnabled,
+        interopProfile = interopProfile,
+        issuerInteropProfiles = issuerInteropProfiles,
+        diipProfile = diipProfile,
+        clockToleranceSeconds = clockToleranceSeconds,
+        vegaProfilingEnabled = vegaProfilingEnabled,
+        dcApiExpectedOrigins = dcApiExpectedOrigins,
+        dcApiRequiresSignedRequest = dcApiRequiresSignedRequest,
+        circuitZk = circuitZk,
+        circuitZkPlanner = circuitZkPlanner,
+        circuitZkValidator = circuitZkValidator,
+        circuitZkProver = circuitZkProver,
+        circuitZkNativeProver = circuitZkNativeProver,
+        circuitZkVerifierIdTypes = circuitZkVerifierIdTypes,
+        circuitZkVerifierIdSources = circuitZkVerifierIdSources,
+        circuitZkPredicateFunctions = circuitZkPredicateFunctions,
+        nonDisclosurePolicy = nonDisclosurePolicy,
+        circuitZkCircuits = circuitZkCircuits,
+        trustDecisionCacheTtl = trustDecisionCacheTtl,
+        wscdPluginClaims = wscdPluginClaims,
+        zkProofSystemPreference = zkProofSystemPreference,
+        credentialTierCatalog = credentialTierCatalog,
+        wscdAssuranceScheme = wscdAssuranceScheme,
+        circuitZkProfiles = this.circuitZkProfiles,
+    )
 
     /**
      * The reader-trust mode actually in force: [readerTrustEvaluationMode] if

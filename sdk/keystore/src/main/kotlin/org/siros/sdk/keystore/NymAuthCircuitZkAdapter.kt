@@ -90,10 +90,7 @@ class NymAuthCircuitZkAdapter(
     val unsupportedCircuits: Set<String> get() = unsupported.toSet()
 
 
-    override val systems: Set<CircuitZkSystemKey> = setOf(
-        CircuitZkSystemKey(LONGFELLOW_SYSTEM, "61a8a73"),
-        CircuitZkSystemKey(VEGA_SYSTEM, "c0ee259"),
-    )
+    override val systems: Set<CircuitZkSystemKey> = SYSTEMS
 
     /** Whether a native prover is wired in; false means every request is refused. */
     override val canProve: Boolean get() = native != null
@@ -358,11 +355,35 @@ class NymAuthCircuitZkAdapter(
     private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
 
     companion object {
+        /**
+         * The nym_auth profile, registered through the same [CircuitZkProfile] path as every other
+         * credential profile. Its adapter handles catalog proving and its handlers cover the nym
+         * pseudonym and the currently declared nym predicate functions.
+         */
+        fun profile(
+            circuitClient: ZkCircuitClient,
+            native: NymAuthNativeProver? = null,
+            residency: ZkProverResidency = ZkProverResidency(),
+            clock: Clock = Clock.systemUTC(),
+            decompress: (ByteArray, ZkCircuitDescriptor) -> ByteBuffer = ::decompressZkCircuitArtifact,
+            predicates: org.siros.sdk.credentials.PredicateFunctions = org.siros.sdk.credentials.PredicateFunctions.DEFAULT,
+        ): CircuitZkProfile {
+            return CircuitZkProfile(
+                NymAuthCircuitZkAdapter(circuitClient, native, residency, clock, decompress),
+                listOf(PseudonymFunctionHandler) + predicates.ids.map { PredicateFunctionHandler(predicates[it]!!) },
+            )
+        }
+
         /** Catalog `system` of the Longfellow `nymauth-longfellow-*` circuits. */
         const val LONGFELLOW_SYSTEM = "longfellow-nymauth"
 
         /** Catalog `system` of the Vega `nymauth-vega-*` circuits. */
         const val VEGA_SYSTEM = "vega-nymauth"
+
+        internal val SYSTEMS: Set<CircuitZkSystemKey> = setOf(
+            CircuitZkSystemKey(LONGFELLOW_SYSTEM, "61a8a73"),
+            CircuitZkSystemKey(VEGA_SYSTEM, "c0ee259"),
+        )
 
         /** The only pseudonym configuration the `nymauth-*` circuits are built for. */
         const val SUPPORTED_CONFIG = "known-offender-matching-ssc"

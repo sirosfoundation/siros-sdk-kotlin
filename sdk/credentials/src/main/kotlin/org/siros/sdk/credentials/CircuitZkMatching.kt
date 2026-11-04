@@ -362,7 +362,7 @@ internal object CircuitZkMatching {
  * (`vega-v1`, `longfellow-libzk-v1`).
  */
 object ZkProofSystemPreference {
-    /** The identities this SDK's provers know; a preference entry outside them is refused when the configuration is built. */
+    /** Built-in examples, not an exhaustive registry: profiles and future proof systems may add other identifiers. */
     val KNOWN: Set<String> = setOf(
         "urn:circuits:longfellow:nym_auth:v1",
         "urn:circuits:vega:nym_auth:v1",
@@ -371,11 +371,15 @@ object ZkProofSystemPreference {
         "vega-mc-p256-v1",
     )
 
-    /** Refuses a preference that is blank, repeats an entry, or names a system this SDK does not know. */
+    /**
+     * Refuses only malformed preferences: blank or untrimmed entries and duplicates. An entry this
+     * build does not know is not a configuration error: it selects nothing unless the verifier offers
+     * it, the active catalog publishes it and a registered profile admits it.
+     */
     fun require(preference: List<String>) {
         preference.forEach {
             require(it.isNotBlank()) { "zkProofSystemPreference must not contain a blank entry" }
-            require(it in KNOWN) { "zkProofSystemPreference names a proof system this wallet does not know: $it" }
+            require(it == it.trim()) { "zkProofSystemPreference entries must be trimmed" }
         }
         require(preference.toSet().size == preference.size) { "zkProofSystemPreference must not list a system twice" }
     }

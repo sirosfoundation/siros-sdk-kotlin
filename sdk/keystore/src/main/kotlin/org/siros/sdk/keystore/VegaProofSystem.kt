@@ -93,6 +93,11 @@ class VegaProofSystem(
          */
         const val SYSTEM_ID = "vega-mc-p256-v1"
 
+        private val BUILT_IN_CREDENTIAL_TYPES = setOf(
+            CredentialTypeRef(CredentialFormat.MSO_MDOC, "org.iso.18013.5.1.mDL"),
+            CredentialTypeRef(CredentialFormat.MSO_MDOC, "eu.europa.ec.eudi.pid.1"),
+        )
+
         /** COSE algorithm identifier for ES256 (RFC 8152 §8.1) - the only alg [buildEcdsaWitness] accepts. */
         private const val COSE_ALG_ES256 = -7L
 
@@ -110,6 +115,23 @@ class VegaProofSystem(
         )
     }
 
+    /**
+     * Additional mdoc types supported by the configured circuits. The original four-argument
+     * constructor keeps the built-in mDL/PID defaults; this overload adds another profile without
+     * changing any existing JVM signature.
+     */
+    constructor(
+        zkCircuitClient: ZkCircuitClient,
+        residency: ZkProverResidency = ZkProverResidency(),
+        proofCache: VegaProofCache = VegaProofCache(),
+        profilingSink: VegaProfilingSink? = null,
+        additionalTypes: Set<CredentialTypeRef>,
+    ) : this(zkCircuitClient, residency, proofCache, profilingSink) {
+        additionalCredentialTypes = additionalTypes.toSet()
+    }
+
+    private var additionalCredentialTypes: Set<CredentialTypeRef> = emptySet()
+
     override val systemId: String = SYSTEM_ID
 
     /**
@@ -125,10 +147,8 @@ class VegaProofSystem(
      * as Longfellow - VEGA's broader circuit ambitions (e.g. SD-JWT VC) are
      * a planned future circuit, not this one.
      */
-    override val supportedCredentialTypes: Set<CredentialTypeRef> = setOf(
-        CredentialTypeRef(CredentialFormat.MSO_MDOC, "org.iso.18013.5.1.mDL"),
-        CredentialTypeRef(CredentialFormat.MSO_MDOC, "eu.europa.ec.eudi.pid.1"),
-    )
+    override val supportedCredentialTypes: Set<CredentialTypeRef>
+        get() = BUILT_IN_CREDENTIAL_TYPES + additionalCredentialTypes
 
     /** Residency key: circuit/spec id - a single prover key handle serves every presentation with that circuit. */
     private fun residencyKey(spec: ZkSystemSpec) = "$systemId:${spec.id}"

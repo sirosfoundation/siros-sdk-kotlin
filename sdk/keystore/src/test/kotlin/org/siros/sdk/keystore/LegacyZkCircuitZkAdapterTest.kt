@@ -240,6 +240,20 @@ class LegacyZkCircuitZkAdapterTest {
     }
 
     @Test
+    fun `the predicate reader supports an explicit mdoc namespace instead of assuming it equals the doctype`() {
+        val document = org.siros.sdk.credentials.mdoc.MdocCbor.parseStoredCredential(credential())
+        val found = org.siros.sdk.credentials.PredicateFunctions.mdocReader(document)(
+            listOf(namespace, "family_name"),
+            org.siros.sdk.credentials.ValueType.STRING,
+        )
+        assertEquals(org.siros.sdk.credentials.ClaimValue(org.siros.sdk.credentials.ValueType.STRING, "Doe"), (found as org.siros.sdk.credentials.ClaimLookup.Found).value)
+        assertEquals(
+            org.siros.sdk.credentials.ClaimLookup.Absent,
+            org.siros.sdk.credentials.PredicateFunctions.mdocReader(document)(listOf(docType, "family_name"), org.siros.sdk.credentials.ValueType.STRING),
+        )
+    }
+
+    @Test
     fun `a pseudonym request carries the verifier identity, counts the pseudonym slot, and returns the legacy pseudonym`() {
         val pseudonym = ByteArray(32) { 0x55 }
         val fake = FakeLegacy(pseudonym = pseudonym)

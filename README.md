@@ -231,6 +231,9 @@ flowClient.startIssuance(OID4VCIFlowParams(credentialOfferUri = uri))
 
 ## Documentation
 
+- [Circuit-ZK profile registration](docs/CIRCUIT_ZK_PROFILES.md): nym_auth as one profile, additional
+  credential/circuit profiles, Longfellow/Vega extension points, and fail-closed requirements.
+
 API documentation is generated using [Dokka](https://kotl.in/dokka).
 
 ```bash

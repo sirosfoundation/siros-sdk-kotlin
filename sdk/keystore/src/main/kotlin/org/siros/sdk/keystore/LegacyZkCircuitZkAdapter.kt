@@ -29,12 +29,7 @@ import timber.log.Timber
  */
 class LegacyZkCircuitZkAdapter(private val presentation: ZkMdocPresentation) : CircuitZkSystemAdapter {
 
-    override val systems: Set<CircuitZkSystemKey> = setOf(
-        CircuitZkSystemKey(LONGFELLOW_CATALOG_SYSTEM, "6"),
-        CircuitZkSystemKey(LONGFELLOW_CATALOG_SYSTEM, "7"),
-        CircuitZkSystemKey(LONGFELLOW_CATALOG_SYSTEM, "8"),
-        CircuitZkSystemKey(VEGA_CATALOG_SYSTEM, "12"),
-    )
+    override val systems: Set<CircuitZkSystemKey> = SYSTEMS
 
     override fun declaredFunctions(descriptor: ZkCircuitDescriptor): Set<String> = setOf(CircuitZkLegacyDisclosure.FUNCTION_ID)
 
@@ -124,11 +119,22 @@ class LegacyZkCircuitZkAdapter(private val presentation: ZkMdocPresentation) : C
     }
 
     companion object {
+        /** The legacy mdoc selective-disclosure profile, through the shared Longfellow/Vega proof systems. */
+        fun profile(presentation: ZkMdocPresentation): CircuitZkProfile =
+            CircuitZkProfile(LegacyZkCircuitZkAdapter(presentation), listOf(LegacyDisclosureFunctionHandler))
+
         /** Catalog `system` of the Longfellow `longfellow-libzk-v1_*` circuits. */
         const val LONGFELLOW_CATALOG_SYSTEM = "longfellow"
 
         /** Catalog `system` of the Vega `vega-mc-p256-v1-*` keys. */
         const val VEGA_CATALOG_SYSTEM = "vega-mc"
+
+        internal val SYSTEMS: Set<CircuitZkSystemKey> = setOf(
+            CircuitZkSystemKey(LONGFELLOW_CATALOG_SYSTEM, "6"),
+            CircuitZkSystemKey(LONGFELLOW_CATALOG_SYSTEM, "7"),
+            CircuitZkSystemKey(LONGFELLOW_CATALOG_SYSTEM, "8"),
+            CircuitZkSystemKey(VEGA_CATALOG_SYSTEM, "12"),
+        )
 
         private fun proofSystemFor(catalogSystem: String): String? = when (catalogSystem) {
             LONGFELLOW_CATALOG_SYSTEM -> "longfellow-libzk-v1"

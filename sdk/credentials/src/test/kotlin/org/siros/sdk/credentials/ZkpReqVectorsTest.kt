@@ -188,6 +188,7 @@ class ZkpReqVectorsTest {
         val unknown = JsonObject(query + ("_req" to JsonArray(query["_req"]!!.jsonArray + Json.parseToJsonElement("""{"fn_id":"mystery","return":"m"}"""))))
         val withExtra = presentation(linkedMapOf("p" to ResultValue.Pseudonym(ByteArray(32)), "a" to ResultValue.Predicate, "m" to ResultValue.Predicate))
         assertEquals(CircuitZkResponseError.RESULT_FUNCTION_UNKNOWN, CircuitZkResponseValidator.validate(plan(unknown, offered), vpToken(withExtra)))
+        assertNull(CircuitZkResponseValidator.validate(plan(unknown, offered), vpToken(withExtra), setOf("age_check", "mystery")))
         val skipped = presentation(linkedMapOf("p" to ResultValue.Pseudonym(ByteArray(32))))
         assertEquals(CircuitZkResponseError.RESULT_HANDLE_MISSING, CircuitZkResponseValidator.validate(plan(query, offered), vpToken(skipped)))
     }

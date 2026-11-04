@@ -194,6 +194,34 @@ interface CircuitZkFunctionHandler {
     fun verifierContext(function: CircuitZkFunction): String? = null
 }
 
+/**
+ * Optional profile metadata contract. Keeping this separate from [CircuitZkFunctionHandler] means
+ * existing handler binaries have no new abstract methods; handlers that do not implement it simply
+ * have no consent/result metadata and remain fail-closed.
+ */
+interface CircuitZkProfileFunctionHandler : CircuitZkFunctionHandler {
+    /** Structured consent items, or null when this function cannot be shown and must be refused. */
+    fun consentItems(
+        function: CircuitZkFunction,
+        verifierId: String?,
+        today: LocalDate,
+        claims: List<org.siros.sdk.credentials.ClaimMeta>,
+        namespace: String?,
+    ): List<org.siros.sdk.credentials.ConsentItem>? = null
+
+    /** The response shape this handler declares, or null when the function has no valid response result. */
+    fun resultKind(function: CircuitZkFunction): CircuitZkResultKind? = null
+}
+
+/** A response result shape explicitly declared by a [CircuitZkProfileFunctionHandler]. */
+enum class CircuitZkResultKind {
+    /** Exactly CBOR `true`: a satisfied predicate. False and every non-boolean value remain invalid. */
+    PREDICATE_TRUE,
+
+    /** A pseudonym byte string; the existing response validator checks its PRF and exact length. */
+    PSEUDONYM,
+}
+
 /** The outcome of [CircuitZkFunctionHandler.commitmentCheck]. */
 enum class CircuitZkCommitmentCheck {
     HOLDS,
@@ -236,7 +264,7 @@ object LegacyDisclosureFunctionHandler : CircuitZkFunctionHandler {
  * not judged here, the prover decides). One per declared function, so a function the user was asked about can also be
  * presented. The handler registry itself keeps only hook-style functions (the pseudonym, the legacy disclosure).
  */
-class PredicateFunctionHandler(private val declaration: org.siros.sdk.credentials.PredicateFunction) : CircuitZkFunctionHandler {
+class PredicateFunctionHandler(private val declaration: org.siros.sdk.credentials.PredicateFunction) : CircuitZkProfileFunctionHandler {
     private val functions = org.siros.sdk.credentials.PredicateFunctions(listOf(declaration))
 
     override val functionId: String get() = declaration.id
@@ -249,6 +277,17 @@ class PredicateFunctionHandler(private val declaration: org.siros.sdk.credential
 
     override fun holds(function: CircuitZkFunction, credential: DocumentMdoc): Boolean =
         functions.holdsFor(function, org.siros.sdk.credentials.PredicateFunctions.mdocReader(credential))
+
+    override fun consentItems(
+        function: CircuitZkFunction,
+        verifierId: String?,
+        today: LocalDate,
+        claims: List<org.siros.sdk.credentials.ClaimMeta>,
+        namespace: String?,
+    ): List<org.siros.sdk.credentials.ConsentItem>? =
+        functions.item(function, claims, today, namespace)?.let { listOf(it) }
+
+    override fun resultKind(function: CircuitZkFunction): CircuitZkResultKind = CircuitZkResultKind.PREDICATE_TRUE
 
     companion object {
         /** The hook-style handlers (the pseudonym, the legacy disclosure) plus one [PredicateFunctionHandler] per function [functions] declares. */

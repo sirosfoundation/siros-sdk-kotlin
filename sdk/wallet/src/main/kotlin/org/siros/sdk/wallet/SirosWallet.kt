@@ -257,9 +257,26 @@ class SirosWallet private constructor(
     // The real catalog prover unless the host set one; built on first use because it needs the circuit
     // client, which is declared further down. Never the fake: that is an explicit opt-in through the config.
     private val defaultCircuitZkProverHolder = lazy {
-        org.siros.sdk.keystore.CatalogCircuitZkProver.standard(zkCircuitClient, zkPresentation, config.circuitZkNativeProver ?: org.siros.sdk.keystore.UniffiNymAuthNativeProver())
+        org.siros.sdk.keystore.CatalogCircuitZkProver.standard(
+            zkCircuitClient,
+            zkPresentation,
+            config.circuitZkNativeProver ?: org.siros.sdk.keystore.UniffiNymAuthNativeProver(),
+            profiles = config.circuitZkProfiles,
+            predicates = config.circuitZkPredicateFunctions,
+        )
     }
     private val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = config.circuitZkProver
+
+    /** The handlers for the active prover, without forcing the default prover to initialize for a custom one. */
+    private fun circuitZkHandlerList(): List<org.siros.sdk.keystore.CircuitZkFunctionHandler> {
+        if (circuitZkProver == null) return defaultCircuitZkProverHolder.value.handlers
+        val result = org.siros.sdk.keystore.PredicateFunctionHandler.handlersFor(config.circuitZkPredicateFunctions) +
+            config.circuitZkProfiles.flatMap { it.handlers }
+        require(result.map { it.functionId }.toSet().size == result.size) {
+            "circuit_zk function id is claimed by two profiles"
+        }
+        return result
+    }
 
     /** Drops every resident ZK prover: the mdoc proof systems' and the default circuit_zk prover's circuit. */
     private fun releaseAllZkProvers() {
@@ -5378,7 +5395,8 @@ class SirosWallet private constructor(
 
         val transcript = buildTranscript()
         // Every function the wallet declared (and so described to the user) can also be presented.
-        val presenterHandlers = org.siros.sdk.keystore.PredicateFunctionHandler.handlersFor(config.circuitZkPredicateFunctions)
+        val presenterHandlers = circuitZkHandlerList()
+        val presenterHandlersById = presenterHandlers.associateBy { it.functionId }
         val presenter = (keystore as? org.siros.sdk.keystore.HolderWitnessSource)
             ?.circuitZkPresenter(prover, support.circuits, support.validator, handlers = presenterHandlers, serving = support.serving)
             ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider, handlers = presenterHandlers, serving = support.serving)
@@ -5423,7 +5441,7 @@ class SirosWallet private constructor(
             // first of its own ordered types that resolves; nothing resolving is a refusal, the resolved value is used
             // verbatim: only the PDP canonicalises it), the verifier context a function names, and whether the
             // issuer-delivered secret seed is needed (it is fetched in phase 2, after consent).
-            val planHandlers = plan.functions.mapNotNull { f -> circuitZkHandlers[f.id]?.let { f to it } }
+            val planHandlers = plan.functions.mapNotNull { f -> presenterHandlersById[f.id]?.let { f to it } }
             val needsVerifierId = planHandlers.any { (f, h) -> h.needsVerifierId(f) }
             // The verifier's identity is resolved ONCE per request and reused by every query, the consent and every proof: a source
             // that succeeds for one query and fails (or answers differently) for another must not make the scope of a pseudonym
@@ -5473,6 +5491,10 @@ class SirosWallet private constructor(
             today = today,
             locale = java.util.Locale.getDefault().toLanguageTag(),
             predicates = config.circuitZkPredicateFunctions,
+            profileItems = { function, verifierId, day, claims, namespace ->
+                (presenterHandlersById[function.id] as? org.siros.sdk.keystore.CircuitZkProfileFunctionHandler)
+                    ?.consentItems(function, verifierId, day, claims, namespace)
+            },
         ) ?: refuse("consent-items", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         if (!askPresentationConsent(consentHandler, consentRequest)) refuse("consent-declined", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
         if (!stillValid()) refuse("ended", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
@@ -5512,10 +5534,26 @@ class SirosWallet private constructor(
             // a verifier must refuse; an invalid one is a refusal, nothing is sent.
             val entry = listOf<kotlinx.serialization.json.JsonElement>(presented.json)
             val checked = p.plan.copy(raw = JsonObject(p.plan.raw + ("id" to kotlinx.serialization.json.JsonPrimitive(p.queryId))))
+            // Check EVERY occurrence before collapsing ids for the shared response validator: two functions
+            // may share an id but have different handles and handler-declared result metadata.
+            val predicateResultIds = mutableSetOf<String>()
+            for (function in p.plan.functions) {
+                val kind = try {
+                    (presenterHandlersById[function.id] as? org.siros.sdk.keystore.CircuitZkProfileFunctionHandler)
+                        ?.resultKind(function)
+                } catch (_: Exception) {
+                    refuse("response-metadata", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+                }
+                when (kind) {
+                    org.siros.sdk.keystore.CircuitZkResultKind.PREDICATE_TRUE -> predicateResultIds += function.id
+                    org.siros.sdk.keystore.CircuitZkResultKind.PSEUDONYM -> Unit
+                    null -> refuse("response-invalid", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+                }
+            }
             val verdict = org.siros.sdk.credentials.CircuitZkResponseValidator.validate(
                 checked,
                 JsonObject(mapOf(p.queryId to kotlinx.serialization.json.JsonArray(entry))).toString(),
-                config.circuitZkPredicateFunctions.ids,
+                predicateResultIds,
             )
             if (verdict != null) {
                 Timber.w("circuit_zk response failed its own check (${verdict.code})")
@@ -6779,9 +6817,9 @@ class SirosWallet private constructor(
     private fun keystoreCanHoldCredentialMetadata(): Boolean =
         keystore is JweKeystore || keystore is WscdKeystoreAdapter
 
-    /** The function handlers answering a `circuit_zk` plan, by function id (the presenter's default registry). */
+    /** The function handlers answering a `circuit_zk` plan, including every registered profile. */
     private val circuitZkHandlers: Map<String, org.siros.sdk.keystore.CircuitZkFunctionHandler>
-        get() = org.siros.sdk.keystore.DEFAULT_CIRCUIT_ZK_HANDLERS.associateBy { it.functionId }
+        get() = circuitZkHandlerList().associateBy { it.functionId }
 
     /** (issuer, configuration) pairs whose issuer metadata advertised a seed: their response must be encrypted. */
     private val secretSeedAdvertised: MutableMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>? =
