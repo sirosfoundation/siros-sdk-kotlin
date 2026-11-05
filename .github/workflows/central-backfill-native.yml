@@ -6,7 +6,8 @@ name: Backfill native AARs to Maven Central
 # crate's release tag, and pushes a signed bundle through
 # .github/actions/central-publish. Central rejects a version that already
 # exists, so re-running with an already-published coordinate fails loudly
-# for that matrix entry only.
+# for that matrix entry only. zk-cred-bbs is excluded until its implementation
+# is ready elsewhere; the planner rejects it even as a manual coordinate.
 
 on:
   workflow_dispatch:
@@ -20,8 +21,6 @@ on:
           siros-dc-matcher:siros-dc-matcher:0.6.2
           zk-cred-longfellow:zk-cred-longfellow:0.1.1
           zk-cred-vega:zk-cred-vega:0.0.5
-          zk-cred-bbs:zk-cred-bbs:0.0.6
-          zk-cred-bbs:zk-cred-bbs:0.0.7
       publishing-type:
         description: AUTOMATIC or USER_MANAGED
         default: AUTOMATIC
@@ -45,6 +44,8 @@ jobs:
           items = []
           for triple in os.environ["COORDINATES"].split():
               repo, artifact, version = triple.split(":")
+              if repo == "zk-cred-bbs" or artifact == "zk-cred-bbs":
+                  raise SystemExit("zk-cred-bbs publication is disabled until its implementation is ready elsewhere")
               items.append({"repo": repo, "artifact": artifact, "version": version})
           print("matrix=" + json.dumps({"include": items}))
           PY
