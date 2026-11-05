@@ -63,7 +63,6 @@ jobs:
 
   publish:
     needs: plan
-    if: needs.plan.outputs.has-other == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -71,8 +70,10 @@ jobs:
     name: ${{ matrix.artifact }} ${{ matrix.version }}
     steps:
       - uses: actions/checkout@v4
+        if: needs.plan.outputs.has-other == 'true'
 
       - name: Fetch AAR and POM from GitHub Packages
+        if: needs.plan.outputs.has-other == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ matrix.repo }}
@@ -87,6 +88,7 @@ jobs:
           ls -la dist
 
       - name: Fetch sources at the release tag
+        if: needs.plan.outputs.has-other == 'true'
         uses: actions/checkout@v4
         with:
           repository: sirosfoundation/${{ matrix.repo }}
@@ -94,6 +96,7 @@ jobs:
           path: crate-src
 
       - name: Crate metadata
+        if: needs.plan.outputs.has-other == 'true'
         id: meta
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -113,6 +116,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/central-publish
+        if: needs.plan.outputs.has-other == 'true'
         with:
           artifact-id: ${{ matrix.artifact }}
           version: ${{ matrix.version }}
@@ -132,7 +136,7 @@ jobs:
 
   publish-bbs:
     needs: [plan, publish]
-    if: always() && needs.plan.outputs.has-bbs == 'true' && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    if: needs.plan.outputs.has-bbs == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
