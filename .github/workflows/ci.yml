@@ -213,6 +213,12 @@ jobs:
       - name: Build
         run: ./gradlew assemble --no-daemon
 
+      - name: Check 16 KB native-library alignment
+        run: |
+          python3 tools/check_android_16kb.py \
+            sample-app/build/outputs/apk/debug/sample-app-debug.apk \
+            sample-app/build/outputs/apk/release/sample-app-release-unsigned.apk
+
   docs:
     name: Documentation
     runs-on: ubuntu-latest

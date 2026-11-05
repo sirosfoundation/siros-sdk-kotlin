@@ -33,7 +33,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
     implementation("org.siros:siros-verifier-core-ffi:$sirosVerifierCoreVersion")
-    api("net.java.dev.jna:jna:5.14.0@aar")
+    api("net.java.dev.jna:jna:5.19.1@aar")
     implementation("androidx.annotation:annotation:1.9.1")
 
     testImplementation(libs.junit)
