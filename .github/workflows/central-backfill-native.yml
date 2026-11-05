@@ -6,8 +6,8 @@ name: Backfill native AARs to Maven Central
 # crate's release tag, and pushes a signed bundle through
 # .github/actions/central-publish. Central rejects a version that already
 # exists, so re-running with an already-published coordinate fails loudly
-# for that matrix entry only. zk-cred-bbs stays last in the default order
-# until it is explicitly brought forward again.
+# for that matrix entry only. The BBS job runs only after every non-BBS
+# coordinate succeeds, keeping BBS last until it is brought forward again.
 
 on:
   workflow_dispatch:
@@ -36,6 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      bbs-matrix: ${{ steps.plan.outputs.bbs-matrix }}
+      has-other: ${{ steps.plan.outputs.has-other }}
+      has-bbs: ${{ steps.plan.outputs.has-bbs }}
     steps:
       - id: plan
         env:
@@ -44,20 +47,97 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
           items = []
+          bbs_items = []
           for triple in os.environ["COORDINATES"].split():
               repo, artifact, version = triple.split(":")
-              items.append({"repo": repo, "artifact": artifact, "version": version})
-          print("matrix=" + json.dumps({"include": items}))
+              item = {"repo": repo, "artifact": artifact, "version": version}
+              if repo == "zk-cred-bbs" or artifact == "zk-cred-bbs":
+                  bbs_items.append(item)
+              else:
+                  items.append(item)
+          print("matrix=" + json.dumps({"include": items or [{}]}))
+          print("bbs-matrix=" + json.dumps({"include": bbs_items or [{}]}))
+          print("has-other=" + str(bool(items)).lower())
+          print("has-bbs=" + str(bool(bbs_items)).lower())
           PY
 
   publish:
     needs: plan
+    if: needs.plan.outputs.has-other == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     name: ${{ matrix.artifact }} ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch AAR and POM from GitHub Packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ matrix.repo }}
+          ARTIFACT: ${{ matrix.artifact }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          base="https://maven.pkg.github.com/sirosfoundation/$REPO/org/siros/$ARTIFACT/$VERSION/$ARTIFACT-$VERSION"
+          mkdir -p dist
+          curl -sSL --fail -u "x:$GH_TOKEN" -o "dist/$ARTIFACT-$VERSION.aar" "$base.aar"
+          curl -sSL --fail -u "x:$GH_TOKEN" -o "dist/$ARTIFACT-$VERSION.pom" "$base.pom"
+          ls -la dist
+
+      - name: Fetch sources at the release tag
+        uses: actions/checkout@v4
+        with:
+          repository: sirosfoundation/${{ matrix.repo }}
+          ref: v${{ matrix.version }}
+          path: crate-src
+
+      - name: Crate metadata
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ matrix.repo }}
+        run: |
+          set -euo pipefail
+          desc=$(gh api "repos/sirosfoundation/$REPO" --jq .description)
+          lic=$(gh api "repos/sirosfoundation/$REPO" --jq .license.spdx_id)
+          case "$lic" in
+            MPL-2.0) lic_url="https://www.mozilla.org/en-US/MPL/2.0/";;
+            *) lic_url="https://opensource.org/licenses/$lic";;
+          esac
+          {
+            echo "description=$desc"
+            echo "license=$lic"
+            echo "license-url=$lic_url"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/central-publish
+        with:
+          artifact-id: ${{ matrix.artifact }}
+          version: ${{ matrix.version }}
+          file: dist/${{ matrix.artifact }}-${{ matrix.version }}.aar
+          pom: dist/${{ matrix.artifact }}-${{ matrix.version }}.pom
+          sources-dir: crate-src
+          name: ${{ matrix.artifact }}
+          description: ${{ steps.meta.outputs.description }}
+          url: https://github.com/sirosfoundation/${{ matrix.repo }}
+          license-name: ${{ steps.meta.outputs.license }}
+          license-url: ${{ steps.meta.outputs.license-url }}
+          publishing-type: ${{ inputs.publishing-type }}
+          central-username: ${{ secrets.CENTRAL_USERNAME }}
+          central-password: ${{ secrets.CENTRAL_PASSWORD }}
+          signing-key: ${{ secrets.SIGNING_KEY }}
+          signing-password: ${{ secrets.SIGNING_PASSWORD }}
+
+  publish-bbs:
+    needs: [plan, publish]
+    if: always() && needs.plan.outputs.has-bbs == 'true' && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.bbs-matrix) }}
+    name: BBS ${{ matrix.version }} (last)
     steps:
       - uses: actions/checkout@v4
 
