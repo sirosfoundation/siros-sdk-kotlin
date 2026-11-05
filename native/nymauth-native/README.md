@@ -101,11 +101,13 @@ scripts/build-android.sh                   # arm64-v8a and x86_64 .so (PMULL che
 scripts/build-android.sh --demo-issuer     # also org.siros:nymauth-demo-issuer:<version>, for the demo app
 ```
 
+Android packaging also requires `cargo-bundle-licenses` 5.0.0. It generates exact target-filtered license inventories
+from Cargo metadata and validates them, the notices, and the Maven metadata as part of each local AAR/POM build.
+
 ## Notices
 
-- Google's longfellow-zk runtime (Apache-2.0, vendored in community-demo's `native/longfellow/vendor`).
-- `nym-longfellow` and the circuits are community-demo's, from the SIROS nym-auth-circuits archive.
-- `nym-bbs` is community-demo's; sirosfoundation/bbs-cd-plugins 0.1 is vendored unchanged in its `native/bbs/vendor`
-  (research code: not constant-time, not audited).
-- This library's own code is BSD-2-Clause, like the SDK (see the repository-root `LICENSE`). Linked third-party components
-  remain under their own licenses; confirm the upstream `nym-longfellow`, `nym-bbs` and circuit licenses before publishing the AAR.
+- Google's longfellow-zk runtime (Apache-2.0, vendored in community-demo's `native/longfellow/vendor`; its license is packaged in the AAR).
+- `nym-longfellow` and the circuits are SIROS-owned, from the SIROS nym-auth-circuits archive.
+- `nym-bbs` is SIROS-owned; sirosfoundation/bbs-cd-plugins 0.1 is vendored unchanged in its `native/bbs/vendor`
+  (research code: not constant-time, not audited; its MIT license is packaged in the AAR).
+- This library and the nym-specific implementations and circuits are BSD-2-Clause, like the SDK (see the repository-root `LICENSE`). The AAR includes that license, `NOTICE`, and the third-party license texts in `licenses/`.

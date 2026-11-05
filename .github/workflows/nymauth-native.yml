@@ -35,6 +35,9 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked --version "$CARGO_NDK_VERSION"
 
+      - name: Install cargo-bundle-licenses
+        run: cargo install cargo-bundle-licenses --locked --version 5.0.0
+
       - name: Build nymauth-native AAR and POM
         run: native/nymauth-native/scripts/build-android.sh
 

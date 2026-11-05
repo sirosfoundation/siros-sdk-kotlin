@@ -1,0 +1,32 @@
+nymauth-demo-issuer
+
+Copyright (c) 2026 SIROS Foundation
+
+The demo issuer implementation and the SIROS nym_auth circuits are originated
+and owned by SIROS Foundation and distributed under the BSD 2-Clause License.
+See the packaged LICENSE file.
+
+This BBS-only demo artifact does not contain the Longfellow prover or Google's
+longfellow-zk runtime. It links third-party components whose license and source
+availability notices are preserved in the packaged licenses directory,
+including the exact target-linked dependency inventory generated for each
+Android target. This includes UniFFI 0.29.5 under the Mozilla Public License
+2.0; its corresponding source is available at
+https://github.com/mozilla/uniffi-rs/tree/v0.29.5.
+
+- cd-ecdsa-pop and bbs-cd-plugin (MIT License, Copyright (c) 2026 SIROS
+  Foundation), from sirosfoundation/bbs-cd-plugins, vendored unchanged in
+  AltmannPeter/readdit-demo native/bbs/vendor/bbs-cd-plugins. See
+  licenses/bbs-cd-plugins.LICENSE. This is research code: it is not
+  constant-time and has not been audited.
+
+The complete upstream notices are preserved verbatim in
+licenses/bbs-cd-plugins-THIRD_PARTY_NOTICES.md, including the separate
+Alexandros Zacharakis MIT notice for derived cd-tom256 code and the IETF
+Revised BSD License for code components. Warnings in that file about rights
+that remain to be confirmed before publication are not represented as
+resolved by this package.
+
+The nym-bbs and plugin dependencies are pinned to readdit-demo commit
+0250f907ec3264cb876da9c909362e553ea77093. Other target-linked dependencies,
+including UniFFI, are identified in the generated target-specific inventory.
