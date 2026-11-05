@@ -143,7 +143,7 @@ build() {
     <dependency>
       <groupId>net.java.dev.jna</groupId>
       <artifactId>jna</artifactId>
-      <version>5.14.0</version>
+      <version>5.19.1</version>
       <type>aar</type>
     </dependency>
   </dependencies>

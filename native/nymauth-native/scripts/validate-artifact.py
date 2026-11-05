@@ -135,7 +135,7 @@ def main() -> None:
     require(jna is not None, "POM has no JNA dependency")
     require(jna.findtext("m:groupId", namespaces=namespace) == "net.java.dev.jna", "unexpected JNA groupId")
     require(jna.findtext("m:artifactId", namespaces=namespace) == "jna", "unexpected JNA artifactId")
-    require(jna.findtext("m:version", namespaces=namespace) == "5.14.0", "unexpected JNA version")
+    require(jna.findtext("m:version", namespaces=namespace) == "5.19.1", "unexpected JNA version")
     require(jna.findtext("m:type", namespaces=namespace) == "aar", "unexpected JNA type")
     print(f"validated {aar_path.name} and {pom_path.name}")
 

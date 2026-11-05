@@ -48,7 +48,7 @@ dependencies {
     //   cd siros-wscd-manager && make aar && make publish-local
     implementation("org.siros:siros-wscd-manager:0.14.0")
     // JNA is required by UniFFI-generated Kotlin bindings.
-    implementation("net.java.dev.jna:jna:5.14.0@aar")
+    implementation("net.java.dev.jna:jna:5.19.1@aar")
     // Circuits fetched from go-zk-circuits (see ZkCircuitClient, sdk/credentials)
     // are zstd-compressed; zk-cred-longfellow's initializeProver expects
     // already-decompressed bytes (confirmed against wallet-frontend's
@@ -63,7 +63,9 @@ dependencies {
     // a real device, not just a missing-file warning) - confirmed via a
     // real androidTest run on a Pixel. zstd-jni's own README documents this
     // separate `zstd-jni.aar` artifact for Android 5.0+.
-    implementation("com.github.luben:zstd-jni:1.5.6-6@aar")
+    // 1.5.7-12 is the newest SDK-36-compatible release with 16 KB-aligned
+    // native libraries; 1.5.7-13 and later require compileSdk 37.
+    implementation("com.github.luben:zstd-jni:1.5.7-12@aar")
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
