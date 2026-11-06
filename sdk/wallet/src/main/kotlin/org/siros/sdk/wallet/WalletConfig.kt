@@ -145,33 +145,6 @@ data class WalletConfig(
      * of the legacy engine protocol. Requires go-wallet-backend with WMP support.
      */
     val useWmpProtocol: Boolean = false,
-    /**
-     * Which engine [useWmpProtocol] connects to.
-     * [WmpEngineMode.LEGACY_WS] keeps the historic WebSocket path (the Go
-     * engine); the others speak the Rust engine. Default:
-     * [WmpEngineMode.LEGACY_WS], so existing deployments are unchanged.
-     */
-    val wmpEngineMode: WmpEngineMode = WmpEngineMode.LEGACY_WS,
-    /**
-     * The WMP send endpoint ([WmpEngineMode.HTTP_SSE]):
-     * `http://<engine>:8780/wmp` (POST /wmp - the request/response
-     * binding; the reply rides the SSE stream).
-     */
-    val wmpSendUrl: String? = null,
-    /**
-     * The WMP SSE endpoint ([WmpEngineMode.HTTP_SSE]):
-     * `http://<engine>:8780/wmp/events` (the engine's messages: flow
-     * progress, sub-flow asks, completions - with `Last-Event-ID` replay).
-     */
-    val wmpSseUrl: String? = null,
-    /**
-     * The transport factory for [WmpEngineMode.LOCAL]: the app constructs
-     * `WmpUniFFITransport` over its own ports (the engine's outgoing
-     * fetches, its host asks, its trust stack) - the AAR's engine core
-     * runs in-process. Null refuses the local mode with a clear error (an
-     * app that has not wired the engine's ports).
-     */
-    val wmpTransport: (suspend () -> org.siros.sdk.transport.Transport)? = null,
     val availableKeystores: Map<String, KeystoreManager>? = null,
     val defaultWscdMapping: Map<String, String>? = null,
     val requestWscdChoice: RequestWscdChoice? = null,
@@ -555,6 +528,48 @@ data class WalletConfig(
      * Appended last to preserve the constructor-field order of this public data class.
      */
     val circuitZkProfiles: List<org.siros.sdk.keystore.CircuitZkProfile> = emptyList(),
+    /**
+     * Which engine [useWmpProtocol] connects to.
+     * [WmpEngineMode.LEGACY_WS] keeps the historic WebSocket path (the Go
+     * engine); the others speak the Rust engine. Default:
+     * [WmpEngineMode.LEGACY_WS], so existing deployments are unchanged.
+     *
+     * Appended last (after [circuitZkProfiles]), like every later-added
+     * member: a data class's property order is its binary API, and the
+     * pre-[circuitZkProfiles] constructor pins the first fifty.
+     */
+    val wmpEngineMode: WmpEngineMode = WmpEngineMode.LEGACY_WS,
+    /**
+     * The WMP send endpoint ([WmpEngineMode.HTTP_SSE]):
+     * `http://<engine>:8780/wmp` (POST /wmp - the request/response
+     * binding; the reply rides the SSE stream).
+     */
+    val wmpSendUrl: String? = null,
+    /**
+     * The WMP SSE endpoint ([WmpEngineMode.HTTP_SSE]):
+     * `http://<engine>:8780/wmp/events` (the engine's messages: flow
+     * progress, sub-flow asks, completions - with `Last-Event-ID` replay).
+     */
+    val wmpSseUrl: String? = null,
+    /**
+     * The transport factory for [WmpEngineMode.LOCAL]: the app constructs
+     * `WmpUniFFITransport` over its own ports - the engine's outgoing fetches
+     * (`OkHttp`/`URLSession`-shaped `HttpClient`) and its trust stack (`Pdp`,
+     * or null to fail closed) - wrapping the SDK's ask handler in
+     * `UniFfiEngineAskHost` so the engine's asks (the signs, the consent, the
+     * match, the tx code, the authorization hand-over) reach the WALLET's
+     * handlers, exactly as they do on the remote engine:
+     *
+     * ```kotlin
+     * wmpTransport = { asks ->
+     *     WmpUniFFITransport(http = appHttpClient(), host = UniFfiEngineAskHost(asks), pdp = null)
+     * }
+     * ```
+     *
+     * The AAR's engine core runs in-process. Null refuses the local mode with
+     * a clear error (an app that has not wired the engine's ports).
+     */
+    val wmpTransport: (suspend (org.siros.sdk.transport.wmp.WmpEngineAskHandler) -> org.siros.sdk.transport.Transport)? = null,
 ) {
     init {
         org.siros.sdk.keystore.CircuitZkProfile.validateAdditional(circuitZkProfiles, circuitZkPredicateFunctions)
@@ -588,10 +603,6 @@ data class WalletConfig(
         nativeAttestationProvider: NativeAttestationProvider? = null,
         engineUrl: String? = null,
         useWmpProtocol: Boolean = false,
-        wmpEngineMode: WmpEngineMode = WmpEngineMode.LEGACY_WS,
-        wmpSendUrl: String? = null,
-        wmpSseUrl: String? = null,
-        wmpTransport: (suspend () -> org.siros.sdk.transport.Transport)? = null,
         availableKeystores: Map<String, KeystoreManager>? = null,
         defaultWscdMapping: Map<String, String>? = null,
         requestWscdChoice: RequestWscdChoice? = null,
@@ -644,10 +655,11 @@ data class WalletConfig(
         nativeAttestationProvider = nativeAttestationProvider,
         engineUrl = engineUrl,
         useWmpProtocol = useWmpProtocol,
-        wmpEngineMode = wmpEngineMode,
-        wmpSendUrl = wmpSendUrl,
-        wmpSseUrl = wmpSseUrl,
-        wmpTransport = wmpTransport,
+        // The engine-mode members are deliberately absent: this is the
+        // pre-profile constructor, whose 50-parameter JVM descriptor is
+        // pinned (WalletConfigCompatibilityTest) - a pre-profile caller
+        // takes the mode defaults (LEGACY_WS); the current constructor is
+        // where the mode is chosen.
         availableKeystores = availableKeystores,
         defaultWscdMapping = defaultWscdMapping,
         requestWscdChoice = requestWscdChoice,
@@ -705,10 +717,9 @@ data class WalletConfig(
         nativeAttestationProvider: NativeAttestationProvider? = this.nativeAttestationProvider,
         engineUrl: String? = this.engineUrl,
         useWmpProtocol: Boolean = this.useWmpProtocol,
-        wmpEngineMode: WmpEngineMode = this.wmpEngineMode,
-        wmpSendUrl: String? = this.wmpSendUrl,
-        wmpSseUrl: String? = this.wmpSseUrl,
-        wmpTransport: (suspend () -> org.siros.sdk.transport.Transport)? = this.wmpTransport,
+        // The engine-mode members are not parameters here (this is the
+        // pre-[circuitZkProfiles] copy, whose 50-parameter JVM descriptor
+        // is pinned) - the delegation below preserves this instance's mode.
         availableKeystores: Map<String, KeystoreManager>? = this.availableKeystores,
         defaultWscdMapping: Map<String, String>? = this.defaultWscdMapping,
         requestWscdChoice: RequestWscdChoice? = this.requestWscdChoice,

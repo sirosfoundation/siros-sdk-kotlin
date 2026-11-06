@@ -2904,14 +2904,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             wmpSendUrl = _wmpSendUrl.value.trim().ifEmpty { null },
             wmpSseUrl = _wmpSseUrl.value.trim().ifEmpty { null },
             wmpTransport = if (_wmpEngineMode.value == org.siros.sdk.wallet.WmpEngineMode.LOCAL) {
-                {
-                    // The local engine over the app's ports: the outgoing
-                    // fetches over OkHttp, the wallet asks over the
-                    // keystore (LocalEngine.kt documents the first cut
-                    // and its fail-closed asks).
+                { asks ->
+                    // The local engine over the app's HTTP port, the WALLET's
+                    // own ask handlers (the SDK's WalletEngineAskHandler, carried
+                    // by UniFfiEngineAskHost), and no trust stack (fail closed
+                    // at the trust step until one is wired).
                     org.siros.sdk.transport.wmp.WmpUniFFITransport(
                         http = OkHttpEngineHttp(),
-                        host = KeystoreEngineHost(keystore),
+                        host = org.siros.sdk.transport.wmp.UniFfiEngineAskHost(asks),
                         pdp = null,
                     )
                 }

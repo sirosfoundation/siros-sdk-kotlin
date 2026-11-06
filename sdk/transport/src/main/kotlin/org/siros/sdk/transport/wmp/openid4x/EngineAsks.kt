@@ -221,3 +221,19 @@ object EngineAskRefusal {
     const val SIGN_REFUSED = EngineVpResult.SIGN_REFUSED
     const val UNSUPPORTED_TRANSACTION_DATA = EngineVpResult.UNSUPPORTED_TRANSACTION_DATA
 }
+
+/**
+ * One credential a multi-configuration offer offers (engine-ports'
+ * `AvailableCredential`): the shape a credential-selection ask would carry.
+ */
+@Serializable
+data class EngineAvailableCredential(
+    /** The credential configuration id choosing this one selects. */
+    val id: String,
+    /** The issuer's display name for it, when it advertised one. */
+    val display: String? = null,
+    /** The credential's format. */
+    val format: String = "",
+    /** The credential's type (its `vct`). */
+    val vct: String = "",
+)

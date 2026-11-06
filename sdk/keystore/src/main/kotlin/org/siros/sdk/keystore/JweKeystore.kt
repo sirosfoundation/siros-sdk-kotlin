@@ -735,6 +735,40 @@ class JweKeystore(
         jwsObject.serialize().toByteArray(Charsets.UTF_8)
     }
 
+    override suspend fun signJwsSignature(keyId: String, signingInput: ByteArray, algorithm: String): ByteArray = mutex.withLock {
+        requireUnlocked()
+        val key = keys[keyId] ?: throw KeystoreException("Key not found: $keyId")
+        // The input is signed AS GIVEN (the engine built the proof's
+        // `header.payload` ASCII), never re-encoded into a JWS the way [sign]
+        // does. JCA's SHA256withECDSA answers DER; ES256's wire form is the
+        // 64-byte concat, transcoded with the same helper ECDSASigner uses -
+        // so the answer is the raw JOSE signature, not a serialization.
+        val der = java.security.Signature.getInstance("SHA256withECDSA").apply {
+            initSign(key.toECPrivateKey())
+            update(signingInput)
+        }.sign()
+        com.nimbusds.jose.crypto.impl.ECDSA.transcodeSignatureToConcat(
+            der,
+            com.nimbusds.jose.crypto.impl.ECDSA.getSignatureByteArrayLength(JWSAlgorithm.ES256),
+        )
+    }
+
+    override suspend fun publicKeyJwk(keyId: String?): KeypairInfo? = mutex.withLock {
+        requireUnlocked()
+        val key = if (keyId != null) {
+            keys[keyId] ?: return null
+        } else {
+            // The default proof key, resolved (and created, when none exists)
+            // exactly as generateProofWithJsonClaims would - the unnamed-key
+            // asks must publish and later sign ONE consistent key.
+            keys.values.firstOrNull() ?: registerNewKey()
+        }
+        KeypairInfo(
+            keyId = key.keyID,
+            publicKeyJWK = json.parseToJsonElement(key.toPublicJWK().toJSONString()) as kotlinx.serialization.json.JsonObject,
+        )
+    }
+
     /** The pre-DIIP call shape: this keystore's own profile decides. */
     override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean): String =
         generateProof(audience, nonce, freshKey, holderBinding = null)
