@@ -93,6 +93,49 @@ class WmpHttpSseTransportTest {
     }
 
     @Test
+    fun theBearerIsFreshenedPerRequestNotBakedInAtConnect() = runBlocking {
+        // The binding is stateless - the engine validates EVERY POST - and AS
+        // tokens live ~2 minutes, so a token fixed at connect dies with its
+        // expiry and every later POST is answered "Not authorized" (found
+        // driving an issuance 40 minutes after login).
+        var minted = 0
+        val transport = WmpHttpSseTransport(
+            sendUrl = "https://x.test/send",
+            sseUrl = "https://x.test/events",
+            client = client("data: {}\n\n", "data: {}\n\n", "data: {}\n\n"),
+            tokenProvider = { "token-${minted++}" },
+        )
+        transport.connect()
+        transport.send("{\"a\":1}".toByteArray())
+        transport.send("{\"a\":2}".toByteArray())
+        transport.disconnect()
+
+        val auths = requests.map { it.header("Authorization") }
+        assertTrue("every request carries a fresh bearer", auths.size >= 3)
+        // The provider answered PER REQUEST: the SSE stream's connect and each POST re-asked it.
+        assertEquals(auths.size, minted)
+        auths.take(3).forEachIndexed { i, auth ->
+            assertEquals("Bearer token-$i", auth)
+        }
+    }
+
+    @Test
+    fun aNullTokenFallsBackToNoAuthorizationHeaderAndExtraHeadersApply() = runBlocking {
+        val transport = WmpHttpSseTransport(
+            sendUrl = "https://x.test/send",
+            sseUrl = "https://x.test/events",
+            client = client("data: {}\n\n"),
+            extraHeaders = mapOf("X-Tenant" to "default"),
+            tokenProvider = { null },
+        )
+        transport.connect()
+        transport.send("{}".toByteArray())
+        transport.disconnect()
+        assertTrue("a null provider answer means no Authorization header", requests.all { it.header("Authorization") == null })
+        assertTrue(requests.all { it.header("X-Tenant") == "default" })
+    }
+
+    @Test
     fun aReplayedEventIdIsDeliveredOnce() = runBlocking {
         val body = "id: 1\ndata: {\"n\":1}\n\nid: 2\ndata: {\"n\":2}\n\nid: 1\ndata: {\"n\":1}\n\nid: 3\ndata: {\"n\":3}\n\n"
         val transport = WmpHttpSseTransport("https://x.test/send", "https://x.test/events", client(body))

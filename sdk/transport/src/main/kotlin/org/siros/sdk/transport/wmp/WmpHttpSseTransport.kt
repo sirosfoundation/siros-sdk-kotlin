@@ -36,12 +36,24 @@ import java.util.concurrent.TimeUnit
  * @param sseUrl The URL for SSE EventSource (incoming messages).
  * @param client Optional OkHttpClient (shared with other SDK components).
  * @param extraHeaders Additional headers (e.g., Authorization, X-Tenant-ID).
+ * @param tokenProvider Freshens the `Authorization` bearer per request: the
+ *   HTTP+SSE binding is stateless - EVERY POST is its own request and the
+ *   engine validates each one against the AS - so a token baked in at
+ *   connect dies with its (typically ~120 s) expiry and every later POST is
+ *   answered "Not authorized" (found driving an issuance ~40 minutes after
+ *   login: the start reached the engine with a long-expired token). The
+ *   provider is called per POST and per SSE (re)connect; the wallet's is
+ *   `ensure`-shaped (cached until expired), so the calls are cheap. A null
+ *   return falls back to no Authorization header; extraHeaders'
+ *   Authorization (if any) then applies. Takes precedence over extraHeaders'
+ *   Authorization when both answer.
  */
 class WmpHttpSseTransport(
     private val sendUrl: String,
     private val sseUrl: String,
     private val client: OkHttpClient = defaultClient(),
     private val extraHeaders: Map<String, String> = emptyMap(),
+    private val tokenProvider: (suspend () -> String?)? = null,
 ) : Transport {
 
     private val _state = MutableStateFlow(TransportState.DISCONNECTED)
@@ -56,6 +68,18 @@ class WmpHttpSseTransport(
     @Volatile private var lastEventId: String? = null
 
     /**
+     * The request headers for one outgoing request: [extraHeaders], with the
+     * `Authorization` freshened from [tokenProvider] when it answers (see its
+     * doc comment for why per-request, not per-connect).
+     */
+    private suspend fun requestHeaders(): Map<String, String> {
+        val headers = extraHeaders.toMutableMap()
+        val token = tokenProvider?.invoke()
+        if (token != null) headers["Authorization"] = "Bearer $token"
+        return headers
+    }
+
+    /**
      * Opens the event stream and returns only once it is CONNECTED (or has failed): a caller that sends a request
      * right after `connect()` therefore never sends before the stream is open. That matters for a flow that delivers
      * a secret, which is delivered live and once to the stream connected when it is emitted (OpenID4VCI 1.1
@@ -68,7 +92,7 @@ class WmpHttpSseTransport(
 
         val request = Request.Builder()
             .url(sseUrl)
-            .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
+            .apply { requestHeaders().forEach { (k, v) -> header(k, v) } }
             .header("Accept", "text/event-stream")
             .apply { lastEventId?.let { header("Last-Event-ID", it) } }
             .build()
@@ -139,7 +163,7 @@ class WmpHttpSseTransport(
     override suspend fun send(message: ByteArray) {
         val request = Request.Builder()
             .url(sendUrl)
-            .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
+            .apply { requestHeaders().forEach { (k, v) -> header(k, v) } }
             .post(message.toRequestBody("application/json".toMediaType()))
             .build()
 

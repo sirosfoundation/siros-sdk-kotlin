@@ -8103,14 +8103,20 @@ class SirosWallet private constructor(
                     org.siros.sdk.transport.wmp.WmpHttpSseTransport(
                         sendUrl = sendUrl,
                         sseUrl = sseUrl,
-                        // The bearer the engine's TAC gate validates. The
-                        // HTTP+SSE binding is stateless - every POST is its
-                        // own request, so the token rides the header on every
-                        // one (the transport applies extraHeaders to the SSE
-                        // GET too); params.auth on the session create alone
-                        // (the WS-era carriage) would authenticate nothing
-                        // after it.
-                        extraHeaders = mapOf("Authorization" to "Bearer $appToken"),
+                        // The bearer the engine's TAC gate validates, FRESH
+                        // PER REQUEST: the binding is stateless - every POST
+                        // is its own request - and the AS's tokens live ~2
+                        // minutes, so a token baked in at connect dies with
+                        // its expiry and every later flow start is answered
+                        // "Not authorized" (found driving an issuance 40
+                        // minutes after login). The provider is the wallet's
+                        // own ensure-shaped mint (cached until expired), the
+                        // same source the legacy engine session's
+                        // tokenProvider refreshes from on its reconnects; a
+                        // legacy-app-token deployment keeps its fixed token.
+                        tokenProvider = {
+                            legacyAppToken ?: authTokens.ensureBackendToken().raw
+                        },
                     ),
                 )
             }
