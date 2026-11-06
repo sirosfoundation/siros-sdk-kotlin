@@ -8,6 +8,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -142,10 +143,28 @@ class WmpHttpSseTransport(
             .post(message.toRequestBody("application/json".toMediaType()))
             .build()
 
-        val response = client.newCall(request).execute()
-        response.use { resp ->
-            if (!resp.isSuccessful) {
-                throw WmpSessionException("HTTP POST failed: ${resp.code} ${resp.message}")
+        // OkHttp's execute() is a blocking call - hop to the IO dispatcher
+        // so a caller on the main thread (the wallet's connect path is
+        // invoked there) doesn't crash with NetworkOnMainThreadException
+        // (found driving the HTTP+SSE mode against a live engine). The SSE
+        // side already runs in [scope] (Dispatchers.IO).
+        withContext(Dispatchers.IO) {
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    throw WmpSessionException("HTTP POST failed: ${resp.code} ${resp.message}")
+                }
+                // The binding is request/response OVER SSE: the POST's own
+                // HTTP response is empty (204 No Content); the JSON-RPC
+                // reply rides the SSE stream. Some deployments (proxies,
+                // an early-reply engine) answer the POST body directly - so
+                // deliver it to the incoming channel when there is one,
+                // never discarding a reply (found driving against a live
+                // engine: the session create answered, the transport threw
+                // it away, and every request timed out).
+                val body: ByteArray = resp.body?.bytes() ?: ByteArray(0)
+                if (body.isNotEmpty()) {
+                    incomingChannel.trySend(body)
+                }
             }
         }
     }

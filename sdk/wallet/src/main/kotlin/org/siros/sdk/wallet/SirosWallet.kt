@@ -7868,6 +7868,14 @@ class SirosWallet private constructor(
                     org.siros.sdk.transport.wmp.WmpHttpSseTransport(
                         sendUrl = sendUrl,
                         sseUrl = sseUrl,
+                        // The bearer the engine's TAC gate validates. The
+                        // HTTP+SSE binding is stateless - every POST is its
+                        // own request, so the token rides the header on every
+                        // one (the transport applies extraHeaders to the SSE
+                        // GET too); params.auth on the session create alone
+                        // (the WS-era carriage) would authenticate nothing
+                        // after it.
+                        extraHeaders = mapOf("Authorization" to "Bearer $appToken"),
                     ),
                 )
             }
