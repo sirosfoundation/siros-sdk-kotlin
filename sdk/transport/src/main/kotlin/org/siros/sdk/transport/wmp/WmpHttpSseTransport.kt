@@ -80,18 +80,52 @@ class WmpHttpSseTransport(
     }
 
     /**
+     * The session this stream belongs to, from [onSessionCreated]. The engine's
+     * SSE route REQUIRES `?session_id=` (it routes the replay and the live
+     * events by it), so the stream cannot open before the create answers -
+     * [connect] defers to [onSessionCreated] until the id arrives, and every
+     * later (re)connect (a resume, a drop) re-opens with it.
+     */
+    @Volatile private var sseSessionId: String? = null
+
+    /**
+     * A pre-create [connect] cannot open the stream: the engine's SSE route
+     * answers 400 without `?session_id=`, and no session exists yet anyway.
+     * [onSessionCreated] opens it once the create answered; a resume
+     * re-connects through here with the remembered id.
+     */
+    override suspend fun connect() {
+        if (_state.value == TransportState.CONNECTED) return
+        if (sseSessionId == null) return
+        openStream()
+    }
+
+    /** The stream, opened with the session the wallet created: `?session_id=` names it (the engine routes by it). */
+    override suspend fun onSessionCreated(sessionId: String) {
+        if (sseSessionId == null) sseSessionId = sessionId
+        if (_state.value != TransportState.CONNECTED) openStream()
+    }
+
+    /** The SSE GET, named with the session id. */
+    private fun sseRequestUrl(): String {
+        val id = sseSessionId ?: return sseUrl
+        val separator = if ('?' in sseUrl) "&" else "?"
+        return "$sseUrl${separator}session_id=$id"
+    }
+
+    /**
      * Opens the event stream and returns only once it is CONNECTED (or has failed): a caller that sends a request
      * right after `connect()` therefore never sends before the stream is open. That matters for a flow that delivers
      * a secret, which is delivered live and once to the stream connected when it is emitted (OpenID4VCI 1.1
      * response-level `credential_metadata`, privatedata-spec 5A), so the stream MUST be up before `wmp.flow.start`.
      * On a reconnect `Last-Event-ID` carries the last event received.
      */
-    override suspend fun connect() {
+    private suspend fun openStream() {
         if (_state.value == TransportState.CONNECTED) return
         _state.value = TransportState.CONNECTING
 
         val request = Request.Builder()
-            .url(sseUrl)
+            .url(sseRequestUrl())
             .apply { requestHeaders().forEach { (k, v) -> header(k, v) } }
             .header("Accept", "text/event-stream")
             .apply { lastEventId?.let { header("Last-Event-ID", it) } }
