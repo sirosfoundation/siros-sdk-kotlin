@@ -7835,14 +7835,48 @@ class SirosWallet private constructor(
         wmpPeer?.close()
         blindIssuance.clear()
 
-        // Resolve engine URL: explicit config > discovery > same as backend
-        val engineBaseUrl = (config.engineUrl
-            ?: WalletConfig.discoverEngineUrl(config.backendUrl)
-            ?: config.backendUrl).trimEnd('/')
-        val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
-            "/api/v2/wallet?tenant_id=${config.tenantId}"
-
-        val peer = createWmpPeer(wsUrl)
+        // The transport, by the engine mode (WmpEngineMode):
+        //
+        // - LEGACY_WS (default): the Go engine's WebSocket - engineUrl >
+        //   discovery > backendUrl, the historic path, unchanged.
+        // - HTTP_SSE: the Rust engine's WMP HTTP+SSE binding - the
+        //   configured wmpSendUrl/wmpSseUrl (siros-wallet-core
+        //   engine-server; the reply rides the SSE stream).
+        // - LOCAL: the app's own transport factory (WmpUniFFITransport
+        //   over its ports - the AAR's engine core in-process).
+        //
+        // Every mode carries the SAME WmpPeer/WmpSession/profile stack -
+        // only the Transport under it changes, which is the point of the
+        // seam: the flows, the asks and the profile dispatch are
+        // transport-independent.
+        val peer = when (config.wmpEngineMode) {
+            org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS -> {
+                // Resolve engine URL: explicit config > discovery > same as backend
+                val engineBaseUrl = (config.engineUrl
+                    ?: WalletConfig.discoverEngineUrl(config.backendUrl)
+                    ?: config.backendUrl).trimEnd('/')
+                val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
+                    "/api/v2/wallet?tenant_id=${config.tenantId}"
+                createWmpPeer(wsUrl)
+            }
+            org.siros.sdk.wallet.WmpEngineMode.HTTP_SSE -> {
+                val sendUrl = config.wmpSendUrl
+                    ?: throw WalletException("WMP_ENGINE_MODE=HTTP_SSE needs wmpSendUrl (the engine's POST /wmp endpoint)")
+                val sseUrl = config.wmpSseUrl
+                    ?: throw WalletException("WMP_ENGINE_MODE=HTTP_SSE needs wmpSseUrl (the engine's GET /wmp/events endpoint)")
+                createWmpPeerFromTransport(
+                    org.siros.sdk.transport.wmp.WmpHttpSseTransport(
+                        sendUrl = sendUrl,
+                        sseUrl = sseUrl,
+                    ),
+                )
+            }
+            org.siros.sdk.wallet.WmpEngineMode.LOCAL -> {
+                val transport = config.wmpTransport
+                    ?: throw WalletException("WMP_ENGINE_MODE=LOCAL needs wmpTransport (the app's WmpUniFFITransport factory - the AAR's engine core)")
+                createWmpPeerFromTransport(transport())
+            }
+        }
 
         val profile = wmpProfile(peer, peerEpoch, thisConnectionScope)
         peer.use(profile)
@@ -7859,7 +7893,7 @@ class SirosWallet private constructor(
         // WMP peer handles credential notifications via the profile
         credentialNotifier = null // Notifications go through WmpPeer.sendCredentialNotification()
 
-        Timber.i("Connected via WMP protocol to $wsUrl")
+        Timber.i("Connected via WMP protocol (${config.wmpEngineMode})")
     }
 
     /** Transport-agnostic description of one generated OID4VCI proof. */
@@ -12777,6 +12811,16 @@ class SirosWallet private constructor(
         /** Builds the WMP peer for an engine URL; replaceable so a test can run the production connect path without a socket. */
         internal var createWmpPeer: (String) -> org.siros.sdk.transport.wmp.WmpPeer = { wsUrl ->
             org.siros.sdk.transport.wmp.WmpPeer(org.siros.sdk.transport.wmp.WmpSession(org.siros.sdk.transport.wmp.WmpWebSocketTransport(wsUrl)))
+        }
+
+        /**
+         * Builds the WMP peer over a [org.siros.sdk.transport.Transport] - the
+         * HTTP+SSE and LOCAL engine modes' entry (the same peer/session
+         * stack over a different transport; replaceable for the same reason
+         * [createWmpPeer] is).
+         */
+        internal var createWmpPeerFromTransport: (org.siros.sdk.transport.Transport) -> org.siros.sdk.transport.wmp.WmpPeer = { transport ->
+            org.siros.sdk.transport.wmp.WmpPeer(org.siros.sdk.transport.wmp.WmpSession(transport))
         }
 
         internal var createEngineSession: (String, String) -> WalletEngineSession =
