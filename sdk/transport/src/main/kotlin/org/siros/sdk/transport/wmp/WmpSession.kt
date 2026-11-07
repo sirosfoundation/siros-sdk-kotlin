@@ -91,6 +91,13 @@ class WmpSession(
         sessionId = parsed.wmp.sessionId
         resumptionToken = parsed.resumptionToken
 
+        // The HTTP+SSE binding names its event stream with the session id (the
+        // engine's SSE route requires `?session_id=`): it opens HERE, after
+        // the create answered. The create's own reply rode the POST's body.
+        // The WS and in-process bindings answer nothing (their carrier is
+        // bound another way).
+        transport.onSessionCreated(sessionId!!)
+
         _state.value = WmpSessionState.ACTIVE
         Timber.i("WMP session created: $sessionId")
     }
@@ -144,6 +151,32 @@ class WmpSession(
     }
 
     /**
+     * [params] with this session's id stamped into its `wmp.session_id`.
+     *
+     * The engine resolves EVERY request's session context from that member
+     * (the SSE stream aside, the HTTP+SSE binding is stateless - nothing else
+     * names the session a POST belongs to), and its capability gate fails
+     * closed without one: a flow start whose envelope carried the explicit
+     * `null` this SDK's codec writes was answered "Capability not supported"
+     * (found driving the issuance). Null before the create answered ([sessionId]
+     * unset): the params ride as built. The resume/close envelopes already name
+     * the session; the stamp is idempotent over them.
+     */
+    private fun stampSessionId(params: kotlinx.serialization.json.JsonObject?): kotlinx.serialization.json.JsonObject? {
+        val sid = sessionId ?: return params
+        val wmp = (params?.get("wmp") as? kotlinx.serialization.json.JsonObject) ?: return params
+        return kotlinx.serialization.json.buildJsonObject {
+            params.forEach { (key, value) ->
+                if (key != "wmp") put(key, value)
+            }
+            put("wmp", kotlinx.serialization.json.buildJsonObject {
+                wmp.forEach { (key, value) -> put(key, value) }
+                put("session_id", kotlinx.serialization.json.JsonPrimitive(sid))
+            })
+        }
+    }
+
+    /**
      * Send a JSON-RPC request and wait for the correlated response.
      * Throws [WmpTimeoutException] if the response is not received within the timeout.
      */
@@ -157,7 +190,7 @@ class WmpSession(
         pendingRequests[id] = deferred
 
         try {
-            val message = codec.encodeRequest(method, params, id)
+            val message = codec.encodeRequest(method, stampSessionId(params), id)
             sendMutex.withLock {
                 transport.send(message)
             }
@@ -170,7 +203,7 @@ class WmpSession(
 
     /** Send a JSON-RPC notification (no response expected). */
     suspend fun sendNotification(method: String, params: kotlinx.serialization.json.JsonObject?) {
-        val message = codec.encodeNotification(method, params)
+        val message = codec.encodeNotification(method, stampSessionId(params))
         sendMutex.withLock {
             transport.send(message)
         }
@@ -182,7 +215,7 @@ class WmpSession(
         params: kotlinx.serialization.json.JsonObject?,
         wanted: () -> Boolean,
     ): Boolean {
-        val message = codec.encodeNotification(method, params)
+        val message = codec.encodeNotification(method, stampSessionId(params))
         return sendMutex.withLock {
             if (!wanted()) {
                 false

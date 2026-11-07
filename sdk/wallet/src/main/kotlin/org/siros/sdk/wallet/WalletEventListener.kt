@@ -190,6 +190,31 @@ interface WalletEventListener {
     ): List<Long>
 
     /**
+     * A verifier's presentation requires the user's explicit consent (the
+     * Rust engine's `consent` ask - the OID4VP consent-check in enforce mode:
+     * the engine refuses the presentation unless the wallet's user says yes).
+     *
+     * Different from [onCredentialSelectionRequired]: that one picks WHICH
+     * credentials to offer (a DCQL match); this one is the YES/NO on what was
+     * already matched - the purpose (scope) the verifier asked for and the
+     * claims the query would disclose.
+     *
+     * The default declines (fail closed): a host app that has not built a
+     * consent UI must not have presentations proceed unconsented. Deployments
+     * that do not run the consent-check in enforce mode never fire this.
+     *
+     * @param flowId The presentation flow asking.
+     * @param purpose The scope the verifier asked for.
+     * @param requestedClaims The claim names the query would disclose.
+     * @return Whether the user consents to the presentation.
+     */
+    suspend fun onConsentRequested(
+        flowId: String,
+        purpose: String?,
+        requestedClaims: List<String>,
+    ): Boolean = false
+
+    /**
      * A new credential has been received from an issuer.
      * The SDK has already stored it — this callback is for
      * showing a confirmation / toast.

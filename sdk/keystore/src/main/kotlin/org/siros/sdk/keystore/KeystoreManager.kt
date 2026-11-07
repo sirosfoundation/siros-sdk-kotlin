@@ -104,6 +104,43 @@ interface KeystoreManager {
     suspend fun sign(keyId: String, payload: ByteArray, algorithm: String = "ES256"): ByteArray
 
     /**
+     * The JOSE signature (the raw JWS signature bytes - the base64url of them is
+     * the third segment of a compact JWS) over an ALREADY-BUILT signing input:
+     * the bytes an engine's bare `sign` ask carries, `header.payload` ASCII. Unlike
+     * [sign], the bytes are signed AS GIVEN - never re-encoded into a JWS first.
+     *
+     * The answer to siros-wallet-core's typed `sign` ask, where the engine built
+     * the proof's signing input and the key never left the wallet. The default
+     * null fails closed: a keystore that cannot sign raw input refuses the ask
+     * (the engine fails the proof) rather than signing something else and
+     * presenting it as the asked-for signature.
+     *
+     * @param keyId the key to sign with
+     * @param signingInput the exact bytes to sign
+     * @param algorithm signing algorithm (e.g. "ES256")
+     * @return the signature bytes, or null when this keystore cannot sign raw input
+     */
+    suspend fun signJwsSignature(keyId: String, signingInput: ByteArray, algorithm: String = "ES256"): ByteArray? = null
+
+    /**
+     * The public JWK of an existing key - the answer to an engine's `signing_key`
+     * ask (siros-wallet-core's typed asks: the engine builds a proof header naming
+     * the wallet's key, and the key never leaves the wallet, so the host answers
+     * with the public part only).
+     *
+     * @param keyId the key to publish, or null for the DEFAULT proof key - the
+     *   same key an unnamed proof would be signed with, resolved (and created,
+     *   when the keystore has none) exactly as [generateProof] would. This is
+     *   what makes the pair of asks consistent: the wallet publishes THIS
+     *   key's JWK and later signs the proof with THIS key.
+     * @return the key id and its public JWK, or null when this keystore cannot
+     *   answer (the caller keeps a bare header - the legacy shape - which an
+     *   issuer that requires an embedded key will refuse; fail closed, never
+     *   invent a key).
+     */
+    suspend fun publicKeyJwk(keyId: String?): KeypairInfo? = null
+
+    /**
      * Generate a proof JWT for credential issuance (c_nonce binding).
      *
      * @param audience the credential issuer URL

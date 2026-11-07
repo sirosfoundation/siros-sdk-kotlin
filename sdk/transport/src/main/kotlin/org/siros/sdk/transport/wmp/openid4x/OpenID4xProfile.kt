@@ -44,6 +44,21 @@ object OID4FlowTypes {
      */
     const val SIGN = "sign"
     const val MATCH = "match"
+
+    /**
+     * siros-wallet-core's typed asks (engine-ports' `Host` vocabulary, one
+     * child flow per ask - see [EngineSignParams] and the structs around it
+     * for the dialect distinction): same sub-flow answer mechanics, same
+     * `<parent>::<type>::<seq>` child ids, answered with the ask's own
+     * result struct on `wmp.flow.complete`.
+     */
+    const val SIGNING_KEY = "signing_key"
+    const val CONSENT = "consent"
+    const val TX_CODE = "tx_code"
+    const val AUTHORIZATION = "authorization"
+    const val PRESENTATION = "presentation"
+    const val DPOP_PROOF = "dpop_proof"
+    const val ATTESTATION = "attestation"
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +379,27 @@ data class OpenID4xConfig(
     // Appended last: a data class's property order is part of its binary API.
     /** Called with the flow id when the orchestrator cancels a flow (`wmp.flow.cancel`). */
     val onCancel: (suspend (String) -> Unit)? = null,
+    // ── siros-wallet-core's typed asks (HTTP_SSE / LOCAL engines), appended
+    // after every go-wmp-era member for the same binary-API reason. A null
+    // callback answers its ask with capability-not-supported (the engine
+    // fails the flow closed), except where an "empty" answer is a legal
+    // negative (no key, no DPoP proof, no attestation).
+    /** The bare `sign` ask: sign [EngineSignParams.toSignBytes] with the key [EngineSignParams.keyId] names. */
+    val onProofSign: (suspend (parentFlowId: String, params: EngineSignParams) -> ByteArray)? = null,
+    /** The `signing_key` ask: the named key's public JWK, or null for "no such key". */
+    val onSigningKey: (suspend (parentFlowId: String, keyId: String?) -> EngineSigningKeyResult)? = null,
+    /** The `consent` ask: whether the user consents to the claims/purpose. `false` is the decline path, never an error. */
+    val onConsent: (suspend (parentFlowId: String, params: EngineConsentParams) -> Boolean)? = null,
+    /** The `tx_code` ask: the transaction code the user entered. */
+    val onTxCode: (suspend (parentFlowId: String) -> String)? = null,
+    /** The `authorization` ask: hand the user to the URL (open the browser); the ask's result is ignored by the engine. */
+    val onAuthorization: (suspend (parentFlowId: String, url: String) -> Unit)? = null,
+    /** The `presentation` ask: build and sign the VP token for the selections. Answer with a token or a structured refusal. */
+    val onVpRequest: (suspend (parentFlowId: String, params: EngineVpParams) -> EngineVpResult)? = null,
+    /** The `dpop_proof` ask: the client-held DPoP proof, or null for "unavailable" (the engine falls back). */
+    val onDpopProof: (suspend (parentFlowId: String, params: EngineDpopProofParams) -> EngineDpopProofResult)? = null,
+    /** The `attestation` ask: the WIA + PoP pair, or nulls for "no attestation". */
+    val onAttestation: (suspend (parentFlowId: String, params: EngineAttestationParams) -> EngineAttestationResult)? = null,
 )
 
 /** Result of a sign sub-flow request. */
@@ -535,13 +571,23 @@ class OpenID4xProfile(
 
     // ---- WmpFlowHandler ----
 
-    override val flowTypes: List<String> =
-        listOf(OID4FlowTypes.OID4VCI, OID4FlowTypes.OID4VP, OID4FlowTypes.SIGN, OID4FlowTypes.MATCH)
+    override val flowTypes: List<String> = listOf(
+        OID4FlowTypes.OID4VCI, OID4FlowTypes.OID4VP,
+        OID4FlowTypes.SIGN, OID4FlowTypes.MATCH,
+        // siros-wallet-core's typed asks - the same sub-flow mechanics.
+        OID4FlowTypes.SIGNING_KEY, OID4FlowTypes.CONSENT, OID4FlowTypes.TX_CODE,
+        OID4FlowTypes.AUTHORIZATION, OID4FlowTypes.PRESENTATION,
+        OID4FlowTypes.DPOP_PROOF, OID4FlowTypes.ATTESTATION,
+    )
 
     override suspend fun startFlow(params: FlowStartParams): FlowStartResult {
         // The engine waits for this acknowledgement (30 s), not for the answer: start the work and return.
         when (params.flowType) {
-            OID4FlowTypes.SIGN, OID4FlowTypes.MATCH -> beginSubFlow(params)
+            OID4FlowTypes.SIGN, OID4FlowTypes.MATCH,
+            OID4FlowTypes.SIGNING_KEY, OID4FlowTypes.CONSENT, OID4FlowTypes.TX_CODE,
+            OID4FlowTypes.AUTHORIZATION, OID4FlowTypes.PRESENTATION,
+            OID4FlowTypes.DPOP_PROOF, OID4FlowTypes.ATTESTATION,
+            -> beginSubFlow(params)
         }
         return FlowStartResult(flowId = params.flowId, flowType = params.flowType)
     }
@@ -634,7 +680,7 @@ class OpenID4xProfile(
                 throw FlowStartRefusedException("too many pending requests")
             }
         }
-        val parentId = (start.params?.get("parent_flow_id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val parentId = extractParentFlowId(start)
         val sub = SubFlow(start.flowId, parentId, SupervisorJob(subFlowScope.coroutineContext[Job]))
         if (subFlows.putIfAbsent(start.flowId, sub) != null) {
             sub.lifetime.cancel()
@@ -658,6 +704,13 @@ class OpenID4xProfile(
             when (start.flowType) {
                 OID4FlowTypes.SIGN -> answerSignSubFlow(sub, start)
                 OID4FlowTypes.MATCH -> answerMatchSubFlow(sub, start)
+                OID4FlowTypes.SIGNING_KEY -> answerSigningKeySubFlow(sub, start)
+                OID4FlowTypes.CONSENT -> answerConsentSubFlow(sub, start)
+                OID4FlowTypes.TX_CODE -> answerTxCodeSubFlow(sub, start)
+                OID4FlowTypes.AUTHORIZATION -> answerAuthorizationSubFlow(sub, start)
+                OID4FlowTypes.PRESENTATION -> answerPresentationSubFlow(sub, start)
+                OID4FlowTypes.DPOP_PROOF -> answerDpopProofSubFlow(sub, start)
+                OID4FlowTypes.ATTESTATION -> answerAttestationSubFlow(sub, start)
             }
         } catch (e: CancellationException) {
             throw e
@@ -665,6 +718,21 @@ class OpenID4xProfile(
             // Text stays out of the log: it can name keys or credentials.
             Timber.e("WMP sub-flow answer failed (${e.javaClass.simpleName})")
         }
+    }
+
+    /**
+     * The PARENT flow's id for an engine-started sub-flow, for both ask dialects:
+     *
+     * - go-wmp names it in the params (`parent_flow_id`) - always present in its asks.
+     * - siros-wallet-core's typed asks carry the parent as their params' `flow_id`
+     *   member, and the child id itself is `<parent>::<type>::<seq>`, so the prefix
+     *   before the first `::` is a final fallback that needs no params at all.
+     */
+    private fun extractParentFlowId(start: FlowStartParams): String? {
+        val params = start.params
+        (params?.get("parent_flow_id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }?.let { return it }
+        (params?.get("flow_id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }?.let { return it }
+        return start.flowId.takeIf { it.contains("::") }?.substringBefore("::")?.takeIf { it.isNotBlank() }
     }
 
     /**
@@ -731,6 +799,14 @@ class OpenID4xProfile(
 
     private suspend fun answerSignSubFlow(sub: SubFlow, start: FlowStartParams) {
         val ctx = peer ?: return
+        // The dialect fork: go-wmp's sign ask always carries `action`; siros-wallet-core's
+        // bare `sign` ask never does (its SignParams is flow_id/to_sign/key_id/algorithm -
+        // the sign-family asks that go-wmp multiplexes on `action` are each their own typed
+        // child flow there). No ask of one dialect can be mistaken for the other's.
+        if (start.params?.get("action") == null) {
+            answerBareSignSubFlow(sub, start)
+            return
+        }
         val handler = config.onSignRequest
         if (handler == null) {
             answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "sign requests are not supported", null)
@@ -781,6 +857,49 @@ class OpenID4xProfile(
         }
     }
 
+    /**
+     * The bare `sign` ask of siros-wallet-core's dialect: one raw signature over [EngineSignParams.toSignBytes],
+     * answered as `{"signature": [ …byte values… ]}` (a JSON array, `Vec<u8>` on the wire - not base64).
+     * A missing callback or a failed signature is a flow ERROR here (never an empty answer): an empty signature
+     * array is a valid value the engine would relay as a proof.
+     */
+    private suspend fun answerBareSignSubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
+        val handler = config.onProofSign
+        if (handler == null) {
+            answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "proof signing is not supported", null)
+            return
+        }
+        val params = try {
+            start.params?.let { ctx.codec.json.decodeFromJsonElement(EngineSignParams.serializer(), it) }
+        } catch (e: Exception) {
+            Timber.e("Failed to decode the bare sign ask (${e.javaClass.simpleName})")
+            null
+        }
+        val parentFlowId = extractParentFlowId(start)
+        if (params == null || parentFlowId.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid sign request", null)
+            return
+        }
+        try {
+            val signature = handler.invoke(parentFlowId, params)
+            answerComplete(
+                sub,
+                buildJsonObject {
+                    put("signature", kotlinx.serialization.json.buildJsonArray {
+                        signature.forEach { b -> add(JsonPrimitive(b.toInt() and 0xff)) }
+                    })
+                },
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The reason stays local: a sign failure's text can name keys or credentials.
+            Timber.e("Proof signing failed (${e.javaClass.simpleName})")
+            answerError(sub, WMP_ERR_FLOW_ERROR, "proof signing failed", null)
+        }
+    }
+
     private suspend fun answerMatchSubFlow(sub: SubFlow, start: FlowStartParams) {
         val handler = config.onMatchRequest
         if (handler == null) {
@@ -788,7 +907,14 @@ class OpenID4xProfile(
             return
         }
         val payload = start.params
-        val parentFlowId = (payload?.get("parent_flow_id") as? JsonPrimitive)?.contentOrNull
+        // The dialect fork: go-wmp's match ask names the parent in `parent_flow_id` and is
+        // answered with `matches` (the query ids ONLY - the engine learns nothing about the
+        // wallet's credentials, a follow-up ask names them); siros-wallet-core's MatchParams
+        // carry the parent as `flow_id` and are answered with `selections` (the wallet's own
+        // credential ids, which the engine relays back to the wallet's own presentation ask
+        // and nowhere else). Both dialects match on the same `dcql_query` member.
+        val goWmpDialect = payload?.get("parent_flow_id") != null
+        val parentFlowId = extractParentFlowId(start)
         if (parentFlowId.isNullOrBlank()) {
             answerError(sub, WMP_ERR_FLOW_ERROR, "invalid match request", null)
             return
@@ -796,15 +922,288 @@ class OpenID4xProfile(
 
         try {
             val result = handler.invoke(parentFlowId, payload)
-            // An empty answer also ends the presentation at once (credentials_matched, an action on the PARENT flow) instead
-            // of leaving it to the engine's user-interaction timeout. It travels with the completion, and is replayed with it.
-            val followUps = if (result.matches.isEmpty()) listOf(credentialsMatchedFrame(parentFlowId, result)) else emptyList()
-            answerComplete(sub, matchResultJson(result), followUps)
+            if (goWmpDialect) {
+                // An empty answer also ends the presentation at once (credentials_matched, an action on the PARENT flow) instead
+                // of leaving it to the engine's user-interaction timeout. It travels with the completion, and is replayed with it.
+                val followUps = if (result.matches.isEmpty()) listOf(credentialsMatchedFrame(parentFlowId, result)) else emptyList()
+                answerComplete(sub, matchResultJson(result), followUps)
+            } else {
+                // The engine ends the flow itself on empty selections (`no_matching_credential`),
+                // so no credentials_matched follow-up exists in this dialect.
+                answerComplete(sub, matchSelectionsJson(result))
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Timber.e("Match request handler failed (${e.javaClass.simpleName})")
             answerError(sub, WMP_ERR_FLOW_ERROR, "match request failed", null)
+        }
+    }
+
+    // ---- siros-wallet-core's typed asks ----
+    //
+    // The same answer discipline as the sign/match sub-flows above: acknowledge at
+    // once, run the callback off the dispatch loop, answer on the child's own id.
+    // Each ask's NEGATIVE has its own correct wire form (the engine treats any
+    // wmp.flow.error on an ask as a generic refusal, so a real decline rides the
+    // result, never the error): consent declines are `{"consented": false}`, a
+    // missing key is `{}`, an unavailable DPoP proof is `{"proof": ""}`, and a
+    // sign-stage refusal names its code so the verifier learns WHICH it was.
+
+    private suspend fun answerSigningKeySubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
+        val handler = config.onSigningKey
+        if (handler == null) {
+            answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "signing key requests are not supported", null)
+            return
+        }
+        val params = try {
+            start.params?.let { ctx.codec.json.decodeFromJsonElement(EngineSigningKeyParams.serializer(), it) }
+        } catch (e: Exception) {
+            Timber.e("Failed to decode the signing_key ask (${e.javaClass.simpleName})")
+            null
+        }
+        val parentFlowId = extractParentFlowId(start)
+        if (params == null || parentFlowId.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid signing key request", null)
+            return
+        }
+        try {
+            val result = handler.invoke(parentFlowId, params.keyId)
+            // An empty object is a legal "no such key": the engine keeps the proof header bare.
+            answerComplete(sub, buildJsonObject {
+                result.jwk?.let { put("jwk", it) }
+            })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e("Signing key request failed (${e.javaClass.simpleName})")
+            answerError(sub, WMP_ERR_FLOW_ERROR, "signing key request failed", null)
+        }
+    }
+
+    private suspend fun answerConsentSubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
+        val handler = config.onConsent
+        if (handler == null) {
+            // No consent UI behind this wallet: refuse rather than present unconsented claims.
+            answerComplete(sub, buildJsonObject { put("consented", JsonPrimitive(false)) })
+            return
+        }
+        val params = try {
+            start.params?.let { ctx.codec.json.decodeFromJsonElement(EngineConsentParams.serializer(), it) }
+        } catch (e: Exception) {
+            Timber.e("Failed to decode the consent ask (${e.javaClass.simpleName})")
+            null
+        }
+        val parentFlowId = extractParentFlowId(start)
+        if (params == null || parentFlowId.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid consent request", null)
+            return
+        }
+        try {
+            val consented = handler.invoke(parentFlowId, params)
+            answerComplete(sub, buildJsonObject { put("consented", JsonPrimitive(consented)) })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e("Consent request failed (${e.javaClass.simpleName})")
+            // A consent machinery failure is not the user's consent: decline, never error -
+            // the decline is the verifier-facing access_denied either way, but an error here
+            // would strand the ask until its timeout.
+            answerComplete(sub, buildJsonObject { put("consented", JsonPrimitive(false)) })
+        }
+    }
+
+    private suspend fun answerTxCodeSubFlow(sub: SubFlow, start: FlowStartParams) {
+        val handler = config.onTxCode
+        if (handler == null) {
+            answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "tx_code requests are not supported", null)
+            return
+        }
+        val parentFlowId = extractParentFlowId(start)
+        if (parentFlowId.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid tx_code request", null)
+            return
+        }
+        try {
+            // The engine reads either a bare JSON string or {"tx_code": …}; the object form is
+            // the explicit one.
+            val code = handler.invoke(parentFlowId)
+            answerComplete(sub, buildJsonObject { put("tx_code", JsonPrimitive(code)) })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e("tx_code request failed (${e.javaClass.simpleName})")
+            answerError(sub, WMP_ERR_FLOW_ERROR, "tx_code request failed", null)
+        }
+    }
+
+    private suspend fun answerAuthorizationSubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
+        val handler = config.onAuthorization
+        if (handler == null) {
+            answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "authorization hand-over is not supported", null)
+            return
+        }
+        val params = try {
+            start.params?.let { ctx.codec.json.decodeFromJsonElement(EngineAuthorizationParams.serializer(), it) }
+        } catch (e: Exception) {
+            Timber.e("Failed to decode the authorization ask (${e.javaClass.simpleName})")
+            null
+        }
+        val parentFlowId = extractParentFlowId(start)
+        val url = params?.url
+        if (params == null || parentFlowId.isNullOrBlank() || url.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid authorization request", null)
+            return
+        }
+        try {
+            handler.invoke(parentFlowId, url)
+            // Any result: the engine only waits for the hand-over. The authorization's own
+            // answer arrives later as an `authorize` action on the parent flow.
+            answerComplete(sub, buildJsonObject {})
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e("Authorization hand-over failed (${e.javaClass.simpleName})")
+            answerError(sub, WMP_ERR_FLOW_ERROR, "authorization hand-over failed", null)
+        }
+    }
+
+    private suspend fun answerPresentationSubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
+        val handler = config.onVpRequest
+        if (handler == null) {
+            answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "presentation signing is not supported", null)
+            return
+        }
+        val params = try {
+            start.params?.let { ctx.codec.json.decodeFromJsonElement(EngineVpParams.serializer(), it) }
+        } catch (e: Exception) {
+            Timber.e("Failed to decode the presentation ask (${e.javaClass.simpleName})")
+            null
+        }
+        val parentFlowId = extractParentFlowId(start)
+        if (params == null || parentFlowId.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid presentation request", null)
+            return
+        }
+        try {
+            val result = handler.invoke(parentFlowId, params)
+            answerComplete(
+                sub,
+                buildJsonObject {
+                    result.vpToken?.let { put("vp_token", JsonPrimitive(it)) }
+                    result.refusalCode?.let { code ->
+                        put("refusal", buildJsonObject { put("code", JsonPrimitive(code)) })
+                    }
+                },
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SignRefusedException) {
+            // The user's own decline at the sign stage: the structured refusal, never a
+            // generic error - the verifier must learn it was access_denied.
+            Timber.w("Presentation refused by the user")
+            answerComplete(
+                sub,
+                buildJsonObject {
+                    put("refusal", buildJsonObject {
+                        put("code", JsonPrimitive(EngineVpResult.SIGN_REFUSED))
+                    })
+                },
+            )
+        } catch (e: TransactionDataError) {
+            // The verifier-facing distinction is the refusal code: declined by the user is
+            // access_denied, anything else about the transaction_data entries is
+            // invalid_transaction_data.
+            val code = if (e.reason == TransactionDataReason.DECLINED) {
+                EngineVpResult.SIGN_REFUSED
+            } else {
+                EngineVpResult.UNSUPPORTED_TRANSACTION_DATA
+            }
+            Timber.w("Presentation refused: transaction_data (${e.reason.code})")
+            answerComplete(
+                sub,
+                buildJsonObject {
+                    put("refusal", buildJsonObject { put("code", JsonPrimitive(code)) })
+                },
+            )
+        } catch (e: Exception) {
+            // Text stays out of the log: it can name keys or credentials.
+            Timber.e("Presentation signing failed (${e.javaClass.simpleName})")
+            answerError(sub, WMP_ERR_FLOW_ERROR, "presentation signing failed", null)
+        }
+    }
+
+    private suspend fun answerDpopProofSubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
+        val handler = config.onDpopProof
+        if (handler == null) {
+            // No client-held DPoP behind this wallet: the empty proof is the legal
+            // "unavailable", the engine falls back to its own ephemeral key.
+            answerComplete(sub, buildJsonObject { put("proof", JsonPrimitive("")) })
+            return
+        }
+        val params = try {
+            start.params?.let { ctx.codec.json.decodeFromJsonElement(EngineDpopProofParams.serializer(), it) }
+        } catch (e: Exception) {
+            Timber.e("Failed to decode the dpop_proof ask (${e.javaClass.simpleName})")
+            null
+        }
+        val parentFlowId = extractParentFlowId(start)
+        if (params == null || parentFlowId.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid dpop_proof request", null)
+            return
+        }
+        try {
+            val result = handler.invoke(parentFlowId, params)
+            // An empty proof is the legal "no client-held key": the engine falls back.
+            answerComplete(sub, buildJsonObject {
+                put("proof", JsonPrimitive(result.proof ?: ""))
+            })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e("DPoP proof request failed (${e.javaClass.simpleName})")
+            answerComplete(sub, buildJsonObject { put("proof", JsonPrimitive("")) })
+        }
+    }
+
+    private suspend fun answerAttestationSubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
+        val handler = config.onAttestation
+        if (handler == null) {
+            // No attestation provider behind this wallet: the empty answer is the legal
+            // "none", the flow proceeds without client attestation.
+            answerComplete(sub, buildJsonObject {})
+            return
+        }
+        val params = try {
+            start.params?.let { ctx.codec.json.decodeFromJsonElement(EngineAttestationParams.serializer(), it) }
+        } catch (e: Exception) {
+            Timber.e("Failed to decode the attestation ask (${e.javaClass.simpleName})")
+            null
+        }
+        val parentFlowId = extractParentFlowId(start)
+        if (params == null || parentFlowId.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid attestation request", null)
+            return
+        }
+        try {
+            val result = handler.invoke(parentFlowId, params)
+            answerComplete(sub, buildJsonObject {
+                result.wia?.let { put("wia", JsonPrimitive(it)) }
+                result.pop?.let { put("pop", JsonPrimitive(it)) }
+            })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e("Attestation request failed (${e.javaClass.simpleName})")
+            // The empty answer is the legal "no attestation": fail open to it rather than
+            // stranding the ask, matching a wallet with no provider.
+            answerComplete(sub, buildJsonObject {})
         }
     }
 
@@ -861,6 +1260,32 @@ class OpenID4xProfile(
             ))
             org.siros.sdk.transport.engine.NoMatchCodes.wire(result.noMatchReason)
                 ?.let { put("no_match_reason", JsonPrimitive(it)) }
+        }
+    }
+
+    /**
+     * The match answer in siros-wallet-core's dialect (its `MatchResult`): `selections` -
+     * the wallet's OWN credential ids with the query each answers and the claims each
+     * would disclose, and an optional `handle` this profile never sets (the wallet has no
+     * correlation to ask for). The engine relays the selections to the wallet's own
+     * presentation ask and nowhere else. An empty array is "nothing matched", and the
+     * engine ends the flow itself (`no_matching_credential`): no reason code exists here.
+     */
+    internal fun matchSelectionsJson(result: MatchResult): JsonObject {
+        return buildJsonObject {
+            put("selections", kotlinx.serialization.json.buildJsonArray {
+                result.matches.forEach { m ->
+                    add(buildJsonObject {
+                        put("credential_query_id", JsonPrimitive(m.credentialQueryId ?: ""))
+                        put("credential_id", JsonPrimitive(m.credentialId))
+                        m.disclosedClaims?.let { claims ->
+                            put("disclosed_claims", kotlinx.serialization.json.buildJsonArray {
+                                claims.forEach { c -> add(JsonPrimitive(c)) }
+                            })
+                        }
+                    })
+                }
+            })
         }
     }
 

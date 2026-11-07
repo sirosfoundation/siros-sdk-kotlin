@@ -312,6 +312,13 @@ class WscdKeystoreAdapter private constructor(
         return signer.sign(keyId, payload)
     }
 
+    override suspend fun signJwsSignature(keyId: String, signingInput: ByteArray, algorithm: String): ByteArray? {
+        // The WSCD signers' own contract is raw signature bytes over the bytes
+        // given - exactly what the ask wants.
+        checkUnlocked()
+        return signer.sign(keyId, signingInput)
+    }
+
     /** The pre-DIIP call shape: this keystore's own profile decides. */
     override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean): String =
         generateProof(audience, nonce, freshKey, holderBinding = null)

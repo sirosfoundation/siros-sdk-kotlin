@@ -3135,6 +3135,16 @@ class SirosWallet private constructor(
         val metadata: IssuerMetadata,
         val entitlement: IssuerEntitlement? = null,
         val trusted: Boolean? = null,
+        /**
+         * The issuer's REGISTERED OAuth client id (the backend issuer
+         * registry's `registered_issuer.client_id`), when the backend
+         * resolved it. The OID4VCI authorization-code flow's `client_id`: a
+         * registered issuer's AS rejects the unregistered fallback (the
+         * wallet's redirect_uri) - the WMP flow start relays this into the
+         * engine's params (the engine's own `client_id` member, the same
+         * source the legacy backend read from its registry).
+         */
+        val registeredClientId: String? = null,
     )
 
     /**
@@ -3168,6 +3178,8 @@ class SirosWallet private constructor(
                             json.decodeFromJsonElement(IssuerEntitlement.serializer(), it)
                         },
                         trusted = resolved["decision"]?.jsonPrimitive?.booleanOrNull,
+                        registeredClientId = resolved["registered_issuer"]?.jsonObject
+                            ?.get("client_id")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
                     )
                 }
                 Timber.w("Backend resolve returned no metadata for $issuerUrl; falling back to a direct fetch")
@@ -4393,7 +4405,9 @@ class SirosWallet private constructor(
         replacesBatchId: Long? = null,
         zkInput: ZkIssuanceInput? = null,
     ) {
-        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
+        val engine = engineSession
+        val peer = wmpPeer
+        if (engine == null && peer == null) throw WalletException(NOT_CONNECTED)
         if (issuanceInFlight) {
             throw WalletException("Another issuance is already in progress")
         }
@@ -4402,7 +4416,7 @@ class SirosWallet private constructor(
         activeZkIssuanceInput = zkInput
         val epoch = beginIssuanceStart()
         try {
-            connectEngineForIssuance(engine, epoch)
+            if (engine != null) connectEngineForIssuance(engine, epoch)
             advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_CHECKING_ENTITLEMENT)
             // ARF section 6.6.2.3: before requesting issuance, check that the
             // provider registered for this credential type. Done here rather
@@ -4488,12 +4502,30 @@ class SirosWallet private constructor(
                     }
                 })
             }
-            markIssuanceStartSent(engine)
-            engine.startIssuance(
-                offer = credentialOffer.toString(),
-                redirectUri = config.redirectUri.ifBlank { null },
-                authorizationDetails = authorizationDetailsForActiveOffer(),
-            )
+            if (engine != null) {
+                markIssuanceStartSent(engine)
+                engine.startIssuance(
+                    offer = credentialOffer.toString(),
+                    redirectUri = config.redirectUri.ifBlank { null },
+                    authorizationDetails = authorizationDetailsForActiveOffer(),
+                )
+            } else {
+                // The WMP start (siros-wallet-core): the offer OBJECT is the
+                // by-value params form - the lenient one that carries the
+                // wallet's own members beside the offer's, which a
+                // redirect-based grant needs (the engine reads
+                // redirect_uri/authorization_details from it). The flow id is
+                // the wallet's own choice on this transport; the state adopts
+                // it at the engine's first progress event.
+                markIssuanceStartSentWmp()
+                wmpStartIssuance(
+                    checkNotNull(peer),
+                    offerObject = credentialOffer,
+                    redirectUri = config.redirectUri.ifBlank { null },
+                    authorizationDetails = authorizationDetailsForActiveOffer(),
+                    registeredClientId = resolvedForStart?.registeredClientId,
+                )
+            }
         } catch (e: Exception) {
             // The flow was never registered server-side (no flow ID was ever
             // assigned), so nothing will ever arrive to clear
@@ -4546,8 +4578,10 @@ class SirosWallet private constructor(
      * values (e.g. the bare "mso_mdoc" format string instead of "mDL").
      */
     suspend fun renewCredential(batchId: Long) {
-        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
-        ensureEngineConnected(engine)
+        val engine = engineSession
+        val peer = wmpPeer
+        if (engine == null && peer == null) throw WalletException(NOT_CONNECTED)
+        if (engine != null) ensureEngineConnected(engine)
         val candidate = exportCredentialRefreshTokens()[batchId]
             ?: throw WalletException("No refresh_token stored for batch $batchId - it may not be renewable, or was already renewed")
         Timber.d("Starting renewal for batch=$batchId issuer=${candidate.credentialIssuerIdentifier}")
@@ -4562,13 +4596,20 @@ class SirosWallet private constructor(
             Timber.w(e, "Failed to refresh issuer metadata for renewal display; card will show raw format")
         }
         pendingRenewalSourceBatchId = batchId
-        engine.startRenewal(
-            refreshToken = candidate.refreshToken,
-            credentialIssuer = candidate.credentialIssuerIdentifier,
-            selectedCredentialConfigurationId = candidate.credentialConfigurationId,
-            dpopJwk = candidate.dpopJwk,
-            dpopKeyId = candidate.dpopKeyId,
-        )
+        if (engine != null) {
+            engine.startRenewal(
+                refreshToken = candidate.refreshToken,
+                credentialIssuer = candidate.credentialIssuerIdentifier,
+                selectedCredentialConfigurationId = candidate.credentialConfigurationId,
+                dpopJwk = candidate.dpopJwk,
+                dpopKeyId = candidate.dpopKeyId,
+            )
+        } else {
+            // The Rust engine's renewal form: the refresh_token grant with the
+            // issuer and the configuration it renews, the relayed DPoP key
+            // (or the client-held key's id), on the WMP flow start.
+            wmpStartRenewal(checkNotNull(peer), candidate)
+        }
     }
 
     /**
@@ -4580,7 +4621,9 @@ class SirosWallet private constructor(
      * every ordinary credential.
      */
     suspend fun startIssuance(offerUri: String, zkInput: ZkIssuanceInput? = null) {
-        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
+        val engine = engineSession
+        val peer = wmpPeer
+        if (engine == null && peer == null) throw WalletException(NOT_CONNECTED)
         if (issuanceInFlight) {
             throw WalletException("Another issuance is already in progress")
         }
@@ -4592,7 +4635,7 @@ class SirosWallet private constructor(
         issuanceInFlight = true
         val epoch = beginIssuanceStart()
         try {
-            connectEngineForIssuance(engine, epoch)
+            if (engine != null) connectEngineForIssuance(engine, epoch)
             advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_PREPARING_ISSUANCE)
             val redirectUri = config.redirectUri.ifBlank { null }
             val resolvedDisplay = resolveOfferForDisplay(offerUri)
@@ -4630,18 +4673,51 @@ class SirosWallet private constructor(
             // handleRequestAttestation. That spares this side a second fetch
             // of a possibly single-use credential_offer_uri and a duplicate
             // authorization_servers/client_id discovery.
-            markIssuanceStartSent(engine)
+            if (engine != null) markIssuanceStartSent(engine) else markIssuanceStartSentWmp()
             when (val start = resolveIssuanceStart(offerUri)) {
-                is IssuanceStart.Offer -> engine.startIssuance(
-                    offer = start.offer,
-                    redirectUri = redirectUri,
-                    authorizationDetails = authorizationDetailsForActiveOffer(),
-                )
-                is IssuanceStart.CredentialOfferUri -> engine.startIssuance(
-                    credentialOfferUri = start.uri,
-                    redirectUri = redirectUri,
-                    authorizationDetails = authorizationDetailsForActiveOffer(),
-                )
+                is IssuanceStart.Offer -> {
+                    if (engine != null) {
+                        engine.startIssuance(
+                            offer = start.offer,
+                            redirectUri = redirectUri,
+                            authorizationDetails = authorizationDetailsForActiveOffer(),
+                        )
+                    } else {
+                        // The by-value form: the offer OBJECT plus the wallet's
+                        // members, exactly as startIssuanceByOffer's WMP branch.
+                        val offerObject = try {
+                            json.parseToJsonElement(start.offer).jsonObject
+                        } catch (e: Exception) {
+                            throw WalletException("The offer is neither an offer URI nor a JSON object")
+                        }
+                        wmpStartIssuance(
+                            checkNotNull(peer),
+                            offerObject = offerObject,
+                            redirectUri = redirectUri,
+                            authorizationDetails = authorizationDetailsForActiveOffer(),
+                        )
+                    }
+                }
+                is IssuanceStart.CredentialOfferUri -> {
+                    if (engine != null) {
+                        engine.startIssuance(
+                            credentialOfferUri = start.uri,
+                            redirectUri = redirectUri,
+                            authorizationDetails = authorizationDetailsForActiveOffer(),
+                        )
+                    } else {
+                        // The reference form: the engine fetches the offer; the
+                        // wallet's members ride beside the reference (the
+                        // lenient by-value params form).
+                        wmpStartIssuance(
+                            checkNotNull(peer),
+                            offerObject = null,
+                            credentialOfferUri = start.uri,
+                            redirectUri = redirectUri,
+                            authorizationDetails = authorizationDetailsForActiveOffer(),
+                        )
+                    }
+                }
             }
         } catch (e: Exception) {
             // See startIssuanceByOffer's matching catch block: the flow was
@@ -4722,15 +4798,34 @@ class SirosWallet private constructor(
      * @param requestUri the OID4VP request URI.
      */
     suspend fun startPresentation(requestUri: String): Boolean {
-        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
+        val engine = engineSession
+        val peer = wmpPeer
+        if (engine == null && peer == null) throw WalletException(NOT_CONNECTED)
         // The same link delivered again (an issuer's page re-firing its request on the way back, an intent delivered twice) is not a
         // new request: no second flow, no second consent screen. The caller is told (false) so it can clear a "starting" indicator.
-        if (presentationLinks?.admit(requestUri, engine.connectionGeneration) == false) {
+        if (presentationLinks?.admit(requestUri, engine?.connectionGeneration ?: wmpConnectionGeneration) == false) {
             Timber.i("A presentation request identical to one started moments ago was delivered again; ignoring the duplicate")
             return false
         }
         try {
-            ensureEngineConnected(engine)
+            if (peer != null) {
+                // The WMP start (siros-wallet-core): the request URI as the
+                // by-reference params form - the engine fetches the request
+                // object; the transaction-data declaration rode the session's
+                // capabilities, not the start. The flow id is the wallet's own.
+                val declare = isTransactionDataEffectivelyEnabled
+                engineFlowDeclaredTransactionData = declare
+                presentationLinks?.rebind(requestUri, wmpConnectionGeneration)
+                peer.startFlow(
+                    flowType = org.siros.sdk.transport.wmp.openid4x.OID4FlowTypes.OID4VP,
+                    flowId = wmpNewFlowId(),
+                    params = kotlinx.serialization.json.buildJsonObject {
+                        put("request_uri", kotlinx.serialization.json.JsonPrimitive(requestUri))
+                    },
+                )
+                return true
+            }
+            ensureEngineConnected(engine!!)
             val declare = isTransactionDataEffectivelyEnabled
             engineFlowDeclaredTransactionData = declare
             // The start is sent on the connection that is current NOW (ensureEngineConnected may have replaced it, which releases the
@@ -5828,7 +5923,18 @@ class SirosWallet private constructor(
                 dropHolderCommitments(current.flowId)
                 stopZkSigning(current.flowId, refuse = true)
                 try {
+                    // Either transport cancels server-side; whichever is live.
                     engineSession?.cancelFlow(current.flowId)
+                    val peerToCancel = wmpPeer
+                    if (peerToCancel != null) {
+                        scope.launch {
+                            try {
+                                peerToCancel.cancelFlow(current.flowId, "user_cancelled")
+                            } catch (e: Exception) {
+                                Timber.w("Cancelling flow $current.flowId on the WMP peer failed (${e.javaClass.simpleName})")
+                            }
+                        }
+                    }
                 } catch (e: Exception) {
                     Timber.w(e, "Failed to send cancel to backend")
                 }
@@ -5873,7 +5979,10 @@ class SirosWallet private constructor(
      * @param state The state parameter from the redirect (for CSRF validation).
      */
     fun completeAuthorization(flowId: String, code: String, state: String) {
-        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
+        val engineOrPeerMissing = engineSession == null && wmpPeer == null
+        if (engineOrPeerMissing) throw WalletException(NOT_CONNECTED)
+        val peer = wmpPeer
+        val legacyEngine = engineSession
         // Peek, don't remove yet - removing before the CSRF check below meant
         // a mismatched (attacker-supplied) state consumed the real, still-
         // pending context, so any later, legitimate completion attempt for
@@ -5887,7 +5996,20 @@ class SirosWallet private constructor(
                 put("code", kotlinx.serialization.json.JsonPrimitive(code))
                 put("state", kotlinx.serialization.json.JsonPrimitive(state))
             }
-            engine.sendFlowAction(flowId, "authorization_complete", payload)
+            if (peer != null) {
+                // The WMP-native action name; the engine's adapter also accepts
+                // the legacy "authorization_complete" spelling.
+                scope.launch {
+                    try {
+                        peer.sendFlowAction(flowId, org.siros.sdk.transport.wmp.openid4x.OID4Action.AUTHORIZE, payload)
+                    } catch (e: Exception) {
+                        Timber.e(e, "Sending the authorization completion for flow $flowId failed")
+                        eventListener?.onFlowError(flowId, e.message ?: "Failed to complete authorization")
+                    }
+                }
+            } else {
+                checkNotNull(legacyEngine).sendFlowAction(flowId, "authorization_complete", payload)
+            }
             return
         }
         if (pending.state != state) {
@@ -5900,6 +6022,35 @@ class SirosWallet private constructor(
             Timber.w("Authorization callback for flow $flowId ignored: its issuance attempt was cancelled or superseded")
             return
         }
+        if (peer != null) {
+            // The WMP resume (siros-wallet-core): the engine stashed the PKCE
+            // verifier and the offer context server-side at its
+            // authorization_required progress, and the flow never ended locally
+            // (no socket was replaced), so the resume is ONE action on the
+            // ORIGINAL flow id - no reconnect, no re-sent flow_start, no new
+            // flow id. The completion (or error) arrives on the SSE stream.
+            Timber.i("Resuming authorization of flow $flowId after the browser: sending the authorize action on the original flow")
+            resumingFlowIds?.add(flowId)
+            scope.launch {
+                try {
+                    peer.sendFlowAction(
+                        flowId,
+                        org.siros.sdk.transport.wmp.openid4x.OID4Action.AUTHORIZE,
+                        buildJsonObject {
+                            put("code", kotlinx.serialization.json.JsonPrimitive(code))
+                            put("state", kotlinx.serialization.json.JsonPrimitive(state))
+                        },
+                    )
+                } catch (e: Exception) {
+                    resumingFlowIds?.remove(flowId)
+                    Timber.e(e, "Failed to resume authorization for flow $flowId")
+                    eventListener?.onFlowError(flowId, e.message ?: "Failed to resume authorization")
+                }
+            }
+            return
+        }
+        // The legacy path from here (a WMP peer returned above): the engine session must exist.
+        val engine = checkNotNull(legacyEngine) { NOT_CONNECTED }
         // The resume owns the issuance from here until it completes or fails: the original flow's guards may have been reset (it was ended
         // locally), and without them a second issuance could replace the offer before the resumed flow requests its proof.
         issuanceInFlight = true
@@ -7787,6 +7938,15 @@ class SirosWallet private constructor(
 
     private var wmpPeer: org.siros.sdk.transport.wmp.WmpPeer? = null
 
+    /**
+     * The connection generation of the CURRENT WMP peer - connectViaWmp's own epoch
+     * for it, the exact counterpart of a legacy engine session's
+     * `connectionGeneration` (the presentation-link ledger keys on it). A peer
+     * replacement bumps it; the ledger's entries of the replaced peer release.
+     */
+    @Volatile
+    private var wmpConnectionGeneration: Int = 0
+
     /** Test seam: runs after a sign request has passed its liveness checks and before it is dispatched (to pause it there). */
     internal var signDispatchHook: (() -> Unit)? = null
 
@@ -7818,6 +7978,94 @@ class SirosWallet private constructor(
     /** Test seam: replaces the display lookup of a resumed authorization's offer (the resolved offer, or null for a malformed advertisement, and its `record`). */
     internal var offerResolveHook: (suspend (String) -> Pair<CredentialOffer?, () -> Boolean>?)? = null
 
+    /**
+     * The wallet's answers to the LOCAL engine's asks - the same handlers the
+     * remote engine reaches through the profile's typed-ask callbacks, carried
+     * over the SDK's ask port (engine-switching.md: "the SDK's Host is the native
+     * UI"). Built per [connectViaWmp] with THIS connection's own epoch: an ask
+     * that arrives from an engine the wallet has since replaced is refused before
+     * it allocates anything (the same liveness rule every WMP callback follows).
+     */
+    private inner class WalletEngineAskHandler(
+        // THIS connection's own epoch, from connectViaWmp - never a separate consentEpoch read.
+        private val lifetime: Int,
+    ) : org.siros.sdk.transport.wmp.WmpEngineAskHandler {
+
+        private fun requireLive() {
+            if (isDestroyed || consentEpoch != lifetime) throw WalletException("This wallet session has ended")
+        }
+
+        override suspend fun requestSign(flowId: String, toSign: ByteArray, keyId: String?, algorithm: String): ByteArray {
+            requireLive()
+            return handleWmpProofSign(
+                flowId,
+                org.siros.sdk.transport.wmp.openid4x.EngineSignParams(
+                    flowId = flowId,
+                    toSign = toSign.map { it.toInt() and 0xff },
+                    keyId = keyId,
+                    algorithm = algorithm,
+                ),
+            )
+        }
+
+        override suspend fun requestSigningKey(flowId: String, keyId: String?): org.siros.sdk.transport.wmp.openid4x.EngineSigningKeyResult {
+            requireLive()
+            return handleWmpSigningKey(flowId, keyId)
+        }
+
+        override suspend fun requestMatch(flowId: String, params: kotlinx.serialization.json.JsonObject?): org.siros.sdk.transport.wmp.openid4x.MatchResult {
+            requireLive()
+            // The ticket this connection's OWN epoch issues - the same rule the
+            // profile's onMatchRequest follows.
+            return handleWmpMatchRequest(flowId, params, issueConsentTicket(flowId))
+        }
+
+        override suspend fun requestConsent(flowId: String, params: org.siros.sdk.transport.wmp.openid4x.EngineConsentParams): Boolean {
+            requireLive()
+            return handleWmpConsent(flowId, params)
+        }
+
+        override suspend fun requestTxCode(flowId: String): String {
+            requireLive()
+            return handleWmpTxCode(flowId)
+        }
+
+        override suspend fun openAuthorization(flowId: String, url: String) {
+            requireLive()
+            handleWmpAuthorizationAsk(flowId, url)
+        }
+
+        override suspend fun requestVp(flowId: String, params: org.siros.sdk.transport.wmp.openid4x.EngineVpParams): org.siros.sdk.transport.wmp.openid4x.EngineVpResult {
+            requireLive()
+            return handleWmpVpRequest(flowId, params, blindIssuance.epoch)
+        }
+
+        override suspend fun requestDpopProof(flowId: String, params: org.siros.sdk.transport.wmp.openid4x.EngineDpopProofParams): org.siros.sdk.transport.wmp.openid4x.EngineDpopProofResult {
+            requireLive()
+            return handleWmpDpopProof(flowId, params)
+        }
+
+        override suspend fun requestAttestation(flowId: String, params: org.siros.sdk.transport.wmp.openid4x.EngineAttestationParams): org.siros.sdk.transport.wmp.openid4x.EngineAttestationResult {
+            requireLive()
+            return handleWmpAttestation(flowId, params)
+        }
+
+        override fun onProgress(flowId: String, step: String, detail: String?) {
+            if (isDestroyed || consentEpoch != lifetime) return
+            // The local carrier has no SSE stream for the wallet's own UI: the
+            // Host's progress relay feeds the same progress handling.
+            scope.launch {
+                try {
+                    handleWmpProgress(flowId, step, detail?.let { kotlinx.serialization.json.buildJsonObject { put("message", kotlinx.serialization.json.JsonPrimitive(it)) } })
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    if (!currentCoroutineContext().isActive) throw e
+                } catch (e: Exception) {
+                    Timber.w(e, "Handling a local engine progress step failed")
+                }
+            }
+        }
+    }
+
     private suspend fun connectViaWmp(appToken: String) {
         // Same leaked-connection hazard as connectEngine's engineSession -
         // tear down any prior live peer before replacing the reference (its callbacks end with it). Bumping the epoch
@@ -7835,31 +8083,111 @@ class SirosWallet private constructor(
         wmpPeer?.close()
         blindIssuance.clear()
 
-        // Resolve engine URL: explicit config > discovery > same as backend
-        val engineBaseUrl = (config.engineUrl
-            ?: WalletConfig.discoverEngineUrl(config.backendUrl)
-            ?: config.backendUrl).trimEnd('/')
-        val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
-            "/api/v2/wallet?tenant_id=${config.tenantId}"
-
-        val peer = createWmpPeer(wsUrl)
+        // The transport, by the engine mode (WmpEngineMode):
+        //
+        // - LEGACY_WS (default): the Go engine's WebSocket - engineUrl >
+        //   discovery > backendUrl, the historic path, unchanged.
+        // - HTTP_SSE: the Rust engine's WMP HTTP+SSE binding - the
+        //   configured wmpSendUrl/wmpSseUrl (siros-wallet-core
+        //   engine-server; the reply rides the SSE stream).
+        // - LOCAL: the app's own transport factory (WmpUniFFITransport
+        //   over its ports - the AAR's engine core in-process).
+        //
+        // Every mode carries the SAME WmpPeer/WmpSession/profile stack -
+        // only the Transport under it changes, which is the point of the
+        // seam: the flows, the asks and the profile dispatch are
+        // transport-independent.
+        val peer = when (config.wmpEngineMode) {
+            org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS -> {
+                // Resolve engine URL: explicit config > discovery > same as backend
+                val engineBaseUrl = (config.engineUrl
+                    ?: WalletConfig.discoverEngineUrl(config.backendUrl)
+                    ?: config.backendUrl).trimEnd('/')
+                val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
+                    "/api/v2/wallet?tenant_id=${config.tenantId}"
+                createWmpPeer(wsUrl)
+            }
+            org.siros.sdk.wallet.WmpEngineMode.HTTP_SSE -> {
+                val sendUrl = config.wmpSendUrl
+                    ?: throw WalletException("WMP_ENGINE_MODE=HTTP_SSE needs wmpSendUrl (the engine's POST /wmp endpoint)")
+                val sseUrl = config.wmpSseUrl
+                    ?: throw WalletException("WMP_ENGINE_MODE=HTTP_SSE needs wmpSseUrl (the engine's GET /wmp/events endpoint)")
+                createWmpPeerFromTransport(
+                    org.siros.sdk.transport.wmp.WmpHttpSseTransport(
+                        sendUrl = sendUrl,
+                        sseUrl = sseUrl,
+                        // The bearer the engine's TAC gate validates, FRESH
+                        // PER REQUEST: the binding is stateless - every POST
+                        // is its own request - and the AS's tokens live ~2
+                        // minutes, so a token baked in at connect dies with
+                        // its expiry and every later flow start is answered
+                        // "Not authorized" (found driving an issuance 40
+                        // minutes after login). The provider is the wallet's
+                        // own ensure-shaped mint (cached until expired), the
+                        // same source the legacy engine session's
+                        // tokenProvider refreshes from on its reconnects; a
+                        // legacy-app-token deployment keeps its fixed token.
+                        tokenProvider = {
+                            legacyAppToken ?: authTokens.ensureBackendToken().raw
+                        },
+                    ),
+                )
+            }
+            org.siros.sdk.wallet.WmpEngineMode.LOCAL -> {
+                val transport = config.wmpTransport
+                    ?: throw WalletException("WMP_ENGINE_MODE=LOCAL needs wmpTransport (the app's WmpUniFFITransport factory - the AAR's engine core)")
+                // The asks of the in-process engine ride the Host port (the
+                // UniFFI callbacks), not the wire: hand the app's factory the
+                // wallet's OWN ask handler, so the same handlers answer the
+                // local engine as answer the remote one's child flows.
+                createWmpPeerFromTransport(transport(WalletEngineAskHandler(peerEpoch)))
+            }
+        }
 
         val profile = wmpProfile(peer, peerEpoch, thisConnectionScope)
         peer.use(profile)
         // Offered per session: a later change of transactionDataEnabled
         // reaches the orchestrator only with the next session.
         val declare = isTransactionDataEffectivelyEnabled
+        // siros-wallet-core gates every OpenID4x flow start on the `flows`
+        // capability being NEGOTIATED (core §10.3) and the credential
+        // notification flow on `credential_notification` - offered on the
+        // Rust engine's transports only: go-wmp (LEGACY_WS) needs neither and
+        // its session create is not told about capabilities it does not know.
+        val capabilities = if (config.wmpEngineMode == org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS) {
+            TransactionDataSupport.capabilitiesOffered(declare)
+        } else {
+            kotlinx.serialization.json.buildJsonObject {
+                put("flows", kotlinx.serialization.json.buildJsonObject {
+                    put("max_concurrent", kotlinx.serialization.json.JsonPrimitive(16))
+                })
+                put("credential_notification", kotlinx.serialization.json.buildJsonObject {
+                    put(
+                        "events",
+                        kotlinx.serialization.json.buildJsonArray {
+                            add(kotlinx.serialization.json.JsonPrimitive("credential_accepted"))
+                            add(kotlinx.serialization.json.JsonPrimitive("credential_failure"))
+                        },
+                    )
+                    put("context_ttl_seconds", kotlinx.serialization.json.JsonPrimitive(300))
+                })
+                TransactionDataSupport.capabilitiesOffered(declare)?.let { tx ->
+                    TransactionDataSupport.CAPABILITY?.let { cap -> put(cap, tx[cap]!!) }
+                }
+            }
+        }
         peer.connect(
             appToken,
-            capabilitiesOffered = TransactionDataSupport.capabilitiesOffered(declare),
+            capabilitiesOffered = capabilities,
         )
         // Only once the session exists: a failed connect must not leave "declared" set.
         wmpSessionDeclaredTransactionData = declare
         wmpPeer = peer
+        wmpConnectionGeneration = peerEpoch
         // WMP peer handles credential notifications via the profile
         credentialNotifier = null // Notifications go through WmpPeer.sendCredentialNotification()
 
-        Timber.i("Connected via WMP protocol to $wsUrl")
+        Timber.i("Connected via WMP protocol (${config.wmpEngineMode})")
     }
 
     /** Transport-agnostic description of one generated OID4VCI proof. */
@@ -8542,6 +8870,251 @@ class SirosWallet private constructor(
      * credential_metadata still ends the flow as a refusal, not a success. Whatever the outcome, the flow's response key and
      * anything opened with it are released AFTER the completion has been processed (a plain response never reads them).
      */
+    /**
+     * An OID4VCI completion on the WMP path (siros-wallet-core): the Rust engine
+     * holds the response-encryption key itself and delivers the credential in
+     * the clear over the wallet↔engine channel, so there is no
+     * decrypt-your-own-response ask and no blind-issuance state - what remains
+     * is the legacy collector's storage sequence, leaner for the parts this
+     * engine does server-side:
+     *
+     * - trust: the engine fails untrusted issuers server-side (fail closed at
+     *   its PDP port) - a completion IS the trust verdict, unlike the legacy
+     *   shape where the report rode the completion message.
+     * - ZK/auxiliary data: the Rust engine has no ZK issuance family; nothing
+     *   to check or accept.
+     *
+     * The renewal capture, the superseded batch, the per-format validation and
+     * storage, the §10 notification (the FLOW form on this engine), the guard
+     * resets and the state return are the legacy path's, reused one-for-one.
+     */
+    private suspend fun handleWmpIssuanceComplete(flowId: String, result: kotlinx.serialization.json.JsonObject) {
+        fun member(name: String): String? =
+            (result[name] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        val credential = member("credential") ?: ""
+        val refreshToken = member("refresh_token")
+        val dpopJwk = member("dpop_jwk")
+        val notificationId = member("notification_id")
+        if (credential.isEmpty()) {
+            // deferred=true with no credential is the engine's error path (a
+            // deferred credential the issuer never delivered) - reported, not
+            // stored as success.
+            Timber.e("WMP issuance flow $flowId completed with no credential")
+            resetIssuanceGuards()
+            eventListener?.onFlowError(flowId, "The issuance delivered no credential")
+            returnToReadyState()
+            return
+        }
+
+        // Snapshot the issuance state this completion belongs to before anything
+        // suspends (the legacy collector's identical rule).
+        val flowOffer = activeOffer
+        val flowVctm = activeVctm
+        val batchId = System.currentTimeMillis()
+        val oldRenewedClaims = pendingRenewalSourceBatchId?.let { oldBatchId ->
+            credentialStore.getAll()
+                .find { it.batchId == oldBatchId && it.instanceId == 0 }
+                ?.let { CredentialUtils.extractClaims(it) }
+        }
+        val supersededBatchId = pendingRenewalSourceBatchId
+        val wasRenewal = pendingRenewalSourceBatchId != null
+        pendingRenewalSourceBatchId = null
+
+        // The credential's format: the offer's configuration is authoritative;
+        // the credential's own shape decides when no offer survived (a replay
+        // after a later start replaced the shared state).
+        val format = try {
+            flowOffer?.let { offer ->
+                getIssuerMetadata(offer.credentialIssuerIdentifier)
+                    .credentialConfigurationsSupported[offer.credentialConfigurationId]?.format
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Could not resolve the issued credential's format from the issuer metadata")
+            null
+        } ?: if ('.' !in credential && '~' !in credential) "mso_mdoc" else "vc+sd-jwt"
+
+        var storeFailureReason: String? = null
+        var parsedMdoc: org.siros.sdk.credentials.mdoc.DocumentMdoc? = null
+        if (format == "mso_mdoc") {
+            try {
+                val bytes = java.util.Base64.getUrlDecoder().decode(credential)
+                parsedMdoc = org.siros.sdk.credentials.mdoc.MdocCbor.parseStoredCredential(bytes)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "The issued mdoc credential could not be read")
+                storeFailureReason = "Received credential could not be read"
+            }
+        }
+        val stored: StoredCredential? = if (format == "mso_mdoc") {
+            if (parsedMdoc == null) {
+                null
+            } else {
+                StoredCredential(
+                    id = randomUint32Id(),
+                    format = format,
+                    raw = credential,
+                    metadata = flowOffer?.let { offer ->
+                        CredentialUtils.buildMdocMetadata(
+                            offer = offer,
+                            mddlSchema = try {
+                                mddlSchemaFetcher.fetch(
+                                    issuerUrl = offer.credentialIssuerIdentifier,
+                                    scope = offer.credentialConfigurationId,
+                                    // The mdoc doctype is already known (parsed
+                                    // above), so the registry-first strategy can run.
+                                    vct = parsedMdoc.docType,
+                                    registryUrl = registryUrl,
+                                )
+                            } catch (e: Exception) {
+                                Timber.w(e, "Failed to fetch MDDL schema for ${offer.credentialConfigurationId}")
+                                null
+                            },
+                        )
+                    },
+                    notificationId = notificationId,
+                    credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
+                    credentialConfigurationId = flowOffer?.credentialConfigurationId,
+                    batchId = batchId,
+                    instanceId = 0,
+                )
+            }
+        } else {
+            val payload = CredentialUtils.parseJwtPayload(credential)
+            if (payload == null) {
+                storeFailureReason = "Received credential could not be read"
+                null
+            } else {
+                val exp = payload["exp"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.longOrNull }
+                val now = System.currentTimeMillis() / 1000
+                when {
+                    exp != null && exp < now -> {
+                        storeFailureReason = "Issued credential was already expired"
+                        null
+                    }
+                    verifyIssuedType(format, credential) != null -> {
+                        storeFailureReason = verifyIssuedType(format, credential)
+                        null
+                    }
+                    else -> {
+                        val integrity = verifyVctIntegrity(format, payload, flowOffer, activeVctmDocument)
+                        if (integrity.reason != null) {
+                            storeFailureReason = integrity.reason
+                            null
+                        } else {
+                            StoredCredential(
+                                id = randomUint32Id(),
+                                format = format,
+                                raw = credential,
+                                metadata = flowOffer?.let { offer ->
+                                    CredentialUtils.buildMetadata(
+                                        offer = offer,
+                                        vctm = integrity.refreshed?.vctm ?: flowVctm,
+                                        rawCredential = credential,
+                                    )
+                                },
+                                issuedAt = payload["iat"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.longOrNull },
+                                expiresAt = exp,
+                                notificationId = notificationId,
+                                credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
+                                credentialConfigurationId = flowOffer?.credentialConfigurationId,
+                                batchId = batchId,
+                                instanceId = 0,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (stored != null) {
+            credentialStore.save(stored)
+            eventListener?.onCredentialReceived(stored)
+            Timber.d("Stored issued credential format=$format batch=$batchId")
+        }
+
+        // The renewal it replaces goes only once a replacement was stored (the
+        // legacy collector's rule: a rejected replacement must not leave the
+        // wallet with neither batch).
+        if (supersededBatchId != null && stored != null) {
+            credentialStore.getAll()
+                .filter { it.batchId == supersededBatchId }
+                .forEach {
+                    credentialStore.delete(it.id)
+                    bbsHolderStateVault?.remove(it.id.toString())
+                }
+            removeCredentialRefreshToken(supersededBatchId)
+            Timber.d("Replaced renewed credential batch $supersededBatchId with $batchId")
+        }
+
+        // The renewal relay: durably captured for the next renewCredential call.
+        if (refreshToken != null && stored != null) {
+            flowOffer?.let { offer ->
+                setCredentialRefreshToken(
+                    batchId,
+                    CredentialRefreshTokenEntry(
+                        refreshToken = refreshToken,
+                        dpopJwk = dpopJwk,
+                        dpopKeyId = null,
+                        credentialIssuerIdentifier = offer.credentialIssuerIdentifier,
+                        credentialConfigurationId = offer.credentialConfigurationId,
+                    ),
+                )
+                Timber.d("Captured refresh_token for batch=$batchId issuer=${offer.credentialIssuerIdentifier}")
+            }
+        }
+
+        // The attribute-diff report of a silent renewal (ISSU_59).
+        if (wasRenewal && oldRenewedClaims != null && stored != null) {
+            val diff = CredentialUtils.computeAttributeDiff(oldRenewedClaims, CredentialUtils.extractClaims(stored))
+            if (diff.hasChanges) {
+                Timber.i("Renewal of batch=$batchId changed ${diff.changed.size + diff.added.size + diff.removed.size} claim(s)")
+                eventListener?.onCredentialRenewedWithAttributeDiff(stored, diff)
+            }
+        }
+
+        resetIssuanceGuards()
+        persistAndSyncKeystore()
+
+        // OID4VCI §10: tell the issuer the credential was accepted - the FLOW
+        // form on this engine (see [wmpSendCredentialNotification]).
+        if (stored != null && notificationId != null) {
+            wmpSendCredentialNotification(
+                flowId = flowId,
+                notificationId = notificationId,
+                event = CredentialNotificationEvent.ACCEPTED,
+            )
+        }
+
+        if (stored == null) {
+            // "Succeeded" with nothing to show for it is a failure to the user:
+            // the error path, so the UI's retry fires (the legacy rule).
+            val reason = storeFailureReason ?: "Credential could not be processed"
+            Timber.e("WMP issuance flow $flowId completed but nothing was stored: $reason")
+            eventListener?.onFlowError(flowId, reason)
+        } else {
+            Timber.i("WMP flow $flowId complete")
+            eventListener?.onFlowComplete(flowId)
+        }
+        returnToReadyState()
+    }
+
+    /** Back to Ready from a flow's end - the credentials re-read from the store, the user/display names kept. */
+    private suspend fun returnToReadyState() {
+        val current = _state.value
+        val userId = (current as? WalletState.FlowActive)?.userId
+            ?: (current as? WalletState.Ready)?.userId ?: ""
+        val displayName = (current as? WalletState.FlowActive)?.displayName
+            ?: (current as? WalletState.Ready)?.displayName
+        _state.value = WalletState.Ready(
+            userId = userId,
+            displayName = displayName,
+            credentials = credentialStore.getAll(),
+        )
+    }
+
     private suspend fun onWmpFlowComplete(
         peer: org.siros.sdk.transport.wmp.WmpPeer?,
         flowId: String,
@@ -8549,6 +9122,15 @@ class SirosWallet private constructor(
         lifetime: Int,
     ) {
         try {
+            // siros-wallet-core's oid4vci completion is a single `credential`
+            // member beside the renewal relay and the notification members -
+            // the issuance shape, stored here. Everything else is the
+            // presentation completion set ({presented}, {declined}, …), which
+            // stores nothing.
+            if (result?.containsKey("credential") == true) {
+                handleWmpIssuanceComplete(flowId, result)
+                return
+            }
             val refusal = wmpDeliveredMetadataRefusal(flowId, result)
             if (refusal != null) {
                 rejectDeliveredMetadata(
@@ -8804,6 +9386,57 @@ class SirosWallet private constructor(
                     }
                 },
                 onCancel = { flowId -> onWmpFlowCancel(flowId, lifetime) },
+                // ── siros-wallet-core's typed asks and progress. The same
+                // liveness/peerJob discipline as the callbacks above: a
+                // callback of a REPLACED peer can neither resume past its
+                // replacement nor act on stale state. onProgress follows the
+                // onComplete/onError fire-and-forget pattern (a terminal
+                // notification has no refusal to send); the ask callbacks
+                // follow onSignRequest's (the profile turns a thrown
+                // exception into the ask's own refusal shape).
+                onProgress = { flowId, step, payload ->
+                    try {
+                        withContext(peerJob) { handleWmpProgress(flowId, step, payload) }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        if (!currentCoroutineContext().isActive) throw e
+                    }
+                },
+                onProofSign = { parent, params ->
+                    requireLive()
+                    withContext(peerJob) { handleWmpProofSign(parent, params) }
+                },
+                onSigningKey = { parent, keyId ->
+                    requireLive()
+                    withContext(peerJob) { handleWmpSigningKey(parent, keyId) }
+                },
+                onConsent = { parent, params ->
+                    requireLive()
+                    withContext(peerJob) { handleWmpConsent(parent, params) }
+                },
+                onTxCode = { parent ->
+                    requireLive()
+                    withContext(peerJob) { handleWmpTxCode(parent) }
+                },
+                onAuthorization = { parent, url ->
+                    requireLive()
+                    try {
+                        withContext(peerJob) { handleWmpAuthorizationAsk(parent, url) }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        if (!currentCoroutineContext().isActive) throw e
+                    }
+                },
+                onVpRequest = { parent, params ->
+                    requireLive()
+                    withContext(peerJob) { handleWmpVpRequest(parent, params, blindIssuance.epoch) }
+                },
+                onDpopProof = { parent, params ->
+                    requireLive()
+                    withContext(peerJob) { handleWmpDpopProof(parent, params) }
+                },
+                onAttestation = { parent, params ->
+                    requireLive()
+                    withContext(peerJob) { handleWmpAttestation(parent, params) }
+                },
             )
         )
     }
@@ -8828,6 +9461,407 @@ class SirosWallet private constructor(
         clearFlowMatchStateIfLive(flowId, lifetime)
         if (!reportPseudonymCommitmentConflict(flowId, code, message)) {
             eventListener?.onFlowError(flowId, "$code: $message")
+        }
+    }
+
+    // ── siros-wallet-core's typed asks and progress (the HTTP_SSE / LOCAL engines) ──
+    //
+    // The same handlers the legacy collectors feed, reached through the typed-ask
+    // dialect instead: every ask is answered by the profile's own machinery (the
+    // refusal shapes live there), so these return the wallet's answers or throw -
+    // a throw becomes the ask's refusal, never a stranded timeout.
+
+    /**
+     * A flow progress on the WMP path. Carries the interactive steps the legacy
+     * collector handles one-for-one: `authorization_required` - the OAuth hand-over
+     * (both dialects: go-wmp relays the Go engine's step, siros-wallet-core emits
+     * its own with the same members) and, in go-wmp's dialect, the tx_code variant
+     * (the Rust engine asks tx_code as a child flow instead - see [handleWmpTxCode]).
+     */
+    private suspend fun handleWmpProgress(flowId: String?, step: String?, payload: kotlinx.serialization.json.JsonObject?) {
+        if (flowId == null) return
+        // The first event of a WMP flow tells the presentation-link ledger which
+        // connection it belongs to (noteFlowId's WMP counterpart - no resume
+        // bookkeeping: a WMP authorization resumes on its ORIGINAL flow id).
+        presentationLinks?.associate(flowId, wmpConnectionGeneration)
+        // A pending issuance start (PENDING_FLOW_ID until the engine's first
+        // event) learns its flow id here - the wallet chose the id at the start,
+        // but the state only adopts it once the flow is real server-side.
+        val current = _state.value
+        if (current is WalletState.FlowActive && current.isPending && current.flowType == WalletState.FlowActive.FLOW_TYPE_ISSUANCE) {
+            _state.value = WalletState.FlowActive(
+                userId = current.userId, displayName = current.displayName,
+                flowId = flowId, flowType = current.flowType, status = current.status,
+                credentials = current.credentials,
+            )
+        }
+
+        if (step != "authorization_required") return
+        val payloadType = payload?.get("type")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+        if (payloadType == "tx_code") {
+            // go-wmp's dialect: the step asks, the action answers. siros-wallet-core
+            // never sends this shape (its tx_code is a child flow), so this branch
+            // is the Go engine's alone.
+            val txCode = eventListener?.onTxCodeRequired(
+                flowId = flowId,
+                description = payload?.get("message")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull },
+            )
+            if (txCode != null) {
+                Timber.i("Providing tx_code for flow $flowId")
+                try {
+                    wmpPeer?.sendFlowAction(
+                        flowId,
+                        org.siros.sdk.transport.wmp.openid4x.OID4Action.PROVIDE_TX_CODE,
+                        kotlinx.serialization.json.buildJsonObject {
+                            put("tx_code", kotlinx.serialization.json.JsonPrimitive(txCode))
+                        },
+                    )
+                } catch (e: Exception) {
+                    Timber.w(e, "Sending provide_tx_code for flow $flowId failed")
+                }
+            } else {
+                Timber.w("No tx_code provided for flow $flowId")
+            }
+            return
+        }
+        handleWmpAuthorizationRequired(flowId, payload)
+    }
+
+    /**
+     * The `authorization_required` progress (the OAuth browser hand-over): saves the
+     * resume context BEFORE handing the user to the browser, then tells the listener -
+     * the legacy collector's identical sequence. siros-wallet-core stashes the PKCE
+     * verifier server-side and resumes on the ORIGINAL flow id via `authorize`, so the
+     * WMP path needs no reconnect-and-restart (completeAuthorization sends the action).
+     */
+    private fun handleWmpAuthorizationRequired(flowId: String, payload: kotlinx.serialization.json.JsonObject?) {
+        fun member(name: String): String? =
+            payload?.get(name)?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+        val authUrl = member("authorization_url") ?: return
+        val redirectUri = member("expected_redirect_uri")
+        val state = member("state")
+        val offerJson = payload?.get("credential_offer")?.let { json.encodeToString(kotlinx.serialization.json.JsonElement.serializer(), it) }
+        val rewrittenUrl = config.urlRewriter?.invoke(authUrl) ?: authUrl
+        val effectiveState = state ?: uriQueryParameter(rewrittenUrl, "state") ?: ""
+        Timber.d("Authorization required: url=$rewrittenUrl state=$effectiveState")
+        if (redirectUri != null) {
+            pendingAuthorizations[flowId] = PendingAuthorization(
+                offerJson = offerJson,
+                redirectUri = redirectUri,
+                codeVerifier = member("code_verifier"),
+                state = effectiveState,
+                issuanceEpoch = issuanceStartEpoch.get(),
+            )
+        }
+        eventListener?.onAuthorizationRequired(
+            flowId = flowId,
+            authorizationUrl = rewrittenUrl,
+            redirectUri = redirectUri ?: "",
+            state = effectiveState,
+        )
+    }
+
+    /**
+     * The `authorization` ask itself (siros-wallet-core's dialect): the context was
+     * already saved and the listener already told by the `authorization_required`
+     * progress that always precedes the ask, so this only completes the ask. The
+     * fallback (a progress that never arrived) still hands the URL over rather than
+     * leaving the user at a dead flow.
+     */
+    /** One query parameter of a URL, URL-decoded; null when the URL or the parameter is malformed/absent (java.net.URI, not android.net.Uri: this must read in plain unit tests too). */
+    private fun uriQueryParameter(url: String, name: String): String? = try {
+        val query = java.net.URI(url).query ?: return null
+        query.split('&').mapNotNull { pair ->
+            val i = pair.indexOf('=')
+            if (i > 0) {
+                java.net.URLDecoder.decode(pair.substring(0, i), "UTF-8") to java.net.URLDecoder.decode(pair.substring(i + 1), "UTF-8")
+            } else {
+                null
+            }
+        }.firstOrNull { it.first == name }?.second
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun handleWmpAuthorizationAsk(parentFlowId: String, url: String) {
+        if (pendingAuthorizations.containsKey(parentFlowId)) return
+        Timber.w("An authorization ask for flow $parentFlowId arrived with no saved context; handing the URL over anyway")
+        val rewrittenUrl = config.urlRewriter?.invoke(url) ?: url
+        // Best-effort: the progress that precedes the ask normally carries the
+        // state; a URL that cannot be parsed still hands the user over.
+        val state = uriQueryParameter(rewrittenUrl, "state") ?: ""
+        eventListener?.onAuthorizationRequired(
+            flowId = parentFlowId,
+            authorizationUrl = rewrittenUrl,
+            redirectUri = "",
+            state = state,
+        )
+    }
+
+    /**
+     * The bare `sign` ask: one raw signature over the engine-built proof input, with
+     * the named key - or the wallet's default proof key when unnamed, which MUST be
+     * the same key whose JWK [handleWmpSigningKey] published (the engine puts that
+     * JWK in the proof header).
+     */
+    private suspend fun handleWmpProofSign(
+        parentFlowId: String,
+        params: org.siros.sdk.transport.wmp.openid4x.EngineSignParams,
+    ): ByteArray {
+        val keyId = params.keyId ?: keystore.publicKeyJwk(null)?.keyId
+            ?: throw WalletException("This keystore cannot name its default proof key for an unnamed sign ask")
+        val signature = keystore.signJwsSignature(keyId, params.toSignBytes, params.algorithm ?: "ES256")
+            ?: throw WalletException("This keystore cannot sign an engine proof's signing input")
+        Timber.i("Proof signed for flow $parentFlowId (key=${params.keyId ?: "default"})")
+        return signature
+    }
+
+    /** The `signing_key` ask: the named key's public JWK, or the default proof key's. */
+    private suspend fun handleWmpSigningKey(
+        parentFlowId: String,
+        keyId: String?,
+    ): org.siros.sdk.transport.wmp.openid4x.EngineSigningKeyResult {
+        val key = keystore.publicKeyJwk(keyId)
+        if (key == null) {
+            Timber.w("No public JWK for the signing_key ask (key=${keyId ?: "default"}) - the proof header stays bare")
+            return org.siros.sdk.transport.wmp.openid4x.EngineSigningKeyResult(jwk = null)
+        }
+        return org.siros.sdk.transport.wmp.openid4x.EngineSigningKeyResult(jwk = key.publicKeyJWK)
+    }
+
+    /**
+     * The `consent` ask: the user's own YES/NO on the matched presentation. The
+     * listener's default declines (fail closed); a null listener is the same refusal.
+     */
+    private suspend fun handleWmpConsent(
+        parentFlowId: String,
+        params: org.siros.sdk.transport.wmp.openid4x.EngineConsentParams,
+    ): Boolean {
+        val consented = eventListener?.onConsentRequested(
+            flowId = parentFlowId,
+            purpose = params.purpose,
+            requestedClaims = params.requestedClaims,
+        ) ?: false
+        if (!consented) Timber.i("The user declined the consent ask for flow $parentFlowId")
+        return consented
+    }
+
+    /**
+     * The `tx_code` ask: the transaction code from the user. The listener's null
+     * (its default) cancels: a refused ask rather than an invented code.
+     */
+    private suspend fun handleWmpTxCode(parentFlowId: String): String {
+        val code = eventListener?.onTxCodeRequired(flowId = parentFlowId, description = null)
+            ?: throw WalletException("No tx_code provided for flow $parentFlowId")
+        return code
+    }
+
+    /**
+     * The `presentation` ask: the wallet's own selections come back, and the wallet
+     * builds and signs the VP token for them - the SAME sign_presentation path the
+     * go-wmp dialect drives (audience validation, the TS12 transaction-data
+     * pipeline, the consent record), reached through a synthesized
+     * [org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams] so the two dialects
+     * share one implementation. The result rides `vp_token`; a
+     * [org.siros.sdk.transport.wmp.openid4x.SignRefusedException] or a
+     * [org.siros.sdk.credentials.TransactionDataError] propagates for the profile to
+     * turn into the structured refusal the verifier learns (never a flow error).
+     */
+    private suspend fun handleWmpVpRequest(
+        parentFlowId: String,
+        params: org.siros.sdk.transport.wmp.openid4x.EngineVpParams,
+        epoch: Long,
+    ): org.siros.sdk.transport.wmp.openid4x.EngineVpResult {
+        val synthesized = org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+            action = "sign_presentation",
+            nonce = params.nonce.orEmpty(),
+            audience = params.audience.orEmpty(),
+            parentFlowId = parentFlowId,
+            credentialsToInclude = params.selections.map {
+                org.siros.sdk.transport.engine.CredentialRef(
+                    credentialQueryId = it.credentialQueryId,
+                    credentialId = it.credentialId,
+                    disclosedClaims = it.disclosedClaims,
+                )
+            },
+            verifierSessionId = params.verifierSessionId,
+            transactionData = params.transactionData.takeIf { it.isNotEmpty() }?.map {
+                // The raw base64url entry is the only trustworthy member - the
+                // TS12 pipeline decodes it itself.
+                org.siros.sdk.transport.wmp.openid4x.TransactionData(type = "", raw = it)
+            },
+        )
+        val signed = handleWmpSignRequestAt(parentFlowId, synthesized, epoch)
+        // The Rust engine relays direct_post.jwt encryption itself; this ask has
+        // no response-encryption member, so a JWE answer cannot occur here.
+        val vpToken = signed.vpToken
+            ?: throw WalletException("The presentation ask produced no vp_token (an encrypted response has no WMP carriage in this dialect)")
+        return org.siros.sdk.transport.wmp.openid4x.EngineVpResult(vpToken = vpToken)
+    }
+
+    /**
+     * The `dpop_proof` ask: a proof with the CLIENT-held key the flow named
+     * ([org.siros.sdk.transport.wmp.openid4x.EngineDpopProofParams.keyId] - the
+     * renewal's dpop_key_id; a fresh issuance's engine-held key never asks). The
+     * ask's `access_token` is the raw token - RFC 9449's `ath` is its SHA-256, and
+     * the wallet computes it (the engine never sees the hash input's pre-image
+     * requirement wrong: it simply does not hash for the client-held key).
+     */
+    private suspend fun handleWmpDpopProof(
+        parentFlowId: String,
+        params: org.siros.sdk.transport.wmp.openid4x.EngineDpopProofParams,
+    ): org.siros.sdk.transport.wmp.openid4x.EngineDpopProofResult {
+        val keyId = params.keyId
+            ?: return org.siros.sdk.transport.wmp.openid4x.EngineDpopProofResult(proof = null)
+        val htm = params.htm ?: throw WalletException("A dpop_proof ask without htm")
+        val htu = params.htu ?: throw WalletException("A dpop_proof ask without htu")
+        val ath = params.accessToken?.takeIf { it.isNotBlank() }?.let { token ->
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8))
+            java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+        }
+        val proof = try {
+            keystore.generateDPoPProof(
+                keyId = keyId,
+                htm = htm,
+                htu = htu,
+                nonce = params.nonce?.takeIf { it.isNotBlank() },
+                accessTokenHash = ath,
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Unavailable is a legal answer (the engine falls back to its own key),
+            // but it is still worth the log - the renewal wanted THIS key.
+            Timber.w(e, "The client-held DPoP proof for flow $parentFlowId failed; answering unavailable")
+            return org.siros.sdk.transport.wmp.openid4x.EngineDpopProofResult(proof = null)
+        }
+        return org.siros.sdk.transport.wmp.openid4x.EngineDpopProofResult(proof = proof)
+    }
+
+    /**
+     * The `attestation` ask: the OAuth client attestation (WIA + PoP) for the
+     * issuer's authorization server - the same [buildClientAuth] the legacy
+     * `request_attestation` drives.
+     */
+    private suspend fun handleWmpAttestation(
+        parentFlowId: String,
+        params: org.siros.sdk.transport.wmp.openid4x.EngineAttestationParams,
+    ): org.siros.sdk.transport.wmp.openid4x.EngineAttestationResult {
+        val material = buildClientAuth(
+            parentFlowId,
+            ClientAuthRequest(
+                audience = params.audience,
+                issuer = params.clientId,
+            ),
+        )
+        return org.siros.sdk.transport.wmp.openid4x.EngineAttestationResult(
+            wia = material.wia,
+            pop = material.pop,
+        )
+    }
+
+    // ── the client-initiated WMP flow starts (siros-wallet-core) ──
+
+    /** A fresh client-chosen flow id - the WMP protocol's flow ids are the wallet's own (the engine registers them). */
+    private fun wmpNewFlowId(): String = "flow-${java.util.UUID.randomUUID()}"
+
+    /** [markIssuanceStartSent]'s WMP counterpart: the "session" a WMP start rides is the peer's connection generation. */
+    private fun markIssuanceStartSentWmp() {
+        issuanceStartSession = null
+        issuanceStartGeneration = wmpConnectionGeneration
+        issuanceStartSent = true
+    }
+
+    /**
+     * The OID4VCI flow start on the WMP peer. The params are the lenient BY-VALUE
+     * form siros-wallet-core reads: the offer OBJECT (or its `credential_offer_uri`
+     * reference) with the wallet's own members beside it - `redirect_uri` for a
+     * redirect-based grant, `authorization_details` where the offer asks for them -
+     * which the strict URI-string form cannot carry.
+     */
+    private suspend fun wmpStartIssuance(
+        peer: org.siros.sdk.transport.wmp.WmpPeer,
+        offerObject: kotlinx.serialization.json.JsonObject?,
+        credentialOfferUri: String? = null,
+        redirectUri: String?,
+        authorizationDetails: List<org.siros.sdk.credentials.interop.AuthorizationDetail>?,
+        // The issuer's REGISTERED OAuth client id (the backend registry's
+        // registered_issuer): the engine's own `client_id` params member -
+        // its fallback (the redirect_uri) is refused by a registered
+        // issuer's AS. Null = the unregistered-client convention stands.
+        registeredClientId: String? = null,
+    ) {
+        val params = kotlinx.serialization.json.buildJsonObject {
+            offerObject?.forEach { (key, value) -> put(key, value) }
+            credentialOfferUri?.let {
+                put("credential_offer_uri", kotlinx.serialization.json.JsonPrimitive(it))
+            }
+            redirectUri?.let { put("redirect_uri", kotlinx.serialization.json.JsonPrimitive(it)) }
+            registeredClientId?.let { put("client_id", kotlinx.serialization.json.JsonPrimitive(it)) }
+            authorizationDetails?.takeIf { it.isNotEmpty() }?.let {
+                put(
+                    "authorization_details",
+                    json.encodeToJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(org.siros.sdk.credentials.interop.AuthorizationDetail.serializer()),
+                        it,
+                    ),
+                )
+            }
+        }
+        peer.startFlow(
+            flowType = org.siros.sdk.transport.wmp.openid4x.OID4FlowTypes.OID4VCI,
+            flowId = wmpNewFlowId(),
+            params = params,
+        )
+    }
+
+    /** The OID4VCI renewal start on the WMP peer: the refresh_token grant form (`refresh_token`, `credential_issuer`, the configuration, the DPoP means). */
+    private suspend fun wmpStartRenewal(
+        peer: org.siros.sdk.transport.wmp.WmpPeer,
+        candidate: CredentialRefreshTokenEntry,
+    ) {
+        peer.startFlow(
+            flowType = org.siros.sdk.transport.wmp.openid4x.OID4FlowTypes.OID4VCI,
+            flowId = wmpNewFlowId(),
+            params = kotlinx.serialization.json.buildJsonObject {
+                put("refresh_token", kotlinx.serialization.json.JsonPrimitive(candidate.refreshToken))
+                put("credential_issuer", kotlinx.serialization.json.JsonPrimitive(candidate.credentialIssuerIdentifier))
+                put("selected_credential_configuration_id", kotlinx.serialization.json.JsonPrimitive(candidate.credentialConfigurationId))
+                candidate.dpopJwk?.let { put("dpop_jwk", kotlinx.serialization.json.JsonPrimitive(it)) }
+                candidate.dpopKeyId?.let { put("dpop_key_id", kotlinx.serialization.json.JsonPrimitive(it)) }
+            },
+        )
+    }
+
+    /**
+     * A credential lifecycle notification as a FLOW - siros-wallet-core's
+     * `credential_notification` (OpenID4x 3.4; the legacy
+     * `wmp.credential.notification` METHOD is go-wmp's and does not exist on
+     * the Rust engine). Best-effort like its legacy counterpart: a failure is
+     * logged, the flow it belongs to is already over.
+     */
+    private suspend fun wmpSendCredentialNotification(
+        flowId: String,
+        notificationId: String,
+        event: String,
+        eventDescription: String? = null,
+    ) {
+        val peer = wmpPeer ?: return
+        try {
+            peer.startFlow(
+                flowType = "credential_notification",
+                flowId = wmpNewFlowId(),
+                params = kotlinx.serialization.json.buildJsonObject {
+                    put("issuance_flow_id", kotlinx.serialization.json.JsonPrimitive(flowId))
+                    put("notification_id", kotlinx.serialization.json.JsonPrimitive(notificationId))
+                    put("event", kotlinx.serialization.json.JsonPrimitive(event))
+                    eventDescription?.let { put("event_description", kotlinx.serialization.json.JsonPrimitive(it)) }
+                },
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Sending the credential notification for flow $flowId failed")
         }
     }
 
@@ -10363,7 +11397,7 @@ class SirosWallet private constructor(
                             // Apply URL rewriter if configured
                             val rewrittenUrl = config.urlRewriter?.invoke(authUrl) ?: authUrl
                             // Extract state from URL query params if not in payload
-                            val effectiveState = state ?: android.net.Uri.parse(rewrittenUrl).getQueryParameter("state") ?: ""
+                            val effectiveState = state ?: uriQueryParameter(rewrittenUrl, "state") ?: ""
                             Timber.d("Authorization required: url=$rewrittenUrl state=$effectiveState")
                             // Save resume context BEFORE handing off to the browser - see
                             // completeAuthorization() for why the flow can't just be resumed
@@ -12777,6 +13811,16 @@ class SirosWallet private constructor(
         /** Builds the WMP peer for an engine URL; replaceable so a test can run the production connect path without a socket. */
         internal var createWmpPeer: (String) -> org.siros.sdk.transport.wmp.WmpPeer = { wsUrl ->
             org.siros.sdk.transport.wmp.WmpPeer(org.siros.sdk.transport.wmp.WmpSession(org.siros.sdk.transport.wmp.WmpWebSocketTransport(wsUrl)))
+        }
+
+        /**
+         * Builds the WMP peer over a [org.siros.sdk.transport.Transport] - the
+         * HTTP+SSE and LOCAL engine modes' entry (the same peer/session
+         * stack over a different transport; replaceable for the same reason
+         * [createWmpPeer] is).
+         */
+        internal var createWmpPeerFromTransport: (org.siros.sdk.transport.Transport) -> org.siros.sdk.transport.wmp.WmpPeer = { transport ->
+            org.siros.sdk.transport.wmp.WmpPeer(org.siros.sdk.transport.wmp.WmpSession(transport))
         }
 
         internal var createEngineSession: (String, String) -> WalletEngineSession =
