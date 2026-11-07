@@ -3135,6 +3135,16 @@ class SirosWallet private constructor(
         val metadata: IssuerMetadata,
         val entitlement: IssuerEntitlement? = null,
         val trusted: Boolean? = null,
+        /**
+         * The issuer's REGISTERED OAuth client id (the backend issuer
+         * registry's `registered_issuer.client_id`), when the backend
+         * resolved it. The OID4VCI authorization-code flow's `client_id`: a
+         * registered issuer's AS rejects the unregistered fallback (the
+         * wallet's redirect_uri) - the WMP flow start relays this into the
+         * engine's params (the engine's own `client_id` member, the same
+         * source the legacy backend read from its registry).
+         */
+        val registeredClientId: String? = null,
     )
 
     /**
@@ -3168,6 +3178,8 @@ class SirosWallet private constructor(
                             json.decodeFromJsonElement(IssuerEntitlement.serializer(), it)
                         },
                         trusted = resolved["decision"]?.jsonPrimitive?.booleanOrNull,
+                        registeredClientId = resolved["registered_issuer"]?.jsonObject
+                            ?.get("client_id")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
                     )
                 }
                 Timber.w("Backend resolve returned no metadata for $issuerUrl; falling back to a direct fetch")
@@ -4511,6 +4523,7 @@ class SirosWallet private constructor(
                     offerObject = credentialOffer,
                     redirectUri = config.redirectUri.ifBlank { null },
                     authorizationDetails = authorizationDetailsForActiveOffer(),
+                    registeredClientId = resolvedForStart?.registeredClientId,
                 )
             }
         } catch (e: Exception) {
@@ -9772,6 +9785,11 @@ class SirosWallet private constructor(
         credentialOfferUri: String? = null,
         redirectUri: String?,
         authorizationDetails: List<org.siros.sdk.credentials.interop.AuthorizationDetail>?,
+        // The issuer's REGISTERED OAuth client id (the backend registry's
+        // registered_issuer): the engine's own `client_id` params member -
+        // its fallback (the redirect_uri) is refused by a registered
+        // issuer's AS. Null = the unregistered-client convention stands.
+        registeredClientId: String? = null,
     ) {
         val params = kotlinx.serialization.json.buildJsonObject {
             offerObject?.forEach { (key, value) -> put(key, value) }
@@ -9779,6 +9797,7 @@ class SirosWallet private constructor(
                 put("credential_offer_uri", kotlinx.serialization.json.JsonPrimitive(it))
             }
             redirectUri?.let { put("redirect_uri", kotlinx.serialization.json.JsonPrimitive(it)) }
+            registeredClientId?.let { put("client_id", kotlinx.serialization.json.JsonPrimitive(it)) }
             authorizationDetails?.takeIf { it.isNotEmpty() }?.let {
                 put(
                     "authorization_details",
