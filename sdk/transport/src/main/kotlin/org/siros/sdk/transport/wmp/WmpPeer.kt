@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import timber.log.Timber
 
 /**
@@ -135,7 +136,19 @@ class WmpPeer(
         )
         val response = call(WmpMethods.FLOW_START, reqParams)
         if (response.error != null) {
-            throw WmpSessionException("flow.start failed: ${response.error.message}")
+            // A transport-level retry (OkHttp re-sends a POST whose keep-alive
+            // broke mid-response) re-starts an idempotent flow start: the
+            // FIRST attempt succeeded server-side (its asks already stream),
+            // the retry's flow id - the wallet's own choice, presented again -
+            // collides. "flow_id in use" on the wallet's OWN id is the retry
+            // arriving second, not a refusal: the flow is running. Found
+            // driving the GDC issuance (the frame-8/frame-14 duplicate).
+            val reason = (response.error.data as? JsonObject)?.get("reason")?.let { r -> (r as? JsonPrimitive)?.contentOrNull }
+            if (reason == "flow_id in use") {
+                Timber.i("flow.start for $flowId answered 'flow_id in use' - a retried start of this wallet's own flow id; the flow is running")
+            } else {
+                throw WmpSessionException("flow.start failed: ${response.error.message}")
+            }
         }
         val result = codec.json.decodeFromJsonElement(
             FlowStartResult.serializer(),
@@ -159,7 +172,8 @@ class WmpPeer(
         )
         val response = call(WmpMethods.FLOW_ACTION, reqParams)
         if (response.error != null) {
-            throw WmpSessionException("flow.action failed: ${response.error.message}")
+            val reason = (response.error.data as? JsonObject)?.get("reason")?.let { (it as? JsonPrimitive)?.contentOrNull }
+            throw WmpSessionException("flow.action failed: ${response.error.message}" + (reason?.let { " (reason: $it)" } ?: ""))
         }
         return codec.json.decodeFromJsonElement(
             FlowActionResult.serializer(),

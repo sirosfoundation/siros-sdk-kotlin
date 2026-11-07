@@ -4518,7 +4518,7 @@ class SirosWallet private constructor(
                 // the wallet's own choice on this transport; the state adopts
                 // it at the engine's first progress event.
                 markIssuanceStartSentWmp()
-                wmpStartIssuance(
+                wmpIssuanceStartFlowId = wmpStartIssuance(
                     checkNotNull(peer),
                     offerObject = credentialOffer,
                     redirectUri = config.redirectUri.ifBlank { null },
@@ -4690,7 +4690,7 @@ class SirosWallet private constructor(
                         } catch (e: Exception) {
                             throw WalletException("The offer is neither an offer URI nor a JSON object")
                         }
-                        wmpStartIssuance(
+                        wmpIssuanceStartFlowId = wmpStartIssuance(
                             checkNotNull(peer),
                             offerObject = offerObject,
                             redirectUri = redirectUri,
@@ -4709,7 +4709,7 @@ class SirosWallet private constructor(
                         // The reference form: the engine fetches the offer; the
                         // wallet's members ride beside the reference (the
                         // lenient by-value params form).
-                        wmpStartIssuance(
+                        wmpIssuanceStartFlowId = wmpStartIssuance(
                             checkNotNull(peer),
                             offerObject = null,
                             credentialOfferUri = start.uri,
@@ -5916,6 +5916,24 @@ class SirosWallet private constructor(
                         abandonedStarts.add(AbandonedStart(System.currentTimeMillis(), it, issuanceStartGeneration))
                     }
                 }
+                // The WMP start's flow id (the wallet's own choice, registered
+                // server-side the moment the start POST landed): cancel it there
+                // too - without this, a Cancel during the start spinner left the
+                // engine's flow running (found driving the GDC issuance).
+                val wmpStartId = wmpIssuanceStartFlowId
+                if (wmpStartId != null) {
+                    wmpIssuanceStartFlowId = null
+                    val cancelPeer = wmpPeer
+                    if (cancelPeer != null) {
+                        scope.launch {
+                            try {
+                                cancelPeer.cancelFlow(wmpStartId, "user_cancelled")
+                            } catch (e: Exception) {
+                                Timber.w(e, "Cancelling the pending WMP start $wmpStartId server-side failed")
+                            }
+                        }
+                    }
+                }
             } else {
                 // Whatever this flow still sends (typically its cancellation error)
                 // must not act on a retry that starts before the socket is replaced.
@@ -5999,9 +6017,12 @@ class SirosWallet private constructor(
             if (peer != null) {
                 // The WMP-native action name; the engine's adapter also accepts
                 // the legacy "authorization_complete" spelling.
+                Timber.i("Launching the authorize action for flow $flowId on the wallet scope")
                 scope.launch {
                     try {
+                        Timber.d("Authorize action coroutine running for flow $flowId; sending")
                         peer.sendFlowAction(flowId, org.siros.sdk.transport.wmp.openid4x.OID4Action.AUTHORIZE, payload)
+                        Timber.i("Authorize action sent for flow $flowId")
                     } catch (e: Exception) {
                         Timber.e(e, "Sending the authorization completion for flow $flowId failed")
                         eventListener?.onFlowError(flowId, e.message ?: "Failed to complete authorization")
@@ -9459,6 +9480,12 @@ class SirosWallet private constructor(
         // #3 and #5). Checked HERE, not when this callback started: the awaits above (rejectDeliveredMetadata-equivalent
         // work elsewhere) can let this peer be replaced meanwhile.
         clearFlowMatchStateIfLive(flowId, lifetime)
+        // The failed flow's spinner ends here: the engine's error already ended the
+        // flow server-side, and without this reset the wallet stayed "Initializing"
+        // forever with the flow gone (found driving the GDC issuance - the error
+        // dialog's Cancel had nothing left to cancel, the state was already dead).
+        resetIssuanceGuards()
+        returnToReadyState()
         if (!reportPseudonymCommitmentConflict(flowId, code, message)) {
             eventListener?.onFlowError(flowId, "$code: $message")
         }
@@ -9770,7 +9797,19 @@ class SirosWallet private constructor(
         issuanceStartSession = null
         issuanceStartGeneration = wmpConnectionGeneration
         issuanceStartSent = true
+        wmpIssuanceStartFlowId = null
     }
+
+    /**
+     * The wallet-chosen flow id of THIS WMP issuance start, from the moment the
+     * start is sent until its first progress event names it: the pending-cancel
+     * path (cancelCurrentFlow's isPending branch) cancels THIS id server-side -
+     * the engine registered it at the start, long before any progress event
+     * arrived (found driving: a Cancel during the "Initializing" spinner left
+     * the server-side flow running and the wallet stuck on it).
+     */
+    @Volatile
+    private var wmpIssuanceStartFlowId: String? = null
 
     /**
      * The OID4VCI flow start on the WMP peer. The params are the lenient BY-VALUE
@@ -9790,7 +9829,21 @@ class SirosWallet private constructor(
         // its fallback (the redirect_uri) is refused by a registered
         // issuer's AS. Null = the unregistered-client convention stands.
         registeredClientId: String? = null,
-    ) {
+    ): String {
+        // The wallet's instance key id as `dpop_key_id`: the DPoP key the
+        // engine's dpop_proof asks then name, so the DPoP proof and the WIA
+        // attest ONE key (EC TS03's one-key rule - the Go engine's
+        // client-held mode, clientauth.go #317). Without it the engine DPoPs
+        // with its own ephemeral key while the WIA attests the wallet's -
+        // an AS that binds the DPoP key to the attestation answers
+        // invalid_dpop_proof (found driving the GDC issuance).
+        val dpopKeyId = try {
+            ensureInstanceKeyId()
+        } catch (e: Exception) {
+            Timber.w(e, "Naming the instance key as the DPoP key failed; the start goes without dpop_key_id")
+            null
+        }
+        val flowId = wmpNewFlowId()
         val params = kotlinx.serialization.json.buildJsonObject {
             offerObject?.forEach { (key, value) -> put(key, value) }
             credentialOfferUri?.let {
@@ -9798,6 +9851,7 @@ class SirosWallet private constructor(
             }
             redirectUri?.let { put("redirect_uri", kotlinx.serialization.json.JsonPrimitive(it)) }
             registeredClientId?.let { put("client_id", kotlinx.serialization.json.JsonPrimitive(it)) }
+            dpopKeyId?.let { put("dpop_key_id", kotlinx.serialization.json.JsonPrimitive(it)) }
             authorizationDetails?.takeIf { it.isNotEmpty() }?.let {
                 put(
                     "authorization_details",
@@ -9810,9 +9864,10 @@ class SirosWallet private constructor(
         }
         peer.startFlow(
             flowType = org.siros.sdk.transport.wmp.openid4x.OID4FlowTypes.OID4VCI,
-            flowId = wmpNewFlowId(),
+            flowId = flowId,
             params = params,
         )
+        return flowId
     }
 
     /** The OID4VCI renewal start on the WMP peer: the refresh_token grant form (`refresh_token`, `credential_issuer`, the configuration, the DPoP means). */

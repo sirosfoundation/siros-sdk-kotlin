@@ -12,8 +12,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import org.siros.sdk.transport.Transport
@@ -44,7 +42,6 @@ class WmpSession(
 
     private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<JsonRpcResponse>>()
     private val incomingNotifications = Channel<JsonRpcRequest>(Channel.BUFFERED)
-    private val sendMutex = Mutex()
 
     /** Notifications from the server (flow.progress, flow.complete, etc.). */
     fun notifications(): Flow<JsonRpcRequest> = incomingNotifications.receiveAsFlow()
@@ -126,6 +123,24 @@ class WmpSession(
             throw WmpSessionException("Session resume failed: ${response.error.message}")
         }
 
+        // The resumption token ROTATES on every resume (single-use, go-wmp
+        // SessionService semantics): the next resume - and there will be one,
+        // the SSE stream drops whenever Android backgrounds the app - must
+        // present THIS one, not the (already-spent) token this resume
+        // consumed. Found driving the GDC issuance: every reconnect after a
+        // browser round-trip re-POSTed the same spent token and was answered
+        // -31000 "Session not found", forever (the "Initializing…" hang).
+        val result = response.result?.let {
+            try {
+                codec.json.decodeFromJsonElement(SessionResumeResult.serializer(), it)
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (result?.resumptionToken != null) {
+            resumptionToken = result.resumptionToken
+        }
+
         _state.value = WmpSessionState.ACTIVE
         Timber.i("WMP session resumed: $sessionId")
     }
@@ -191,11 +206,22 @@ class WmpSession(
 
         try {
             val message = codec.encodeRequest(method, stampSessionId(params), id)
-            sendMutex.withLock {
-                transport.send(message)
-            }
+            // NO mutex around the POST (drive-found deadlock): the HTTP+SSE binding
+            // is request/response per POST, correlation is by JSON-RPC id, and OkHttp
+            // pools connections - serializing sends made a flow start (whose POST
+            // stays open for the engine's whole synchronous start - offer, metadata,
+            // trust, the PAR push - tens of seconds) hold the lock while the engine
+            // WAITED for ask answers queued behind that same lock. The engine's asks
+            // timed out, the UI hung on "Initializing", and the authorize action after
+            // the browser was stranded. Each send is on its own; ordering was never
+            // a wire requirement on this transport.
+            Timber.d("sendRequest: $method id=$id sending POST")
+            transport.send(message)
+            Timber.d("sendRequest: $method id=$id POST completed")
+            Timber.d("sendRequest: $method id=$id awaiting response")
             return withTimeout(timeoutMs) { deferred.await() }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            Timber.w("sendRequest: $method id=$id TIMED OUT after ${timeoutMs}ms")
             pendingRequests.remove(id)
             throw WmpTimeoutException("Request $method timed out after ${timeoutMs}ms")
         }
@@ -203,10 +229,10 @@ class WmpSession(
 
     /** Send a JSON-RPC notification (no response expected). */
     suspend fun sendNotification(method: String, params: kotlinx.serialization.json.JsonObject?) {
+        // No mutex - see sendRequest's drive-found note: a locked send serialized
+        // answers behind slow POSTs and deadlocked the asks against the start.
         val message = codec.encodeNotification(method, stampSessionId(params))
-        sendMutex.withLock {
-            transport.send(message)
-        }
+        transport.send(message)
     }
 
     /** [sendNotification] that checks [wanted] again once it holds the send lock; false when it was not sent. */
@@ -215,15 +241,16 @@ class WmpSession(
         params: kotlinx.serialization.json.JsonObject?,
         wanted: () -> Boolean,
     ): Boolean {
+        // No mutex (see sendRequest's drive-found note). The wanted() check and the
+        // send are no longer one critical section: a check that passes here can be
+        // stale by the time the POST lands - acceptable, the receiver re-checks
+        // (the profile's answer machinery ignores answers for ended sub-flows).
         val message = codec.encodeNotification(method, stampSessionId(params))
-        return sendMutex.withLock {
-            if (!wanted()) {
-                false
-            } else {
-                transport.send(message)
-                true
-            }
+        if (!wanted()) {
+            return false
         }
+        transport.send(message)
+        return true
     }
 
     /**
@@ -233,9 +260,8 @@ class WmpSession(
     internal suspend fun sendResponse(id: String, result: kotlinx.serialization.json.JsonObject?) {
         val response = JsonRpcResponse(id = id, result = result)
         val message = codec.json.encodeToString(JsonRpcResponse.serializer(), response).toByteArray(Charsets.UTF_8)
-        sendMutex.withLock {
-            transport.send(message)
-        }
+        // No mutex - see sendRequest's drive-found note.
+        transport.send(message)
     }
 
     /**
@@ -249,9 +275,8 @@ class WmpSession(
     internal suspend fun sendErrorResponse(id: String, code: Int, message: String) {
         val response = JsonRpcResponse(id = id, error = JsonRpcError(code = code, message = message))
         val msg = codec.json.encodeToString(JsonRpcResponse.serializer(), response).toByteArray(Charsets.UTF_8)
-        sendMutex.withLock {
-            transport.send(msg)
-        }
+        // No mutex - see sendRequest's drive-found note.
+        transport.send(msg)
     }
 
     private fun startMessageLoop() {
