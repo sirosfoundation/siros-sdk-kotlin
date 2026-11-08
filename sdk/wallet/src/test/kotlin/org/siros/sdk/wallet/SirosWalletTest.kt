@@ -19830,11 +19830,16 @@ class SirosWalletTest {
                 put("grants", kotlinx.serialization.json.buildJsonObject { put("authorization_code", kotlinx.serialization.json.buildJsonObject {}) })
             },
             null, "siros://callback", emptyList<org.siros.sdk.credentials.interop.AuthorizationDetail>(),
+            "e2e-test-client",
         )
 
         val params = startSlot.captured!!
         assertEquals(kotlinx.serialization.json.JsonPrimitive("https://issuer.example"), params["credential_issuer"])
         assertEquals(kotlinx.serialization.json.JsonPrimitive("siros://callback"), params["redirect_uri"])
+        assertEquals(
+            "the backend registry's registered client id rides as the engine's client_id param",
+            kotlinx.serialization.json.JsonPrimitive("e2e-test-client"), params["client_id"],
+        )
         assertTrue(
             "the offer object's members ride beside the wallet's own (the lenient by-value form)",
             params.containsKey("grants"),
