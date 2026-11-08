@@ -221,30 +221,8 @@ class AuthServerClient(
      * @param tac Token Access Control string (e.g., "rl").
      * @return Parsed [AccessToken] with claims.
      */
-    suspend fun requestAnonymousToken(aud: String, tac: String? = null): AccessToken {
-        val key = "$tenantId::$aud::${tac ?: ""}::anonymous"
-        return pendingTokenMutex.withLock {
-            pendingTokenRequests[key]?.let { cached ->
-                if (!cached.isExpired()) return@withLock cached
-                pendingTokenRequests.remove(key)
-            }
-
-            val token = withContext(Dispatchers.IO) {
-                val body = buildJsonObject {
-                    put("aud", aud)
-                    tac?.let { put("tac", it) }
-                    put("tenant_id", tenantId)
-                    put("anonymous", true)
-                }
-                val response = post("/auth/token", body, defaultHeaders())
-                val tokenResponse = json.decodeFromJsonElement(TokenResponse.serializer(), response)
-                AccessToken(tokenResponse.accessToken)
-            }
-
-            pendingTokenRequests[key] = token
-            token
-        }
-    }
+    suspend fun requestAnonymousToken(aud: String, tac: String? = null): AccessToken =
+        requestKindedToken(aud, tac, kindFlag = "anonymous" to true)
 
     /**
      * Request the pseudonymous engine token (engine-parity.md §8 G3): a real,
@@ -257,9 +235,23 @@ class AuthServerClient(
      * @param tac Token Access Control string (defaults server-side to "ri").
      * @return Parsed [AccessToken] with claims.
      */
-    suspend fun requestPseudonymousToken(aud: String, tac: String? = null): AccessToken {
-        val key = "$tenantId::$aud::${tac ?: ""}::pseudonymous"
+    suspend fun requestPseudonymousToken(aud: String, tac: String? = null): AccessToken =
+        requestKindedToken(aud, tac, kindFlag = "pseudonymous" to true)
 
+    /**
+     * The AS's `/auth/token` request behind every kind: the pending-request
+     * cache keyed by tenant/audience/tac/kind, the body built over the
+     * common claims plus the kind's own flag (the anonymous and
+     * pseudonymous kinds differ only in it - a `null` kindFlag is the
+     * plain session form [requestAccessToken] posts).
+     */
+    private suspend fun requestKindedToken(
+        aud: String,
+        tac: String?,
+        kindFlag: Pair<String, Boolean>? = null,
+    ): AccessToken {
+        val kind = kindFlag?.first ?: ""
+        val key = "$tenantId::$aud::${tac ?: ""}::$kind"
         return pendingTokenMutex.withLock {
             pendingTokenRequests[key]?.let { cached ->
                 if (!cached.isExpired()) return@withLock cached
@@ -271,7 +263,7 @@ class AuthServerClient(
                     put("aud", aud)
                     tac?.let { put("tac", it) }
                     put("tenant_id", tenantId)
-                    put("pseudonymous", true)
+                    kindFlag?.let { put(it.first, it.second) }
                 }
                 val response = post("/auth/token", body, defaultHeaders())
                 val tokenResponse = json.decodeFromJsonElement(TokenResponse.serializer(), response)

@@ -244,11 +244,17 @@ class AuthTokensTest {
         assertFalse("the kind is not the anonymous one: the token carries a subject (the pseudonym)", kind.anonymous)
     }
 
-    @Test
-    fun ensureTenantToken_mints_the_pseudonymous_kind_and_caches_it() = runTest {
+    /** A tenant-kind `AuthTokens` over a mock client answering its mint. */
+    private fun tenantTokens(): Pair<AuthTokens, AuthServerClient> {
         val client = mockk<AuthServerClient>()
         val tokens = AuthTokens(authServerClient = client, tenantId = "default")
         coEvery { client.requestPseudonymousToken("wallet-engine", "ri") } returns unexpiredToken()
+        return Pair(tokens, client)
+    }
+
+    @Test
+    fun ensureTenantToken_mints_the_pseudonymous_kind_and_caches_it() = runTest {
+        val (tokens, client) = tenantTokens()
 
         tokens.ensureTenantToken()
         tokens.ensureTenantToken()
@@ -260,9 +266,7 @@ class AuthTokensTest {
 
     @Test
     fun forceRefreshTenantToken_mints_the_pseudonymous_kind_afresh() = runTest {
-        val client = mockk<AuthServerClient>()
-        val tokens = AuthTokens(authServerClient = client, tenantId = "default")
-        coEvery { client.requestPseudonymousToken("wallet-engine", "ri") } returns unexpiredToken()
+        val (tokens, client) = tenantTokens()
 
         tokens.ensureTenantToken()
         tokens.forceRefreshToken(AuthTokens.TOKEN_WMP_ENGINE)
