@@ -6017,12 +6017,9 @@ class SirosWallet private constructor(
             if (peer != null) {
                 // The WMP-native action name; the engine's adapter also accepts
                 // the legacy "authorization_complete" spelling.
-                Timber.i("Launching the authorize action for flow $flowId on the wallet scope")
                 scope.launch {
                     try {
-                        Timber.d("Authorize action coroutine running for flow $flowId; sending")
                         peer.sendFlowAction(flowId, org.siros.sdk.transport.wmp.openid4x.OID4Action.AUTHORIZE, payload)
-                        Timber.i("Authorize action sent for flow $flowId")
                     } catch (e: Exception) {
                         Timber.e(e, "Sending the authorization completion for flow $flowId failed")
                         eventListener?.onFlowError(flowId, e.message ?: "Failed to complete authorization")

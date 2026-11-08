@@ -215,10 +215,7 @@ class WmpSession(
             // timed out, the UI hung on "Initializing", and the authorize action after
             // the browser was stranded. Each send is on its own; ordering was never
             // a wire requirement on this transport.
-            Timber.d("sendRequest: $method id=$id sending POST")
             transport.send(message)
-            Timber.d("sendRequest: $method id=$id POST completed")
-            Timber.d("sendRequest: $method id=$id awaiting response")
             return withTimeout(timeoutMs) { deferred.await() }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             Timber.w("sendRequest: $method id=$id TIMED OUT after ${timeoutMs}ms")
