@@ -570,6 +570,21 @@ data class WalletConfig(
      * a clear error (an app that has not wired the engine's ports).
      */
     val wmpTransport: (suspend (org.siros.sdk.transport.wmp.WmpEngineAskHandler) -> org.siros.sdk.transport.Transport)? = null,
+    /**
+     * Whether the remote engine runs tenant-bound
+     * (`ENGINE_PRINCIPAL_MODE=tenant`, engine-parity.md §8): the bearer
+     * the HTTP_SSE transport mints is then the AS's pseudonymous engine
+     * kind — the wallet's traffic attributes to the tenant, never to a
+     * person. Default false: the backend token (the user's own
+     * subject), the historic shape — matching a user-mode engine.
+     *
+     * The flag must match the deployment: a tenant-mode engine with
+     * user tokens keeps its sessions but loses the privacy point; a
+     * user-mode engine with pseudonym tokens strands every session at
+     * the token's mint (the subject rotates per mint, and the user-mode
+     * owner key names it).
+     */
+    val wmpTenantTokens: Boolean = false,
 ) {
     init {
         org.siros.sdk.keystore.CircuitZkProfile.validateAdditional(circuitZkProfiles, circuitZkPredicateFunctions)

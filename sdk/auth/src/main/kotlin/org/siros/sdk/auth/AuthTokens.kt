@@ -15,6 +15,13 @@ data class TokenKind(
     val aud: String,
     val tac: String,
     val anonymous: Boolean = false,
+    /**
+     * The AS's pseudonymous engine kind (engine-parity.md §8 G3): a real,
+     * authenticated session behind the mint, a fresh random pseudonym in
+     * the token — rotating per mint, so the traffic it carries attributes
+     * to the tenant, never to a person.
+     */
+    val pseudonymous: Boolean = false,
 )
 
 /**
@@ -77,10 +84,10 @@ class AuthTokens(
         }
 
         val token = try {
-            if (kind.anonymous) {
-                authServerClient.requestAnonymousToken(kind.aud, kind.tac)
-            } else {
-                authServerClient.requestAccessToken(kind.aud, kind.tac)
+            when {
+                kind.pseudonymous -> authServerClient.requestPseudonymousToken(kind.aud, kind.tac)
+                kind.anonymous -> authServerClient.requestAnonymousToken(kind.aud, kind.tac)
+                else -> authServerClient.requestAccessToken(kind.aud, kind.tac)
             }
         } catch (e: AuthException) {
             handleAsTokenFailure(e)
@@ -104,6 +111,22 @@ class AuthTokens(
     suspend fun ensureAnonymousToken(): AccessToken = ensureToken(TOKEN_ANONYMOUS)
 
     /**
+     * Convenience: ensure the tenant-bound engine token (engine-parity.md
+     * §8) - the AS's pseudonymous engine kind: the session's real
+     * authentication behind the mint, a fresh random pseudonym per mint in
+     * the token, `tac = "ri"` (the engine's two flow gates: read for
+     * OID4VP, insert for OID4VCI), the tenant claimed as today.
+     *
+     * The remote engine's privacy mode (`ENGINE_PRINCIPAL_MODE=tenant`)
+     * consumes this kind: its session store, its flow registry and its
+     * logs attribute the traffic to the tenant, never to a person. Use
+     * this ONLY against a tenant-mode engine (the wallet's config gates
+     * its own choice): a user-mode engine keys sessions by the subject,
+     * which this kind rotates per mint.
+     */
+    suspend fun ensureTenantToken(): AccessToken = ensureToken(TOKEN_WMP_ENGINE)
+
+    /**
      * Force-refresh a token by clearing the cache and re-requesting.
      */
     suspend fun forceRefreshToken(name: String): AccessToken = mutex.withLock {
@@ -112,10 +135,10 @@ class AuthTokens(
             ?: throw AuthException("Unknown token kind: $name")
 
         val token = try {
-            if (kind.anonymous) {
-                authServerClient.requestAnonymousToken(kind.aud, kind.tac)
-            } else {
-                authServerClient.requestAccessToken(kind.aud, kind.tac)
+            when {
+                kind.pseudonymous -> authServerClient.requestPseudonymousToken(kind.aud, kind.tac)
+                kind.anonymous -> authServerClient.requestAnonymousToken(kind.aud, kind.tac)
+                else -> authServerClient.requestAccessToken(kind.aud, kind.tac)
             }
         } catch (e: AuthException) {
             handleAsTokenFailure(e)
@@ -178,6 +201,7 @@ class AuthTokens(
     companion object {
         const val TOKEN_BACKEND = "backend"
         const val TOKEN_ANONYMOUS = "anonymous"
+        const val TOKEN_WMP_ENGINE = "wmp-engine"
 
         private const val REJECTION_THRESHOLD = 3
         private const val REJECTION_WINDOW_MS = 60_000L
@@ -195,6 +219,15 @@ class AuthTokens(
                 aud = "wallet-registry",
                 tac = "rl",
                 anonymous = true,
+            ),
+            // The tenant-bound engine kind (engine-parity.md §8 G3): the
+            // pseudonymous bearer the remote engine's privacy mode
+            // consumes - `tac = "ri"`, the engine's two flow gates.
+            TOKEN_WMP_ENGINE to TokenKind(
+                name = TOKEN_WMP_ENGINE,
+                aud = "wallet-engine",
+                tac = "ri",
+                pseudonymous = true,
             ),
         )
     }

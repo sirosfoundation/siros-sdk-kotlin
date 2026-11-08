@@ -8145,8 +8145,20 @@ class SirosWallet private constructor(
                         // same source the legacy engine session's
                         // tokenProvider refreshes from on its reconnects; a
                         // legacy-app-token deployment keeps its fixed token.
+                        //
+                        // The kind follows the DEPLOYMENT's engine
+                        // (engine-parity.md §8): a tenant-mode engine
+                        // (config.wmpTenantTokens) takes the AS's
+                        // pseudonymous kind - the wallet's traffic
+                        // attributes to the tenant, never to a person; the
+                        // default keeps the backend token (the user's own
+                        // subject), matching a user-mode engine.
                         tokenProvider = {
-                            legacyAppToken ?: authTokens.ensureBackendToken().raw
+                            legacyAppToken ?: if (config.wmpTenantTokens) {
+                                authTokens.ensureTenantToken().raw
+                            } else {
+                                authTokens.ensureBackendToken().raw
+                            }
                         },
                     ),
                 )

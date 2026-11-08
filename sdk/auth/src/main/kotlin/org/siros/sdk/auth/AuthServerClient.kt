@@ -223,7 +223,6 @@ class AuthServerClient(
      */
     suspend fun requestAnonymousToken(aud: String, tac: String? = null): AccessToken {
         val key = "$tenantId::$aud::${tac ?: ""}::anonymous"
-
         return pendingTokenMutex.withLock {
             pendingTokenRequests[key]?.let { cached ->
                 if (!cached.isExpired()) return@withLock cached
@@ -236,6 +235,43 @@ class AuthServerClient(
                     tac?.let { put("tac", it) }
                     put("tenant_id", tenantId)
                     put("anonymous", true)
+                }
+                val response = post("/auth/token", body, defaultHeaders())
+                val tokenResponse = json.decodeFromJsonElement(TokenResponse.serializer(), response)
+                AccessToken(tokenResponse.accessToken)
+            }
+
+            pendingTokenRequests[key] = token
+            token
+        }
+    }
+
+    /**
+     * Request the pseudonymous engine token (engine-parity.md §8 G3): a real,
+     * authenticated session behind the mint, a fresh random pseudonym in the
+     * token - rotating per mint, so the traffic it carries attributes to the
+     * tenant, never to a person. The server caps the kind to `tac ⊆ "ri"`
+     * (the engine's two flow gates).
+     *
+     * @param aud Target audience (`wallet-engine`).
+     * @param tac Token Access Control string (defaults server-side to "ri").
+     * @return Parsed [AccessToken] with claims.
+     */
+    suspend fun requestPseudonymousToken(aud: String, tac: String? = null): AccessToken {
+        val key = "$tenantId::$aud::${tac ?: ""}::pseudonymous"
+
+        return pendingTokenMutex.withLock {
+            pendingTokenRequests[key]?.let { cached ->
+                if (!cached.isExpired()) return@withLock cached
+                pendingTokenRequests.remove(key)
+            }
+
+            val token = withContext(Dispatchers.IO) {
+                val body = buildJsonObject {
+                    put("aud", aud)
+                    tac?.let { put("tac", it) }
+                    put("tenant_id", tenantId)
+                    put("pseudonymous", true)
                 }
                 val response = post("/auth/token", body, defaultHeaders())
                 val tokenResponse = json.decodeFromJsonElement(TokenResponse.serializer(), response)
