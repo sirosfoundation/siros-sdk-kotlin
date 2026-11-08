@@ -316,6 +316,9 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val flowStarting by viewModel.flowStarting.collectAsState()
     val pendingPresentation by viewModel.pendingPresentationRequest.collectAsState()
     val useWmpProtocol by viewModel.useWmpProtocol.collectAsState()
+    val wmpEngineModeState by viewModel.wmpEngineMode.collectAsState()
+    val wmpSendUrlState by viewModel.wmpSendUrl.collectAsState()
+    val wmpSseUrlState by viewModel.wmpSseUrl.collectAsState()
     val showCredentialDetails by viewModel.showCredentialDetails.collectAsState()
     val pendingTransactionConsent by viewModel.pendingTransactionConsent.collectAsState()
     val pendingPresentationConsent by viewModel.pendingPresentationConsent.collectAsState()
@@ -453,6 +456,9 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             tenantId = tenantIdState,
             engineUrl = engineUrlOverrideState,
             useWmpProtocol = useWmpProtocol,
+            wmpEngineMode = wmpEngineModeState,
+            wmpSendUrl = wmpSendUrlState,
+            wmpSseUrl = wmpSseUrlState,
             zkCircuitUrls = zkCircuitUrlsState,
             preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluationState,
             readerTrustRootCertificatePem = readerTrustRootCertificatePemState,
@@ -468,6 +474,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             onUpdateTenantId = viewModel::updateTenantId,
             onUpdateEngineUrl = viewModel::updateEngineUrl,
             onUpdateUseWmpProtocol = viewModel::updateUseWmpProtocol,
+            onUpdateWmpEngineMode = viewModel::updateWmpEngineMode,
             onUpdateZkCircuitUrls = viewModel::updateZkCircuitUrls,
             onUpdatePreferLocalReaderTrustEvaluation = viewModel::updatePreferLocalReaderTrustEvaluation,
             onUpdateReaderTrustRootCertificatePem = viewModel::updateReaderTrustRootCertificatePem,
@@ -916,6 +923,9 @@ fun LoginScreen(
     tenantId: String,
     engineUrl: String,
     useWmpProtocol: Boolean,
+    wmpEngineMode: org.siros.sdk.wallet.WmpEngineMode,
+    wmpSendUrl: String,
+    wmpSseUrl: String,
     zkCircuitUrls: List<String>,
     preferLocalReaderTrustEvaluation: Boolean = false,
     readerTrustRootCertificatePem: String = "",
@@ -931,6 +941,7 @@ fun LoginScreen(
     onUpdateTenantId: (String) -> Unit,
     onUpdateEngineUrl: (String) -> Unit,
     onUpdateUseWmpProtocol: (Boolean) -> Unit,
+    onUpdateWmpEngineMode: (org.siros.sdk.wallet.WmpEngineMode, String, String) -> Unit,
     onUpdateZkCircuitUrls: (List<String>) -> Unit,
     onUpdatePreferLocalReaderTrustEvaluation: (Boolean) -> Unit = {},
     onUpdateReaderTrustRootCertificatePem: (String) -> Unit = {},
@@ -947,6 +958,9 @@ fun LoginScreen(
             tenantId = tenantId,
             engineUrl = engineUrl,
             useWmpProtocol = useWmpProtocol,
+            wmpEngineMode = wmpEngineMode,
+            wmpSendUrl = wmpSendUrl,
+            wmpSseUrl = wmpSseUrl,
             zkCircuitUrls = zkCircuitUrls,
             preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation,
             readerTrustRootCertificatePem = readerTrustRootCertificatePem,
@@ -954,6 +968,7 @@ fun LoginScreen(
             onUpdateTenantId = onUpdateTenantId,
             onUpdateEngineUrl = onUpdateEngineUrl,
             onUpdateUseWmpProtocol = onUpdateUseWmpProtocol,
+            onUpdateWmpEngineMode = onUpdateWmpEngineMode,
             onUpdateZkCircuitUrls = onUpdateZkCircuitUrls,
             onUpdatePreferLocalReaderTrustEvaluation = onUpdatePreferLocalReaderTrustEvaluation,
             onUpdateReaderTrustRootCertificatePem = onUpdateReaderTrustRootCertificatePem,
@@ -1144,6 +1159,9 @@ fun PreLoginSettingsSheet(
     tenantId: String,
     engineUrl: String,
     useWmpProtocol: Boolean,
+    wmpEngineMode: org.siros.sdk.wallet.WmpEngineMode,
+    wmpSendUrl: String,
+    wmpSseUrl: String,
     zkCircuitUrls: List<String>,
     preferLocalReaderTrustEvaluation: Boolean = false,
     readerTrustRootCertificatePem: String = "",
@@ -1151,6 +1169,7 @@ fun PreLoginSettingsSheet(
     onUpdateTenantId: (String) -> Unit,
     onUpdateEngineUrl: (String) -> Unit,
     onUpdateUseWmpProtocol: (Boolean) -> Unit,
+    onUpdateWmpEngineMode: (org.siros.sdk.wallet.WmpEngineMode, String, String) -> Unit,
     onUpdateZkCircuitUrls: (List<String>) -> Unit,
     onUpdatePreferLocalReaderTrustEvaluation: (Boolean) -> Unit = {},
     onUpdateReaderTrustRootCertificatePem: (String) -> Unit = {},
@@ -1159,6 +1178,12 @@ fun PreLoginSettingsSheet(
     var editBackendUrl by remember { mutableStateOf(backendUrl) }
     var editTenantId by remember { mutableStateOf(tenantId) }
     var editEngineUrl by remember { mutableStateOf(engineUrl) }
+    // The WMP engine mode and the remote endpoints - edited locally, one
+    // update carrying the triple (the mode change re-persists the pair).
+    var editWmpEngineMode by remember { mutableStateOf(wmpEngineMode) }
+    var editWmpSendUrl by remember { mutableStateOf(wmpSendUrl) }
+    var editWmpSseUrl by remember { mutableStateOf(wmpSseUrl) }
+    fun pushWmpEngineSettings() = onUpdateWmpEngineMode(editWmpEngineMode, editWmpSendUrl, editWmpSseUrl)
     // One URL per line for editing - joined/split at the boundary with
     // onUpdateZkCircuitUrls rather than storing List<String> as Compose
     // TextField state directly.
@@ -1236,6 +1261,76 @@ fun PreLoginSettingsSheet(
                     checked = useWmpProtocol,
                     onCheckedChange = onUpdateUseWmpProtocol,
                 )
+            }
+
+            // Which engine the WMP protocol connects to, and its endpoints -
+            // selected BEFORE login/registration (the sheet's own rule):
+            // the Go engine's WebSocket (the historic default), the Rust
+            // engine remote over HTTP+SSE, or the Rust engine in-process
+            // (the AAR - the app's own ports answer its asks).
+            if (useWmpProtocol) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text("WMP Engine", style = MaterialTheme.typography.bodyLarge)
+                    for (mode in org.siros.sdk.wallet.WmpEngineMode.entries) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = mode == editWmpEngineMode,
+                                    onClick = {
+                                        editWmpEngineMode = mode
+                                        pushWmpEngineSettings()
+                                    },
+                                    role = Role.RadioButton,
+                                ),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = mode == editWmpEngineMode,
+                                onClick = {
+                                    editWmpEngineMode = mode
+                                    pushWmpEngineSettings()
+                                },
+                            )
+                            Text(
+                                when (mode) {
+                                    org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS -> "Go engine (WebSocket)"
+                                    org.siros.sdk.wallet.WmpEngineMode.HTTP_SSE -> "Rust engine (remote, HTTP+SSE)"
+                                    org.siros.sdk.wallet.WmpEngineMode.LOCAL -> "Rust engine (in-process, AAR)"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                }
+                if (editWmpEngineMode == org.siros.sdk.wallet.WmpEngineMode.HTTP_SSE) {
+                    OutlinedTextField(
+                        value = editWmpSendUrl,
+                        onValueChange = {
+                            editWmpSendUrl = it
+                            pushWmpEngineSettings()
+                        },
+                        label = { Text("WMP send URL (POST /wmp)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = editWmpSseUrl,
+                        onValueChange = {
+                            editWmpSseUrl = it
+                            pushWmpEngineSettings()
+                        },
+                        label = { Text("WMP SSE URL (GET /wmp/events)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    Text(
+                        "A dev stack with WMP_ENGINE=yes serves these at " +
+                            "http://<host>:8780/wmp and /wmp/events.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             // RICAL reader-trust local fallback (Geneva 2026 interop event) -

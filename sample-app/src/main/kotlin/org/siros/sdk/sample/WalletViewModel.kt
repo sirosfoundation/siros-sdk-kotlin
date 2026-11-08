@@ -163,6 +163,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _useWmpProtocol: MutableStateFlow<Boolean>
     val useWmpProtocol: StateFlow<Boolean> get() = _useWmpProtocol
 
+    /** Which engine [useWmpProtocol] connects to (see [org.siros.sdk.wallet.WmpEngineMode]). */
+    private val _wmpEngineMode: MutableStateFlow<org.siros.sdk.wallet.WmpEngineMode>
+    val wmpEngineMode: StateFlow<org.siros.sdk.wallet.WmpEngineMode> get() = _wmpEngineMode
+
+    /** The remote engine's WMP send endpoint (`.../wmp`, POST - the request/response binding). */
+    private val _wmpSendUrl: MutableStateFlow<String>
+    val wmpSendUrl: StateFlow<String> get() = _wmpSendUrl
+
+    /** The remote engine's SSE endpoint (`.../wmp/events` - the engine's messages, with replay). */
+    private val _wmpSseUrl: MutableStateFlow<String>
+    val wmpSseUrl: StateFlow<String> get() = _wmpSseUrl
+
     private val _showCredentialDetails: MutableStateFlow<Boolean>
     val showCredentialDetails: StateFlow<Boolean> get() = _showCredentialDetails
 
@@ -247,6 +259,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             } ?: listOf(ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL)
         )
         _useWmpProtocol = MutableStateFlow(prefs.getBoolean("use_wmp_protocol", false))
+        // Which engine the WMP protocol connects to (the mode), and the
+        // remote endpoints - persisted like use_wmp_protocol (the same
+        // prefs, the same persist-on-every-update pattern).
+        _wmpEngineMode = MutableStateFlow(
+            runCatching {
+                org.siros.sdk.wallet.WmpEngineMode.valueOf(
+                    prefs.getString("wmp_engine_mode", null) ?: org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS.name,
+                )
+            }.getOrDefault(org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS),
+        )
+        _wmpSendUrl = MutableStateFlow(prefs.getString("wmp_send_url", null) ?: "")
+        _wmpSseUrl = MutableStateFlow(prefs.getString("wmp_sse_url", null) ?: "")
         // Default follows build type (on for debug, off for release) - a
         // manual override either way is persisted across restarts, so e.g. a
         // tester can still flip it on in a release build if needed.
@@ -389,6 +413,25 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
             .edit()
             .putBoolean("use_wmp_protocol", enabled)
+            .apply()
+    }
+
+    /**
+     * Updates and persists the engine mode (which engine the WMP protocol
+     * connects to), and the remote endpoints with it - [updateWmpEngineMode]
+     * keeps the pair consistent, so this is the single entry the settings UI
+     * calls. A mode change takes effect at the next wallet construction
+     * (the settings are pre-login by design).
+     */
+    fun updateWmpEngineMode(mode: org.siros.sdk.wallet.WmpEngineMode, sendUrl: String, sseUrl: String) {
+        _wmpEngineMode.value = mode
+        _wmpSendUrl.value = sendUrl
+        _wmpSseUrl.value = sseUrl
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("wmp_engine_mode", mode.name)
+            .putString("wmp_send_url", sendUrl)
+            .putString("wmp_sse_url", sseUrl)
             .apply()
     }
 
@@ -2854,6 +2897,25 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             // Explicit override > derived from backendUrl (see resolvedEngineUrl())
             engineUrl = resolvedEngineUrl(),
             useWmpProtocol = _useWmpProtocol.value,
+            // Which engine the WMP protocol connects to, and its endpoints:
+            // remote (the Rust engine's HTTP+SSE binding) or local (the
+            // AAR's engine core in-process, over the sample app's ports).
+            wmpEngineMode = _wmpEngineMode.value,
+            wmpSendUrl = _wmpSendUrl.value.trim().ifEmpty { null },
+            wmpSseUrl = _wmpSseUrl.value.trim().ifEmpty { null },
+            wmpTransport = if (_wmpEngineMode.value == org.siros.sdk.wallet.WmpEngineMode.LOCAL) {
+                { asks ->
+                    // The local engine over the app's HTTP port, the WALLET's
+                    // own ask handlers (the SDK's WalletEngineAskHandler, carried
+                    // by UniFfiEngineAskHost), and no trust stack (fail closed
+                    // at the trust step until one is wired).
+                    org.siros.sdk.transport.wmp.WmpUniFFITransport(
+                        http = OkHttpEngineHttp(),
+                        host = org.siros.sdk.transport.wmp.UniFfiEngineAskHost(asks),
+                        pdp = null,
+                    )
+                }
+            } else null,
             redirectUri = REDIRECT_URI,
             // Emulators/Waydroid don't reliably have a working Credential Manager
             // passkey provider - fall back to the local KeyStore-backed provider there.

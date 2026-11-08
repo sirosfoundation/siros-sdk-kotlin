@@ -69,7 +69,8 @@ class WmpHttpSseTransportTest {
         val transport = WmpHttpSseTransport("https://x.test/send", "https://x.test/events", client("data: {}\n\n"))
         val connected = CompletableDeferred<Unit>()
         val job = launch(Dispatchers.Default) {
-            transport.connect()
+            // The stream opens with the session id (the engine's SSE route requires it).
+            transport.onSessionCreated("s1")
             connected.complete(Unit)
         }
         delay(300)
@@ -88,15 +89,58 @@ class WmpHttpSseTransportTest {
                 .body(ResponseBody.create(null, "")).build()
         }.build()
         val transport = WmpHttpSseTransport("https://x.test/send", "https://x.test/events", http)
-        withTimeout(5_000) { transport.connect() }
+        withTimeout(5_000) { transport.onSessionCreated("s1") }
         assertEquals(TransportState.FAILED, transport.state.value)
+    }
+
+    @Test
+    fun theBearerIsFreshenedPerRequestNotBakedInAtConnect() = runBlocking {
+        // The binding is stateless - the engine validates EVERY POST - and AS
+        // tokens live ~2 minutes, so a token fixed at connect dies with its
+        // expiry and every later POST is answered "Not authorized" (found
+        // driving an issuance 40 minutes after login).
+        var minted = 0
+        val transport = WmpHttpSseTransport(
+            sendUrl = "https://x.test/send",
+            sseUrl = "https://x.test/events",
+            client = client("data: {}\n\n", "data: {}\n\n", "data: {}\n\n"),
+            tokenProvider = { "token-${minted++}" },
+        )
+        transport.onSessionCreated("s1")
+        transport.send("{\"a\":1}".toByteArray())
+        transport.send("{\"a\":2}".toByteArray())
+        transport.disconnect()
+
+        val auths = requests.map { it.header("Authorization") }
+        assertTrue("every request carries a fresh bearer", auths.size >= 3)
+        // The provider answered PER REQUEST: the SSE stream's connect and each POST re-asked it.
+        assertEquals(auths.size, minted)
+        auths.take(3).forEachIndexed { i, auth ->
+            assertEquals("Bearer token-$i", auth)
+        }
+    }
+
+    @Test
+    fun aNullTokenFallsBackToNoAuthorizationHeaderAndExtraHeadersApply() = runBlocking {
+        val transport = WmpHttpSseTransport(
+            sendUrl = "https://x.test/send",
+            sseUrl = "https://x.test/events",
+            client = client("data: {}\n\n"),
+            extraHeaders = mapOf("X-Tenant" to "default"),
+            tokenProvider = { null },
+        )
+        transport.onSessionCreated("s1")
+        transport.send("{}".toByteArray())
+        transport.disconnect()
+        assertTrue("a null provider answer means no Authorization header", requests.all { it.header("Authorization") == null })
+        assertTrue(requests.all { it.header("X-Tenant") == "default" })
     }
 
     @Test
     fun aReplayedEventIdIsDeliveredOnce() = runBlocking {
         val body = "id: 1\ndata: {\"n\":1}\n\nid: 2\ndata: {\"n\":2}\n\nid: 1\ndata: {\"n\":1}\n\nid: 3\ndata: {\"n\":3}\n\n"
         val transport = WmpHttpSseTransport("https://x.test/send", "https://x.test/events", client(body))
-        transport.connect()
+        transport.onSessionCreated("s1")
         val received = withTimeout(5_000) { transport.incoming().take(3).toList() }.map { it.toString(Charsets.UTF_8) }
         assertEquals(listOf("{\"n\":1}", "{\"n\":2}", "{\"n\":3}"), received)
     }
@@ -104,7 +148,7 @@ class WmpHttpSseTransportTest {
     @Test
     fun eventsWithoutAnIdAreAllDelivered() = runBlocking {
         val transport = WmpHttpSseTransport("https://x.test/send", "https://x.test/events", client("data: a\n\ndata: a\n\n"))
-        transport.connect()
+        transport.onSessionCreated("s1")
         assertEquals(listOf("a", "a"), withTimeout(5_000) { transport.incoming().take(2).toList() }.map { it.toString(Charsets.UTF_8) })
     }
 
@@ -114,7 +158,7 @@ class WmpHttpSseTransportTest {
             "https://x.test/send", "https://x.test/events",
             client("id: 1\ndata: a\n\nid: 2\ndata: b\n\n", "id: 2\ndata: b\n\nid: 3\ndata: c\n\n"),
         )
-        transport.connect()
+        transport.onSessionCreated("s1")
         assertNull(requests[0].header("Last-Event-ID"))
         val first = withTimeout(5_000) { transport.incoming().take(2).toList() }
         assertEquals(listOf("a", "b"), first.map { it.toString(Charsets.UTF_8) })
@@ -127,10 +171,23 @@ class WmpHttpSseTransportTest {
     }
 
     @Test
+    fun theStreamIsNamedWithTheSessionIdTheEngineRoutesBy() = runBlocking {
+        // The engine's SSE route requires `?session_id=` and routes the replay
+        // and the live events by it; the stream cannot open before the create
+        // answered (a pre-create connect defers to onSessionCreated).
+        val transport = WmpHttpSseTransport("https://x.test/send", "https://x.test/events", client("data: {}\n\n"))
+        withTimeout(5_000) { transport.connect() }
+        assertTrue("a pre-create connect opens nothing", requests.isEmpty())
+        withTimeout(5_000) { transport.onSessionCreated("ses-1") }
+        assertTrue(requests.isNotEmpty())
+        assertEquals("ses-1", requests.last().url.queryParameter("session_id"))
+    }
+
+    @Test
     fun noEventDataAndNoDecodeErrorIsLogged() = runBlocking {
         val secret = "SEEDMARK-00112233445566778899aabbccddeeff"
         val transport = WmpHttpSseTransport("https://x.test/send", "https://x.test/events", client("id: 1\ndata: {\"credential_metadata\":\"$secret\"}\n\n"))
-        transport.connect()
+        transport.onSessionCreated("s1")
         withTimeout(5_000) { transport.incoming().take(1).toList() }
         logs.forEach { assertFalse(it, it.contains("SEEDMARK")) }
 

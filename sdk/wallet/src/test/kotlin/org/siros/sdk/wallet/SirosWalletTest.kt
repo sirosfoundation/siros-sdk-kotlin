@@ -87,6 +87,7 @@ import org.siros.sdk.keystore.AttestationChain
 import org.siros.sdk.keystore.KeyInfo
 import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
+import org.siros.sdk.keystore.CredentialRefreshTokenEntry
 import org.siros.sdk.keystore.NativeAttestationEvidence
 import org.siros.sdk.keystore.NativeAttestationProvider
 import com.nimbusds.jose.JWEObject
@@ -19482,6 +19483,419 @@ class SirosWalletTest {
         override suspend fun clear() {
             credentials.clear()
         }
+    }
+
+    // ── siros-wallet-core's typed asks and the WMP client-initiated flows ─────
+    //
+    // The HTTP_SSE / LOCAL modes' engine dialect (see OpenID4xTypedAskTest for the
+    // transport half): the asks reach these wallet handlers through wmpProfile's
+    // callbacks, and the issuance/presentation/renewal starts ride the peer.
+
+    /** A wallet built the way the typed-ask tests need: no keystore state, a recording listener. */
+    private fun typedAskWallet(
+        peer: org.siros.sdk.transport.wmp.WmpPeer? = null,
+        keystore: KeystoreManager = mockk(relaxed = true),
+        listener: WalletEventListener = mockk(relaxed = true),
+        extra: Array<Pair<String, Any?>> = emptyArray(),
+    ): SirosWallet {
+        every { keystore.isUnlocked } returns false
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "supervisorJob" to SupervisorJob(),
+            "keystore" to keystore,
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+            "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+            "eventListener" to listener,
+            "wmpPeer" to peer,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", useWmpProtocol = true),
+            *extra,
+        )
+        return wallet
+    }
+
+    /** [org.siros.sdk.wallet.PendingAuthorization] is file-private in SirosWallet.kt - built here via reflection. */
+    private fun buildPendingAuthorization(
+        offerJson: String?,
+        redirectUri: String,
+        codeVerifier: String?,
+        state: String,
+        issuanceEpoch: Int,
+    ): Any {
+        val cls = Class.forName("org.siros.sdk.wallet.PendingAuthorization")
+        // The data class's own 5-parameter constructor (not its default-mask twin).
+        val ctor = cls.declaredConstructors.first { it.parameterCount == 5 }
+        ctor.isAccessible = true
+        return ctor.newInstance(offerJson, redirectUri, codeVerifier, state, issuanceEpoch)
+    }
+
+    /** One private suspend function of the wallet, invoked directly (the ask handlers are not public API). */
+    private suspend fun invokeHandler(wallet: SirosWallet, name: String, vararg args: Any?): Any? {
+        val method = wallet::class.declaredMemberFunctions.first { it.name == name }
+        method.isAccessible = true
+        // kotlin-reflect's callSuspend drives the suspend fun via raw Java reflection, which wraps
+        // whatever it throws in InvocationTargetException (see invokeHandleEngineMessage's identical
+        // comment) - unwrapped here so every ask test asserts the real exception.
+        return try {
+            method.callSuspend(wallet, *args)
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw e.cause ?: e
+        }
+    }
+
+    @Test
+    fun connectingInHttpSseMode_offersTheRustEnginesRequiredCapabilities() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        every { peer.use(any()) } just runs
+        val capabilitiesSlot = slot<JsonObject?>()
+        coEvery { peer.connect(any(), any(), captureNullable(capabilitiesSlot)) } just runs
+        val previous = SirosWallet.createWmpPeerFromTransport
+        SirosWallet.createWmpPeerFromTransport = { peer }
+        try {
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "config" to WalletConfig(
+                    backendUrl = "https://wallet.example.com",
+                    useWmpProtocol = true,
+                    wmpEngineMode = org.siros.sdk.wallet.WmpEngineMode.HTTP_SSE,
+                    wmpSendUrl = "http://engine/wmp",
+                    wmpSseUrl = "http://engine/wmp/events",
+                ),
+            )
+            val connectViaWmp = wallet::class.declaredMemberFunctions.first { it.name == "connectViaWmp" }
+            connectViaWmp.isAccessible = true
+            runBlocking { connectViaWmp.callSuspend(wallet, "app-token") }
+
+            val offered = capabilitiesSlot.captured
+            assertTrue(
+                "the Rust engine refuses every flow start whose capability was not negotiated (core §10.3) - the session must offer `flows`",
+                offered?.containsKey("flows") == true,
+            )
+            assertTrue(
+                "the credential_notification flow needs its capability negotiated before the wallet can send one",
+                offered?.containsKey("credential_notification") == true,
+            )
+        } finally {
+            SirosWallet.createWmpPeerFromTransport = previous
+        }
+    }
+
+    @Test
+    fun aTxCodeAsk_reachesTheListenerAndItsAnswerBack() = runTest(dispatcher) {
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        every { listener.onTxCodeRequired(flowId = "p-1", description = null) } returns "4321"
+        val wallet = typedAskWallet(listener = listener)
+
+        val answer = invokeHandler(wallet, "handleWmpTxCode", "p-1")
+        assertEquals("4321", answer)
+    }
+
+    @Test
+    fun aTxCodeAskWithoutAnAnswer_failsClosedRatherThanInventingACode() = runTest(dispatcher) {
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        every { listener.onTxCodeRequired(any(), any()) } returns null
+        val wallet = typedAskWallet(listener = listener)
+
+        val thrown = runCatching { invokeHandler(wallet, "handleWmpTxCode", "p-1") }.exceptionOrNull()
+        assertTrue("a refused tx_code ask must throw, never answer an invented code", thrown is WalletException)
+    }
+
+    @Test
+    fun aConsentAsk_carriesThePurposeAndClaimsToTheListenerAndItsVerdictBack() = runTest(dispatcher) {
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery {
+            listener.onConsentRequested(flowId = "p-2", purpose = "scope-x", requestedClaims = listOf("given_name"))
+        } returns true
+        val wallet = typedAskWallet(listener = listener)
+
+        val answer = invokeHandler(
+            wallet, "handleWmpConsent", "p-2",
+            org.siros.sdk.transport.wmp.openid4x.EngineConsentParams(
+                flowId = "p-2", purpose = "scope-x",
+                requestedClaims = listOf("given_name"), transactionData = emptyList(),
+            ),
+        )
+        assertEquals(true, answer)
+    }
+
+    @Test
+    fun aConsentAskWithoutAConsentUi_declines() = runTest(dispatcher) {
+        // The listener's own default declines (fail closed) - a null listener is the same refusal.
+        val wallet = typedAskWallet()
+        val answer = invokeHandler(
+            wallet, "handleWmpConsent", "p-2",
+            org.siros.sdk.transport.wmp.openid4x.EngineConsentParams(
+                flowId = "p-2", purpose = null, requestedClaims = emptyList(), transactionData = emptyList(),
+            ),
+        )
+        assertEquals(false, answer)
+    }
+
+    @Test
+    fun aBareSignAsk_signifiesWithTheDefaultProofKeyItPublished() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        coEvery { keystore.publicKeyJwk(null) } returns org.siros.sdk.keystore.KeypairInfo(
+            keyId = "proof-1",
+            publicKeyJWK = kotlinx.serialization.json.buildJsonObject { put("kty", kotlinx.serialization.json.JsonPrimitive("EC")) },
+        )
+        val toSign = "header.payload".toByteArray(Charsets.UTF_8)
+        coEvery { keystore.signJwsSignature("proof-1", toSign, "ES256") } returns byteArrayOf(9, 8, 7)
+        val wallet = typedAskWallet(keystore = keystore)
+
+        val answer = invokeHandler(
+            wallet, "handleWmpProofSign", "p-3",
+            org.siros.sdk.transport.wmp.openid4x.EngineSignParams(
+                flowId = "p-3", toSign = toSign.map { it.toInt() and 0xff }, keyId = null, algorithm = "ES256",
+            ),
+        )
+        assertTrue("the signature is the named key's, not a re-encoded JWS", answer is ByteArray && (answer as ByteArray).contentEquals(byteArrayOf(9, 8, 7)))
+        // The pair of asks stays consistent: the wallet published THIS key.
+        coVerify(exactly = 1) { keystore.publicKeyJwk(null) }
+    }
+
+    @Test
+    fun aSigningKeyAsk_publishesTheNamedKeysJwk() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        val jwk = kotlinx.serialization.json.buildJsonObject {
+            put("kty", kotlinx.serialization.json.JsonPrimitive("EC"))
+            put("kid", kotlinx.serialization.json.JsonPrimitive("proof-1"))
+        }
+        coEvery { keystore.publicKeyJwk("proof-1") } returns org.siros.sdk.keystore.KeypairInfo("proof-1", jwk)
+        val wallet = typedAskWallet(keystore = keystore)
+
+        val answer = invokeHandler(wallet, "handleWmpSigningKey", "p-4", "proof-1")
+            as org.siros.sdk.transport.wmp.openid4x.EngineSigningKeyResult
+        assertEquals(jwk, answer.jwk)
+    }
+
+    @Test
+    fun aDpopProofAsk_hashesTheRawAccessTokenIntoAth() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        val athSlot = slot<String?>()
+        coEvery {
+            keystore.generateDPoPProof(
+                keyId = "dpop-1", htm = "POST", htu = "https://issuer.example/token",
+                nonce = "n1", accessTokenHash = captureNullable(athSlot),
+            )
+        } returns "proof.jwt"
+        val wallet = typedAskWallet(keystore = keystore)
+
+        val answer = invokeHandler(
+            wallet, "handleWmpDpopProof", "p-5",
+            org.siros.sdk.transport.wmp.openid4x.EngineDpopProofParams(
+                flowId = "p-5", keyId = "dpop-1", htm = "POST", htu = "https://issuer.example/token",
+                accessToken = "raw-token", nonce = "n1",
+            ),
+        ) as org.siros.sdk.transport.wmp.openid4x.EngineDpopProofResult
+
+        assertEquals("proof.jwt", answer.proof)
+        // RFC 9449 §4.3: ath is the base64url SHA-256 of the ACCESS TOKEN - and the ask carries the raw
+        // token, so the wallet does the hashing.
+        val expected = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest("raw-token".toByteArray()))
+        assertEquals(expected, athSlot.captured)
+    }
+
+    @Test
+    fun anAuthorizationAskWithoutItsPrecedingProgress_stillHandsTheUrlOver() = runTest(dispatcher) {
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = typedAskWallet(listener = listener)
+
+        invokeHandler(wallet, "handleWmpAuthorizationAsk", "p-6", "https://as.example/authorize?state=s")
+        coVerify {
+            listener.onAuthorizationRequired(
+                flowId = "p-6",
+                authorizationUrl = "https://as.example/authorize?state=s",
+                redirectUri = "",
+                state = "s",
+            )
+        }
+    }
+
+    @Test
+    fun anAuthorizationRequiredProgress_savesTheResumeContextBeforeTheBrowser() = runTest(dispatcher) {
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = typedAskWallet(
+            listener = listener,
+            extra = arrayOf(
+                "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+                "presentationLinks" to PresentationLinkLedger(),
+            ),
+        )
+
+        invokeHandler(
+            wallet, "handleWmpProgress", "p-7", "authorization_required",
+            kotlinx.serialization.json.buildJsonObject {
+                put("authorization_url", kotlinx.serialization.json.JsonPrimitive("https://as.example/authorize?state=st1"))
+                put("expected_redirect_uri", kotlinx.serialization.json.JsonPrimitive("siros://callback"))
+                put("state", kotlinx.serialization.json.JsonPrimitive("st1"))
+                put("code_verifier", kotlinx.serialization.json.JsonPrimitive("cv"))
+            },
+        )
+
+        @Suppress("UNCHECKED_CAST")
+        val pending = getField(wallet, "pendingAuthorizations") as Map<String, *>
+        assertTrue("the resume context must be saved BEFORE the user is handed to the browser", pending.containsKey("p-7"))
+        verify { listener.onAuthorizationRequired(flowId = "p-7", authorizationUrl = any(), redirectUri = "siros://callback", state = "st1") }
+    }
+
+    @Test
+    fun aPresentationAsk_buildsAndSignsTheVpTokenForTheMatchedSelections() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        coEvery {
+            keystore.signPresentation(nonce = "n1", audience = "verifier", credentialIds = emptyList(), kid = null)
+        } returns "vp.jwt"
+        val wallet = typedAskWallet(
+            keystore = keystore,
+            extra = arrayOf(
+                // The consent the `match` answer recorded for this flow: the selection must be one of it.
+                "consentRecordsByFlow" to mutableMapOf(
+                    "p-8" to ConsentRecord(listOf(ConsentedSelection("q1", "7", setOf("given_name")))),
+                ),
+                "zkPreparationsByFlow" to java.util.concurrent.ConcurrentHashMap<String, Any>(),
+            ),
+        )
+
+        val answer = invokeHandler(
+            wallet, "handleWmpVpRequest", "p-8",
+            org.siros.sdk.transport.wmp.openid4x.EngineVpParams(
+                flowId = "p-8", audience = "verifier", nonce = "n1",
+                selections = listOf(
+                    org.siros.sdk.transport.wmp.openid4x.EngineVpSelection(
+                        credentialQueryId = "q1", credentialId = "7", disclosedClaims = listOf("given_name"),
+                    ),
+                ),
+                responseUri = "https://verifier/response", transactionData = emptyList(),
+            ),
+            0L,
+        ) as org.siros.sdk.transport.wmp.openid4x.EngineVpResult
+
+        assertEquals("vp.jwt", answer.vpToken)
+    }
+
+    @Test
+    fun aPresentationAskWithoutConsent_refusesNeverSigns() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        // The wallet's OWN empty consent map (the newWallet default seeds every
+        // lookup with an unrestricted test record - a test that exercises the
+        // consent guard passes its own map, per that helper's own contract).
+        val wallet = typedAskWallet(
+            keystore = keystore,
+            extra = arrayOf("consentRecordsByFlow" to java.util.concurrent.ConcurrentHashMap<String, ConsentRecord>()),
+        )
+
+        val thrown = runCatching {
+            invokeHandler(
+                wallet, "handleWmpVpRequest", "p-8",
+                org.siros.sdk.transport.wmp.openid4x.EngineVpParams(
+                    flowId = "p-8", audience = "verifier", nonce = "n1",
+                    selections = listOf(
+                        org.siros.sdk.transport.wmp.openid4x.EngineVpSelection("q1", "7", listOf("given_name")),
+                    ),
+                    responseUri = "https://verifier/response", transactionData = emptyList(),
+                ),
+                0L,
+            )
+        }.exceptionOrNull()
+        assertTrue("an unconsented presentation must be refused, never signed", thrown != null)
+        // Nothing was signed: the profile turns the throw into the structured refusal the verifier learns.
+        coVerify(exactly = 0) { keystore.signPresentation(nonce = any(), audience = any(), credentialIds = any(), kid = any()) }
+    }
+
+    @Test
+    fun anIssuanceStartInWmpMode_carriesTheByValueOfferFormWithTheWalletsMembers() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val startSlot = slot<JsonObject?>()
+        coEvery { peer.startFlow(any(), any(), captureNullable(startSlot)) } returns
+            org.siros.sdk.transport.wmp.FlowStartResult(flowId = "f1", flowType = "oid4vci")
+        val wallet = typedAskWallet(peer = peer)
+
+        invokeHandler(
+            wallet, "wmpStartIssuance", peer,
+            kotlinx.serialization.json.buildJsonObject {
+                put("credential_issuer", kotlinx.serialization.json.JsonPrimitive("https://issuer.example"))
+                put("credential_configuration_ids", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("diploma")) })
+                put("grants", kotlinx.serialization.json.buildJsonObject { put("authorization_code", kotlinx.serialization.json.buildJsonObject {}) })
+            },
+            null, "siros://callback", emptyList<org.siros.sdk.credentials.interop.AuthorizationDetail>(),
+            "e2e-test-client",
+        )
+
+        val params = startSlot.captured!!
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("https://issuer.example"), params["credential_issuer"])
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("siros://callback"), params["redirect_uri"])
+        assertEquals(
+            "the backend registry's registered client id rides as the engine's client_id param",
+            kotlinx.serialization.json.JsonPrimitive("e2e-test-client"), params["client_id"],
+        )
+        assertTrue(
+            "the offer object's members ride beside the wallet's own (the lenient by-value form)",
+            params.containsKey("grants"),
+        )
+    }
+
+    @Test
+    fun aRenewalStartInWmpMode_carriesTheRefreshGrantBundle() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val startSlot = slot<JsonObject?>()
+        coEvery { peer.startFlow(any(), any(), captureNullable(startSlot)) } returns
+            org.siros.sdk.transport.wmp.FlowStartResult(flowId = "f2", flowType = "oid4vci")
+        val wallet = typedAskWallet(peer = peer)
+
+        invokeHandler(
+            wallet, "wmpStartRenewal", peer,
+            CredentialRefreshTokenEntry(
+                refreshToken = "rt-1", dpopJwk = "{\"kty\":\"EC\"}", dpopKeyId = null,
+                credentialIssuerIdentifier = "https://issuer.example",
+                credentialConfigurationId = "diploma",
+            ),
+        )
+
+        val params = startSlot.captured!!
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("rt-1"), params["refresh_token"])
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("https://issuer.example"), params["credential_issuer"])
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("diploma"), params["selected_credential_configuration_id"])
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("{\"kty\":\"EC\"}"), params["dpop_jwk"])
+    }
+
+    @Test
+    fun completingAnAuthorizationInWmpMode_sendsAuthorizeOnTheOriginalFlow() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val wallet = typedAskWallet(
+            peer = peer,
+            extra = arrayOf(
+                "pendingAuthorizations" to mutableMapOf<String, Any?>(
+                    "p-9" to buildPendingAuthorization(
+                        offerJson = "{}", redirectUri = "siros://callback",
+                        codeVerifier = "cv", state = "st1", issuanceEpoch = 0,
+                    ),
+                ),
+                "issuanceStartEpoch" to java.util.concurrent.atomic.AtomicInteger(0),
+                "resumingFlowIds" to java.util.concurrent.ConcurrentLinkedQueue<String>(),
+            ),
+        )
+
+        wallet.completeAuthorization("p-9", "auth-code-1", "st1")
+
+        advanceUntilIdle()
+        val actionSlot = slot<String>()
+        val paramsSlot = slot<JsonObject?>()
+        coVerify { peer.sendFlowAction(flowId = "p-9", action = capture(actionSlot), params = captureNullable(paramsSlot)) }
+        assertEquals("authorize", actionSlot.captured)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("auth-code-1"), paramsSlot.captured!!["code"])
+        assertEquals(kotlinx.serialization.json.JsonPrimitive("st1"), paramsSlot.captured!!["state"])
     }
 
     companion object

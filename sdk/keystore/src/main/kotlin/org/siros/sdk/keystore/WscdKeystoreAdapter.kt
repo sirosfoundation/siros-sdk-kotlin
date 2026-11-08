@@ -312,6 +312,51 @@ class WscdKeystoreAdapter private constructor(
         return signer.sign(keyId, payload)
     }
 
+    override suspend fun signJwsSignature(keyId: String, signingInput: ByteArray, algorithm: String): ByteArray? {
+        // The signer's own contract is raw signature bytes over the bytes
+        // given - exactly what siros-wallet-core's bare `sign` ask carries
+        // (the engine built the proof's `header.payload` signing input).
+        // Found driving the GDC issuance: without this override the interface's
+        // fail-closed default refused the ask and the engine's key proofs
+        // failed ("host cannot answer: proof signing failed") while the
+        // credentials request was already underway.
+        return try {
+            checkUnlocked()
+            signer.sign(keyId, signingInput)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    override suspend fun publicKeyJwk(keyId: String?): KeypairInfo? {
+        // The `signing_key` ask: the signer exports the JWK (JSON-encoded
+        // bytes); the default proof key is its first listed key. A nil answer
+        // keeps the proof header bare (the engine's legacy shape) rather than
+        // inventing a key.
+        return try {
+            checkUnlocked()
+            val keys = signer.listKeys()
+            val key = if (keyId != null) {
+                keys.firstOrNull { it.keyId == keyId } ?: return null
+            } else {
+                keys.firstOrNull() ?: return null
+            }
+            val jwkBytes = signer.exportPublicKey(key.keyId)
+            val jwkElement = kotlinx.serialization.json.Json.parseToJsonElement(String(jwkBytes, Charsets.UTF_8))
+            KeypairInfo(
+                keyId = key.keyId,
+                publicKeyJWK = (jwkElement as? kotlinx.serialization.json.JsonObject) ?: return null,
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+
     /** The pre-DIIP call shape: this keystore's own profile decides. */
     override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean): String =
         generateProof(audience, nonce, freshKey, holderBinding = null)

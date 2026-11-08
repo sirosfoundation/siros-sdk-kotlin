@@ -106,7 +106,12 @@ public abstract interface class org/siros/sdk/transport/Transport {
 	public abstract fun disconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getState ()Lkotlinx/coroutines/flow/Flow;
 	public abstract fun incoming ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun onSessionCreated (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/Transport$DefaultImpls {
+	public static fun onSessionCreated (Lorg/siros/sdk/transport/Transport;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class org/siros/sdk/transport/TransportState : java/lang/Enum {
@@ -2432,6 +2437,21 @@ public final class org/siros/sdk/transport/wmp/SessionResumeResult$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class org/siros/sdk/transport/wmp/UniFfiEngineAskHost : uniffi/engine_adapter_sdk/Host {
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpEngineAskHandler;)V
+	public fun openAuthorization (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun progress (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public fun requestAttestation (Luniffi/engine_adapter_sdk/AttestationParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestConsent (Luniffi/engine_adapter_sdk/ConsentParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestCredentialSelection (Luniffi/engine_adapter_sdk/CredentialSelectionParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestDpopProof (Luniffi/engine_adapter_sdk/DpopProofParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestMatch (Luniffi/engine_adapter_sdk/MatchParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestSign (Luniffi/engine_adapter_sdk/SignParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestSigningKey (Luniffi/engine_adapter_sdk/SigningKeyParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestTxCode (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestVp (Luniffi/engine_adapter_sdk/VpParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class org/siros/sdk/transport/wmp/WmpCodec {
 	public fun <init> ()V
 	public fun <init> (Lkotlinx/serialization/json/Json;)V
@@ -2443,6 +2463,25 @@ public final class org/siros/sdk/transport/wmp/WmpCodec {
 	public final fun encodeRequest (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;)[B
 	public static synthetic fun encodeRequest$default (Lorg/siros/sdk/transport/wmp/WmpCodec;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;ILjava/lang/Object;)[B
 	public final fun getJson ()Lkotlinx/serialization/json/Json;
+}
+
+public abstract interface class org/siros/sdk/transport/wmp/WmpEngineAskHandler {
+	public abstract fun onProgress (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public abstract fun openAuthorization (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestAttestation (Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestConsent (Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineConsentParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestCredentialSelection (Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestDpopProof (Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestMatch (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestSign (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestSigningKey (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestTxCode (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestVp (Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineVpParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpEngineAskHandler$DefaultImpls {
+	public static fun onProgress (Lorg/siros/sdk/transport/wmp/WmpEngineAskHandler;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public static fun requestCredentialSelection (Lorg/siros/sdk/transport/wmp/WmpEngineAskHandler;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class org/siros/sdk/transport/wmp/WmpErrorCodes {
@@ -2481,13 +2520,14 @@ public final class org/siros/sdk/transport/wmp/WmpFlowHandler$DefaultImpls {
 
 public final class org/siros/sdk/transport/wmp/WmpHttpSseTransport : org/siros/sdk/transport/Transport {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/WmpHttpSseTransport$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;Lkotlin/jvm/functions/Function1;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun connect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun disconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public synthetic fun getState ()Lkotlinx/coroutines/flow/Flow;
 	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun incoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun onSessionCreated (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
@@ -2706,6 +2746,7 @@ public final class org/siros/sdk/transport/wmp/WmpUniFFITransport : org/siros/sd
 	public synthetic fun getState ()Lkotlinx/coroutines/flow/Flow;
 	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun incoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun onSessionCreated (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
@@ -2718,6 +2759,7 @@ public final class org/siros/sdk/transport/wmp/WmpWebSocketTransport : org/siros
 	public synthetic fun getState ()Lkotlinx/coroutines/flow/Flow;
 	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun incoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun onSessionCreated (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
@@ -2917,6 +2959,392 @@ public final class org/siros/sdk/transport/wmp/openid4x/CredentialResult$Compani
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class org/siros/sdk/transport/wmp/openid4x/EngineAskRefusal {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineAskRefusal;
+	public static final field SIGN_REFUSED Ljava/lang/String;
+	public static final field UNSUPPORTED_TRANSACTION_DATA Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineAttestationParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAudience ()Ljava/lang/String;
+	public final fun getChallenge ()Ljava/lang/String;
+	public final fun getClientId ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineAttestationParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineAttestationParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineAttestationResult {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationResult;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPop ()Ljava/lang/String;
+	public final fun getWia ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineAuthorizationParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDisplay ()Ljava/lang/String;
+	public final fun getFormat ()Ljava/lang/String;
+	public final fun getId ()Ljava/lang/String;
+	public final fun getVct ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineAvailableCredential$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineConsentParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineConsentParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;)Lorg/siros/sdk/transport/wmp/openid4x/EngineConsentParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineConsentParams;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineConsentParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getPurpose ()Ljava/lang/String;
+	public final fun getRequestedClaims ()Ljava/util/List;
+	public final fun getTransactionData ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineConsentParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineConsentParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineConsentParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineConsentParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineConsentParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAccessToken ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getHtm ()Ljava/lang/String;
+	public final fun getHtu ()Ljava/lang/String;
+	public final fun getKeyId ()Ljava/lang/String;
+	public final fun getNonce ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineDpopProofResult {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofResult;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getProof ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineSignParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineSignParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineSignParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineSignParams;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineSignParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAlgorithm ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getKeyId ()Ljava/lang/String;
+	public final fun getToSign ()Ljava/util/List;
+	public final fun getToSignBytes ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineSignParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineSignParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineSignParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineSignParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineSignParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getKeyId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineSigningKeyParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineSigningKeyResult {
+	public fun <init> ()V
+	public fun <init> (Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyResult;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineSigningKeyResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getJwk ()Lkotlinx/serialization/json/JsonObject;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineVpParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineVpParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/util/List;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Ljava/util/List;
+	public final fun component9 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineVpParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineVpParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineVpParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAudience ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getNonce ()Ljava/lang/String;
+	public final fun getResponseUri ()Ljava/lang/String;
+	public final fun getSelectionHandle ()Ljava/lang/String;
+	public final fun getSelections ()Ljava/util/List;
+	public final fun getTransactionData ()Ljava/util/List;
+	public final fun getVerifierJwkThumbprint ()Ljava/lang/String;
+	public final fun getVerifierSessionId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineVpParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineVpParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineVpParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineVpParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineVpParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineVpResult {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineVpResult$Companion;
+	public static final field SIGN_REFUSED Ljava/lang/String;
+	public static final field UNSUPPORTED_TRANSACTION_DATA Ljava/lang/String;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineVpResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineVpResult;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineVpResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRefusalCode ()Ljava/lang/String;
+	public final fun getVpToken ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineVpResult$Companion {
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineVpSelection {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineVpSelection$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)Lorg/siros/sdk/transport/wmp/openid4x/EngineVpSelection;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineVpSelection;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineVpSelection;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialId ()Ljava/lang/String;
+	public final fun getCredentialQueryId ()Ljava/lang/String;
+	public final fun getDisclosedClaims ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineVpSelection$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineVpSelection$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineVpSelection;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineVpSelection;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineVpSelection$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class org/siros/sdk/transport/wmp/openid4x/FlowCompleteResult {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult$Companion;
 	public fun <init> ()V
@@ -2989,18 +3417,32 @@ public final class org/siros/sdk/transport/wmp/openid4x/OID4Action {
 }
 
 public final class org/siros/sdk/transport/wmp/openid4x/OID4FlowTypes {
+	public static final field ATTESTATION Ljava/lang/String;
+	public static final field AUTHORIZATION Ljava/lang/String;
+	public static final field CONSENT Ljava/lang/String;
+	public static final field DPOP_PROOF Ljava/lang/String;
 	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/OID4FlowTypes;
 	public static final field MATCH Ljava/lang/String;
 	public static final field OID4VCI Ljava/lang/String;
 	public static final field OID4VP Ljava/lang/String;
+	public static final field PRESENTATION Ljava/lang/String;
 	public static final field SIGN Ljava/lang/String;
+	public static final field SIGNING_KEY Ljava/lang/String;
+	public static final field TX_CODE Ljava/lang/String;
 }
 
 public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xConfig {
 	public fun <init> ()V
-	public fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;)V
-	public synthetic fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;)V
+	public synthetic fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lkotlin/jvm/functions/Function4;
+	public final fun component10 ()Lkotlin/jvm/functions/Function3;
+	public final fun component11 ()Lkotlin/jvm/functions/Function3;
+	public final fun component12 ()Lkotlin/jvm/functions/Function2;
+	public final fun component13 ()Lkotlin/jvm/functions/Function3;
+	public final fun component14 ()Lkotlin/jvm/functions/Function3;
+	public final fun component15 ()Lkotlin/jvm/functions/Function3;
+	public final fun component16 ()Lkotlin/jvm/functions/Function3;
 	public final fun component2 ()Lkotlin/jvm/functions/Function3;
 	public final fun component3 ()Lkotlin/jvm/functions/Function3;
 	public final fun component4 ()Lkotlin/jvm/functions/Function3;
@@ -3008,17 +3450,26 @@ public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xConfig {
 	public final fun component6 ()Lkotlin/jvm/functions/Function4;
 	public final fun component7 ()Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;
 	public final fun component8 ()Lkotlin/jvm/functions/Function2;
-	public final fun copy (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
+	public final fun component9 ()Lkotlin/jvm/functions/Function3;
+	public final fun copy (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAttestationProvider ()Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;
+	public final fun getOnAttestation ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnAuthorization ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnCancel ()Lkotlin/jvm/functions/Function2;
 	public final fun getOnComplete ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnConsent ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnDpopProof ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnError ()Lkotlin/jvm/functions/Function4;
 	public final fun getOnMatchRequest ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnProgress ()Lkotlin/jvm/functions/Function4;
+	public final fun getOnProofSign ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnSignRequest ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnSigningKey ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnTrustEvaluation ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnTxCode ()Lkotlin/jvm/functions/Function2;
+	public final fun getOnVpRequest ()Lkotlin/jvm/functions/Function3;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

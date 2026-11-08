@@ -483,7 +483,7 @@ class WmpPeerTest {
     }
 
     @Test
-    fun notifyIfChecksAgainOnceThePeerHoldsItsSendLock() = runBlocking {
+    fun notifyIfChecksWantedOnceAtSendTimeIndependentlyOfAnInflightSend() = runBlocking {
         val release = kotlinx.coroutines.CompletableDeferred<Unit>()
         val holding = kotlinx.coroutines.CompletableDeferred<Unit>()
         val sent = java.util.concurrent.CopyOnWriteArrayList<String>()
@@ -501,14 +501,23 @@ class WmpPeerTest {
         val first = launch { peer.notify("test.first", null) }
         withTimeout(TEST_TIMEOUT_MS) { holding.await() }
 
-        val wanted = java.util.concurrent.atomic.AtomicBoolean(true)
+        // The send mutex is gone (the drive-found deadlock): the wanted
+        // check is once, at send time — a skip does not wait for the
+        // in-flight send to finish.
+        val wanted = java.util.concurrent.atomic.AtomicBoolean(false)
+        assertFalse("not wanted at send time", peer.notifyIf("test.skipped", null) { wanted.get() })
+
+        // A check that passes can be stale by the time the POST lands —
+        // accepted (the receiver re-checks).
+        wanted.set(true)
         val queued = async { peer.notifyIf("test.second", null) { wanted.get() } }
-        delay(100) // queued behind the send that holds the lock
+        delay(100) // the second POST is in flight
         wanted.set(false)
         release.complete(Unit)
         first.join()
 
-        assertFalse("no longer wanted when it got the lock", withTimeout(TEST_TIMEOUT_MS) { queued.await() })
-        assertEquals(1, sent.size)
+        assertTrue("the check passed at send time; the in-flight flip is accepted", withTimeout(TEST_TIMEOUT_MS) { queued.await() })
+        assertEquals("first and second sent; the skipped one never was", 2, sent.size)
+        assertTrue(sent.none { it.contains("test.skipped") })
     }
 }

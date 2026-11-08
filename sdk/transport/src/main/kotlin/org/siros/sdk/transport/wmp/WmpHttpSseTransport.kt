@@ -8,6 +8,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,12 +36,24 @@ import java.util.concurrent.TimeUnit
  * @param sseUrl The URL for SSE EventSource (incoming messages).
  * @param client Optional OkHttpClient (shared with other SDK components).
  * @param extraHeaders Additional headers (e.g., Authorization, X-Tenant-ID).
+ * @param tokenProvider Freshens the `Authorization` bearer per request: the
+ *   HTTP+SSE binding is stateless - EVERY POST is its own request and the
+ *   engine validates each one against the AS - so a token baked in at
+ *   connect dies with its (typically ~120 s) expiry and every later POST is
+ *   answered "Not authorized" (found driving an issuance ~40 minutes after
+ *   login: the start reached the engine with a long-expired token). The
+ *   provider is called per POST and per SSE (re)connect; the wallet's is
+ *   `ensure`-shaped (cached until expired), so the calls are cheap. A null
+ *   return falls back to no Authorization header; extraHeaders'
+ *   Authorization (if any) then applies. Takes precedence over extraHeaders'
+ *   Authorization when both answer.
  */
 class WmpHttpSseTransport(
     private val sendUrl: String,
     private val sseUrl: String,
     private val client: OkHttpClient = defaultClient(),
     private val extraHeaders: Map<String, String> = emptyMap(),
+    private val tokenProvider: (suspend () -> String?)? = null,
 ) : Transport {
 
     private val _state = MutableStateFlow(TransportState.DISCONNECTED)
@@ -55,19 +68,65 @@ class WmpHttpSseTransport(
     @Volatile private var lastEventId: String? = null
 
     /**
+     * The request headers for one outgoing request: [extraHeaders], with the
+     * `Authorization` freshened from [tokenProvider] when it answers (see its
+     * doc comment for why per-request, not per-connect).
+     */
+    private suspend fun requestHeaders(): Map<String, String> {
+        val headers = extraHeaders.toMutableMap()
+        val token = tokenProvider?.invoke()
+        if (token != null) headers["Authorization"] = "Bearer $token"
+        return headers
+    }
+
+    /**
+     * The session this stream belongs to, from [onSessionCreated]. The engine's
+     * SSE route REQUIRES `?session_id=` (it routes the replay and the live
+     * events by it), so the stream cannot open before the create answers -
+     * [connect] defers to [onSessionCreated] until the id arrives, and every
+     * later (re)connect (a resume, a drop) re-opens with it.
+     */
+    @Volatile private var sseSessionId: String? = null
+
+    /**
+     * A pre-create [connect] cannot open the stream: the engine's SSE route
+     * answers 400 without `?session_id=`, and no session exists yet anyway.
+     * [onSessionCreated] opens it once the create answered; a resume
+     * re-connects through here with the remembered id.
+     */
+    override suspend fun connect() {
+        if (_state.value == TransportState.CONNECTED) return
+        if (sseSessionId == null) return
+        openStream()
+    }
+
+    /** The stream, opened with the session the wallet created: `?session_id=` names it (the engine routes by it). */
+    override suspend fun onSessionCreated(sessionId: String) {
+        if (sseSessionId == null) sseSessionId = sessionId
+        if (_state.value != TransportState.CONNECTED) openStream()
+    }
+
+    /** The SSE GET, named with the session id. */
+    private fun sseRequestUrl(): String {
+        val id = sseSessionId ?: return sseUrl
+        val separator = if ('?' in sseUrl) "&" else "?"
+        return "$sseUrl${separator}session_id=$id"
+    }
+
+    /**
      * Opens the event stream and returns only once it is CONNECTED (or has failed): a caller that sends a request
      * right after `connect()` therefore never sends before the stream is open. That matters for a flow that delivers
      * a secret, which is delivered live and once to the stream connected when it is emitted (OpenID4VCI 1.1
      * response-level `credential_metadata`, privatedata-spec 5A), so the stream MUST be up before `wmp.flow.start`.
      * On a reconnect `Last-Event-ID` carries the last event received.
      */
-    override suspend fun connect() {
+    private suspend fun openStream() {
         if (_state.value == TransportState.CONNECTED) return
         _state.value = TransportState.CONNECTING
 
         val request = Request.Builder()
-            .url(sseUrl)
-            .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
+            .url(sseRequestUrl())
+            .apply { requestHeaders().forEach { (k, v) -> header(k, v) } }
             .header("Accept", "text/event-stream")
             .apply { lastEventId?.let { header("Last-Event-ID", it) } }
             .build()
@@ -138,14 +197,32 @@ class WmpHttpSseTransport(
     override suspend fun send(message: ByteArray) {
         val request = Request.Builder()
             .url(sendUrl)
-            .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
+            .apply { requestHeaders().forEach { (k, v) -> header(k, v) } }
             .post(message.toRequestBody("application/json".toMediaType()))
             .build()
 
-        val response = client.newCall(request).execute()
-        response.use { resp ->
-            if (!resp.isSuccessful) {
-                throw WmpSessionException("HTTP POST failed: ${resp.code} ${resp.message}")
+        // OkHttp's execute() is a blocking call - hop to the IO dispatcher
+        // so a caller on the main thread (the wallet's connect path is
+        // invoked there) doesn't crash with NetworkOnMainThreadException
+        // (found driving the HTTP+SSE mode against a live engine). The SSE
+        // side already runs in [scope] (Dispatchers.IO).
+        withContext(Dispatchers.IO) {
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    throw WmpSessionException("HTTP POST failed: ${resp.code} ${resp.message}")
+                }
+                // The binding is request/response OVER SSE: the POST's own
+                // HTTP response is empty (204 No Content); the JSON-RPC
+                // reply rides the SSE stream. Some deployments (proxies,
+                // an early-reply engine) answer the POST body directly - so
+                // deliver it to the incoming channel when there is one,
+                // never discarding a reply (found driving against a live
+                // engine: the session create answered, the transport threw
+                // it away, and every request timed out).
+                val body: ByteArray = resp.body?.bytes() ?: ByteArray(0)
+                if (body.isNotEmpty()) {
+                    incomingChannel.trySend(body)
+                }
             }
         }
     }

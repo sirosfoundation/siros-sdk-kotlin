@@ -222,7 +222,7 @@ class WmpSessionTest {
         assertTrue(without, !without.contains("transaction_data"))
     }
 
-    /** A transport whose first send waits on [release], holding the session's send lock meanwhile. */
+    /** A transport whose first send waits on [release], simulating an in-flight POST. */
     private class HoldingTransport(private val release: kotlinx.coroutines.CompletableDeferred<Unit>) : org.siros.sdk.transport.Transport {
         val sent = java.util.concurrent.CopyOnWriteArrayList<String>()
         val holding = kotlinx.coroutines.CompletableDeferred<Unit>()
@@ -240,24 +240,34 @@ class WmpSessionTest {
     }
 
     @Test
-    fun aNotificationQueuedBehindAnotherSendIsCheckedAgainOnceItHoldsTheSendLock() = runBlocking {
+    fun aNotificationIsSkippedWhenNotWantedAndItsCheckIsAtSendTime() = runBlocking {
         val release = kotlinx.coroutines.CompletableDeferred<Unit>()
         val transport = HoldingTransport(release)
         val session = WmpSession(transport)
         val first = launch { session.sendNotification("test.first", null) }
         withTimeout(5_000) { transport.holding.await() }
 
-        val wanted = java.util.concurrent.atomic.AtomicBoolean(true)
-        val queued = async { session.sendNotificationIf("test.second", null) { wanted.get() } }
-        delay(100) // the second send is waiting for the lock the first one holds
+        // The send mutex is gone (the drive-found deadlock): the wanted
+        // check happens once, at send time, and a send does not queue
+        // behind another in-flight send.
+        val wanted = java.util.concurrent.atomic.AtomicBoolean(false)
+        assertEquals("not sent: not wanted at send time", false, withTimeout(5_000) { session.sendNotificationIf("test.skipped", null) { wanted.get() } })
+
+        // A check that passes can be stale by the time the POST lands —
+        // accepted (the receiver re-checks; the profile ignores answers
+        // for ended sub-flows).
+        wanted.set(true)
+        val stale = async { session.sendNotificationIf("test.second", null) { wanted.get() } }
+        delay(100) // the second POST is in flight
         wanted.set(false)
         release.complete(Unit)
         first.join()
+        assertEquals("sent: the check passed at send time; the in-flight flip is the receiver's to re-check", true, withTimeout(5_000) { stale.await() })
 
-        assertEquals("not sent: it was no longer wanted when it got the lock", false, withTimeout(5_000) { queued.await() })
-        assertEquals(1, transport.sent.size)
-        // A send that is still wanted goes out.
+        assertTrue("the skipped notification never went out", transport.sent.none { it.contains("test.skipped") })
+        assertTrue("the stale-checked notification went out", transport.sent.any { it.contains("test.second") })
+        // A send that is wanted goes out too.
         assertEquals(true, session.sendNotificationIf("test.third", null) { true })
-        assertEquals(2, transport.sent.size)
+        assertEquals(3, transport.sent.size)
     }
 }
