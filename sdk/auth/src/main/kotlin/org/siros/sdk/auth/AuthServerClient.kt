@@ -221,9 +221,37 @@ class AuthServerClient(
      * @param tac Token Access Control string (e.g., "rl").
      * @return Parsed [AccessToken] with claims.
      */
-    suspend fun requestAnonymousToken(aud: String, tac: String? = null): AccessToken {
-        val key = "$tenantId::$aud::${tac ?: ""}::anonymous"
+    suspend fun requestAnonymousToken(aud: String, tac: String? = null): AccessToken =
+        requestKindedToken(aud, tac, kindFlag = "anonymous" to true)
 
+    /**
+     * Request the pseudonymous engine token (engine-parity.md §8 G3): a real,
+     * authenticated session behind the mint, a fresh random pseudonym in the
+     * token - rotating per mint, so the traffic it carries attributes to the
+     * tenant, never to a person. The server caps the kind to `tac ⊆ "ri"`
+     * (the engine's two flow gates).
+     *
+     * @param aud Target audience (`wallet-engine`).
+     * @param tac Token Access Control string (defaults server-side to "ri").
+     * @return Parsed [AccessToken] with claims.
+     */
+    suspend fun requestPseudonymousToken(aud: String, tac: String? = null): AccessToken =
+        requestKindedToken(aud, tac, kindFlag = "pseudonymous" to true)
+
+    /**
+     * The AS's `/auth/token` request behind every kind: the pending-request
+     * cache keyed by tenant/audience/tac/kind, the body built over the
+     * common claims plus the kind's own flag (the anonymous and
+     * pseudonymous kinds differ only in it - a `null` kindFlag is the
+     * plain session form [requestAccessToken] posts).
+     */
+    private suspend fun requestKindedToken(
+        aud: String,
+        tac: String?,
+        kindFlag: Pair<String, Boolean>? = null,
+    ): AccessToken {
+        val kind = kindFlag?.first ?: ""
+        val key = "$tenantId::$aud::${tac ?: ""}::$kind"
         return pendingTokenMutex.withLock {
             pendingTokenRequests[key]?.let { cached ->
                 if (!cached.isExpired()) return@withLock cached
@@ -235,7 +263,7 @@ class AuthServerClient(
                     put("aud", aud)
                     tac?.let { put("tac", it) }
                     put("tenant_id", tenantId)
-                    put("anonymous", true)
+                    kindFlag?.let { put(it.first, it.second) }
                 }
                 val response = post("/auth/token", body, defaultHeaders())
                 val tokenResponse = json.decodeFromJsonElement(TokenResponse.serializer(), response)

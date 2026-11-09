@@ -1,6 +1,8 @@
 package org.siros.sdk.auth
 
 import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -225,5 +227,50 @@ class AuthTokensTest {
                 .toByteArray(Charsets.UTF_8)
         )
         return AccessToken("eyJhbGciOiJub25lIn0.$payload.sig")
+    }
+
+    // ── The tenant-bound engine kind (engine-parity.md §8) ─────────────────
+
+    @Test
+    fun tenant_token_is_the_pseudonymous_engine_kind() {
+        // The engine's flow-start TAC gate (its `required_tac`): OID4VP
+        // shares an existing credential (read), OID4VCI receives a new
+        // one (insert) - the kind carries exactly those two.
+        val kind = AuthTokens.MANIFEST.getValue(AuthTokens.TOKEN_WMP_ENGINE)
+        assertEquals("wallet-engine", kind.aud)
+        assertTrue("OID4VP's flow gate needs 'r' in ${kind.tac}", kind.tac.contains("r"))
+        assertTrue("OID4VCI's flow gate needs 'i' in ${kind.tac}", kind.tac.contains("i"))
+        assertTrue("the kind is pseudonymous: the token carries a rotating pseudonym, not the user", kind.pseudonymous)
+        assertFalse("the kind is not the anonymous one: the token carries a subject (the pseudonym)", kind.anonymous)
+    }
+
+    /** A tenant-kind `AuthTokens` over a mock client answering its mint. */
+    private fun tenantTokens(): Pair<AuthTokens, AuthServerClient> {
+        val client = mockk<AuthServerClient>()
+        val tokens = AuthTokens(authServerClient = client, tenantId = "default")
+        coEvery { client.requestPseudonymousToken("wallet-engine", "ri") } returns unexpiredToken()
+        return Pair(tokens, client)
+    }
+
+    @Test
+    fun ensureTenantToken_mints_the_pseudonymous_kind_and_caches_it() = runTest {
+        val (tokens, client) = tenantTokens()
+
+        tokens.ensureTenantToken()
+        tokens.ensureTenantToken()
+
+        coVerify(exactly = 1) { client.requestPseudonymousToken("wallet-engine", "ri") }
+        coVerify(exactly = 0) { client.requestAccessToken(any(), any()) }
+        coVerify(exactly = 0) { client.requestAnonymousToken(any(), any()) }
+    }
+
+    @Test
+    fun forceRefreshTenantToken_mints_the_pseudonymous_kind_afresh() = runTest {
+        val (tokens, client) = tenantTokens()
+
+        tokens.ensureTenantToken()
+        tokens.forceRefreshToken(AuthTokens.TOKEN_WMP_ENGINE)
+
+        coVerify(exactly = 2) { client.requestPseudonymousToken("wallet-engine", "ri") }
     }
 }

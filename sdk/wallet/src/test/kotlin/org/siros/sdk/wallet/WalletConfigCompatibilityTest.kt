@@ -24,11 +24,11 @@ class WalletConfigCompatibilityTest {
     @Test
     fun `the pre-profile constructor and copy JVM descriptors remain available`() {
         val constructors = WalletConfig::class.java.declaredConstructors
-        val current = constructors.single { it.parameterCount == 55 }
+        val current = constructors.single { it.parameterCount == 56 }
         val previous = constructors.single { it.parameterCount == 50 }
         assertTrue(previous.parameterTypes.contentEquals(current.parameterTypes.copyOfRange(0, 50)))
 
-        val currentDefault = constructors.single { it.parameterCount == 58 }
+        val currentDefault = constructors.single { it.parameterCount == 59 }
         val previousDefault = constructors.single { it.parameterCount == 53 }
         assertTrue(previousDefault.parameterTypes.copyOfRange(0, 50).contentEquals(previous.parameterTypes))
         assertTrue(
@@ -36,18 +36,18 @@ class WalletConfigCompatibilityTest {
                 arrayOf(Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, kotlin.jvm.internal.DefaultConstructorMarker::class.java),
             ),
         )
-        assertTrue(currentDefault.parameterTypes.copyOfRange(0, 55).contentEquals(current.parameterTypes))
+        assertTrue(currentDefault.parameterTypes.copyOfRange(0, 56).contentEquals(current.parameterTypes))
 
         val methods = WalletConfig::class.java.declaredMethods
-        val currentCopy = methods.single { it.name == "copy" && it.parameterCount == 55 }
+        val currentCopy = methods.single { it.name == "copy" && it.parameterCount == 56 }
         val previousCopy = methods.single { it.name == "copy" && it.parameterCount == 50 }
         assertTrue(previousCopy.parameterTypes.contentEquals(previous.parameterTypes))
         assertTrue(currentCopy.parameterTypes.contentEquals(current.parameterTypes))
 
-        val currentCopyDefault = methods.single { it.name == "copy\$default" && it.parameterCount == 59 }
+        val currentCopyDefault = methods.single { it.name == "copy\$default" && it.parameterCount == 60 }
         val previousCopyDefault = methods.single { it.name == "copy\$default" && it.parameterCount == 54 }
         assertTrue(previousCopyDefault.parameterTypes.copyOfRange(1, 51).contentEquals(previousCopy.parameterTypes))
-        assertTrue(currentCopyDefault.parameterTypes.copyOfRange(1, 56).contentEquals(currentCopy.parameterTypes))
+        assertTrue(currentCopyDefault.parameterTypes.copyOfRange(1, 57).contentEquals(currentCopy.parameterTypes))
     }
 
     @Test

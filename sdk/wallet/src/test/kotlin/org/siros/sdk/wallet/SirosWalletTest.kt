@@ -59,6 +59,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.siros.sdk.auth.AccessToken
 import org.siros.sdk.auth.AuthServerClient
 import org.siros.sdk.auth.AuthenticateOptions
 import org.siros.sdk.auth.AuthenticateResult
@@ -19585,6 +19586,105 @@ class SirosWalletTest {
         } finally {
             SirosWallet.createWmpPeerFromTransport = previous
         }
+    }
+
+    /**
+     * A minimal parseable access token whose claims mark which kind minted it.
+     * A fixed far-future `exp`: the raw string is deterministic, so a stub
+     * minted in the setup and a reference minted in the assertion match.
+     */
+    private fun mintedAccessToken(kind: String): AccessToken {
+        val payload = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+            """{"exp":2000000000,"sub":"minted-via-$kind","aud":"wallet-engine","tenant_id":"default","tac":"ri"}"""
+                .toByteArray(Charsets.UTF_8)
+        )
+        return AccessToken("eyJhbGciOiJub25lIn0.$payload.sig")
+    }
+
+    /**
+     * Connects a wallet in HTTP_SSE mode with [wmpTenantTokens] and answers the
+     * transport the wallet built - its `tokenProvider` is the mint under test.
+     */
+    private suspend fun connectedHttpSseTransport(wmpTenantTokens: Boolean): Pair<org.siros.sdk.transport.Transport, AuthTokens> {
+        var captured: org.siros.sdk.transport.Transport? = null
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        every { peer.use(any()) } just runs
+        coEvery { peer.connect(any(), any(), any()) } just runs
+        val previous = SirosWallet.createWmpPeerFromTransport
+        SirosWallet.createWmpPeerFromTransport = { transport ->
+            captured = transport
+            peer
+        }
+        val authTokens = mockk<AuthTokens>()
+        coEvery { authTokens.ensureTenantToken() } returns mintedAccessToken("tenant-kind")
+        coEvery { authTokens.ensureBackendToken() } returns mintedAccessToken("backend-kind")
+        try {
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "authTokens" to authTokens,
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "config" to WalletConfig(
+                    backendUrl = "https://wallet.example.com",
+                    useWmpProtocol = true,
+                    wmpEngineMode = org.siros.sdk.wallet.WmpEngineMode.HTTP_SSE,
+                    wmpSendUrl = "http://engine/wmp",
+                    wmpSseUrl = "http://engine/wmp/events",
+                    wmpTenantTokens = wmpTenantTokens,
+                ),
+            )
+            val connectViaWmp = wallet::class.declaredMemberFunctions.first { it.name == "connectViaWmp" }
+            connectViaWmp.isAccessible = true
+            runBlocking { connectViaWmp.callSuspend(wallet, "ignored-connect-token") }
+            return Pair(captured ?: throw AssertionError("the transport was not captured"), authTokens)
+        } finally {
+            SirosWallet.createWmpPeerFromTransport = previous
+        }
+    }
+
+    /** The transport's private `tokenProvider` - the mint under test. */
+    private suspend fun mintsOf(transport: org.siros.sdk.transport.Transport): String? {
+        val providerField = org.siros.sdk.transport.wmp.WmpHttpSseTransport::class.java.getDeclaredField("tokenProvider")
+        providerField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val provider = providerField.get(transport) as suspend () -> String?
+        return provider()
+    }
+
+    /**
+     * The kind follows the deployment's engine (engine-parity.md §8): a
+     * tenant-mode engine (`wmpTenantTokens`) takes the AS's pseudonymous
+     * kind - the wallet's traffic attributes to the tenant, never to a
+     * person - and the default keeps the backend token (the user's own
+     * subject), the historic shape. The flag must match the deployment:
+     * a user-mode engine with pseudonym tokens strands every session at
+     * the token's mint (the subject rotates per mint).
+     */
+    @Test
+    fun httpSseMode_mintsTheTokenOfItsDeploymentMode() = runTest(dispatcher) {
+        // A tenant-bound engine: the pseudonymous kind.
+        val (tenantTransport, tenantAuthTokens) = connectedHttpSseTransport(wmpTenantTokens = true)
+        assertEquals(
+            "the tenant-bound deployment mints the pseudonymous kind",
+            mintedAccessToken("tenant-kind").raw,
+            mintsOf(tenantTransport),
+        )
+        coVerify(exactly = 1) { tenantAuthTokens.ensureTenantToken() }
+        coVerify(exactly = 0) { tenantAuthTokens.ensureBackendToken() }
+
+        // The default: the backend token (the user's own subject).
+        val (userTransport, userAuthTokens) = connectedHttpSseTransport(wmpTenantTokens = false)
+        assertEquals(
+            "the user-bound deployment mints the backend token",
+            mintedAccessToken("backend-kind").raw,
+            mintsOf(userTransport),
+        )
+        coVerify(exactly = 0) { userAuthTokens.ensureTenantToken() }
+        coVerify(exactly = 1) { userAuthTokens.ensureBackendToken() }
     }
 
     @Test
