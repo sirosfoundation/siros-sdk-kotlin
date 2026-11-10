@@ -139,10 +139,21 @@ private fun rememberStartOfToday(): Long {
     return now
 }
 
-/** How long after [now] the next local day starts in [zone]; at least one millisecond. */
+/**
+ * How long after [now] the next local day starts in [zone]; at least one
+ * millisecond. By the calendar, so a day shortened or lengthened by a
+ * daylight-saving change is measured as it is.
+ */
 internal fun millisUntilNextDay(now: Long, zone: java.util.TimeZone = java.util.TimeZone.getDefault()): Long {
-    val local = now + zone.getOffset(now)
-    return (86_400_000L - Math.floorMod(local, 86_400_000L)).coerceAtLeast(1L)
+    val next = java.util.Calendar.getInstance(zone).apply {
+        timeInMillis = now
+        add(java.util.Calendar.DAY_OF_MONTH, 1)
+        set(java.util.Calendar.HOUR_OF_DAY, 0)
+        set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+    }
+    return (next.timeInMillis - now).coerceAtLeast(1L)
 }
 
 /** The day heading a record at [timestamp] falls under, as seen at [now]: [today], [yesterday], or the date. */
@@ -154,7 +165,7 @@ internal fun historyDayLabel(
     zone: java.util.TimeZone = java.util.TimeZone.getDefault(),
     locale: Locale = Locale.getDefault(),
 ): String {
-    fun dayOf(millis: Long): Long = (millis + zone.getOffset(millis)) / 86_400_000L
+    fun dayOf(millis: Long): Long = Math.floorDiv(millis + zone.getOffset(millis), 86_400_000L)
     return when (dayOf(now) - dayOf(timestamp)) {
         0L -> today
         1L -> yesterday

@@ -8,7 +8,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.compose.material3.MaterialTheme
@@ -204,12 +203,11 @@ fun StatusBarIcons(dark: Boolean, restoreTo: Boolean? = null) {
         val window = (context as? Activity)?.window ?: return
         WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = value
     }
-    if (restoreTo == null) {
-        SideEffect { apply(dark) }
-    } else {
-        DisposableEffect(view, dark, restoreTo) {
-            apply(dark)
-            onDispose { apply(restoreTo) }
-        }
+    // A keyed effect at every level, so that when the theme changes under a
+    // screen that overrides it, the theme's effect runs first and the
+    // screen's, further down the composition, has the last word.
+    DisposableEffect(view, dark, restoreTo) {
+        apply(dark)
+        onDispose { if (restoreTo != null) apply(restoreTo) }
     }
 }

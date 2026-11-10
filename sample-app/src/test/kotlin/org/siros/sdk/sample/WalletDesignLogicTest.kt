@@ -167,4 +167,24 @@ class WalletDesignLogicTest {
         assertEquals(ProximityStyle.Qr, effectiveProximityStyle(ProximityStyle.Qr, nfcOn = true))
         assertEquals(ProximityStyle.Qr, effectiveProximityStyle(ProximityStyle.Qr, nfcOn = false))
     }
+
+    @Test
+    fun theNextDayIsMeasuredByTheCalendarAcrossDaylightSavingChanges() {
+        val zone = TimeZone.getTimeZone("Europe/Stockholm")
+        val hour = 3_600_000L
+        // 2026-03-29 00:00 in Stockholm (2026-03-28 23:00 UTC): clocks go forward that night, a 23-hour day.
+        val springMidnight = 1_774_738_800_000L
+        assertEquals(23 * hour, millisUntilNextDay(springMidnight, zone))
+        // 2026-10-25 00:00 in Stockholm (2026-10-24 22:00 UTC): clocks go back, a 25-hour day.
+        val autumnMidnight = 1_792_879_200_000L
+        assertEquals(25 * hour, millisUntilNextDay(autumnMidnight, zone))
+    }
+
+    @Test
+    fun aShortViewportScrollsThePageAndATallOneDoesNot() {
+        // A phone in landscape leaves some 250dp between header and bottom bar; in portrait some 700dp.
+        assertTrue(isCompactHeight(250f))
+        assertFalse(isCompactHeight(480f))
+        assertFalse(isCompactHeight(700f))
+    }
 }

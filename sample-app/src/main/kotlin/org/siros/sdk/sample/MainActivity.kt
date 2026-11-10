@@ -1513,10 +1513,16 @@ fun CredentialsTab(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        // Where the screen is too short for the controls and a usable deck
+        // (a phone in landscape), the page scrolls and the deck gets the
+        // height of the viewport; otherwise the deck fills what is left.
+        val viewportHeight = maxHeight
+        val compact = isCompactHeight(viewportHeight.value)
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .then(if (compact) Modifier.verticalScroll(rememberScrollState()) else Modifier)
                 .padding(horizontal = ScreenMargin)
                 .padding(top = 12.dp),
         ) {
@@ -1575,7 +1581,11 @@ fun CredentialsTab(
                     onCredentialLongClick = { actionMenuFor = it },
                     onRenewCredential = onRenewCredential,
                     onDeleteCredential = { pendingDeleteFor = it },
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = if (compact) {
+                        Modifier.fillMaxWidth().height(viewportHeight).testTag(MANAGE_DECK_TAG)
+                    } else {
+                        Modifier.fillMaxSize().testTag(MANAGE_DECK_TAG)
+                    },
                     credentialStatuses = credentialStatuses,
                 )
             }
@@ -1592,6 +1602,14 @@ fun CredentialsTab(
     }
 }
 
+/**
+ * Whether a Manage credentials viewport of [heightDp] is too short to hold
+ * the title, search field and filters (about 230dp) and still leave the deck
+ * the height of one card.
+ */
+internal fun isCompactHeight(heightDp: Float): Boolean = heightDp < 480f
+
+const val MANAGE_DECK_TAG = "manage_deck"
 const val MANAGE_SEARCH_TAG = "manage_search"
 const val MANAGE_FILTER_ALL_TAG = "manage_filter_all"
 const val MANAGE_FILTER_ATTENTION_TAG = "manage_filter_attention"
