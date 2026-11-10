@@ -10,6 +10,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.outlined.Contactless
 import androidx.compose.ui.graphics.Color
 import android.content.pm.PackageManager
+import android.content.Intent
+import android.provider.Settings
+import android.nfc.NfcAdapter
+import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -330,7 +335,8 @@ fun ProximityEngagementScreen(
             ) {
                 // One engagement, two faces: the NFC handover and the QR code
                 // are both live whichever of them this screen presents.
-                when (style) {
+                val nfc = rememberNfcState()
+                when (effectiveProximityStyle(style, nfc == NfcState.On)) {
                     ProximityStyle.Qr -> BrandPanel(caption = stringResource(R.string.share_show_qr_caption)) {
                         Image(
                             bitmap = qrBitmap.asImageBitmap(),
@@ -349,6 +355,29 @@ fun ProximityEngagementScreen(
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.size(72.dp),
                         )
+                    }
+                }
+                if (style == ProximityStyle.Nfc && nfc != NfcState.On) {
+                    // Tap was asked for and cannot happen: say so under the
+                    // QR code shown in its place, with the way to turn NFC on
+                    // where the device has it.
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(
+                            if (nfc == NfcState.Off) R.string.share_nfc_off else R.string.share_nfc_unavailable,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().testTag(SHARE_NFC_FALLBACK_TAG),
+                    )
+                    if (nfc == NfcState.Off) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                runCatching { context.startActivity(Intent(Settings.ACTION_NFC_SETTINGS)) }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(stringResource(R.string.share_nfc_turn_on)) }
                     }
                 }
                 if (blePermissionsDenied) {
@@ -596,3 +625,33 @@ private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: susp
         },
     )
 }
+
+const val SHARE_NFC_FALLBACK_TAG = "share_nfc_fallback"
+
+/** Whether this device can do the NFC handover right now. */
+internal enum class NfcState { On, Off, Unavailable }
+
+/** The device's NFC state, re-read each time the screen resumes (the user may come back from Settings). */
+@Composable
+private fun rememberNfcState(): NfcState {
+    val context = LocalContext.current
+    fun read(): NfcState {
+        val hce = context.packageManager.hasSystemFeature(PackageManager.FEATURE_NFC_HOST_CARD_EMULATION)
+        val adapter = if (hce) NfcAdapter.getDefaultAdapter(context) else null
+        return when {
+            adapter == null -> NfcState.Unavailable
+            adapter.isEnabled -> NfcState.On
+            else -> NfcState.Off
+        }
+    }
+    var state by remember { mutableStateOf(read()) }
+    LifecycleResumeEffect(Unit) {
+        state = read()
+        onPauseOrDispose { }
+    }
+    return state
+}
+
+/** What the engagement screen presents: the [requested] face, or the QR code when a tap cannot happen. */
+internal fun effectiveProximityStyle(requested: ProximityStyle, nfcOn: Boolean): ProximityStyle =
+    if (requested == ProximityStyle.Nfc && !nfcOn) ProximityStyle.Qr else requested

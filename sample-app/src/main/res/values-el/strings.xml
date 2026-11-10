@@ -372,6 +372,9 @@
     <string name="share_show_qr_caption">Εμφανίστε τον κωδικό QR σας για σάρωση από τη συσκευή.</string>
     <string name="share_show_qr_description">Κωδικός QR για σάρωση από την άλλη συσκευή</string>
     <string name="share_tap_caption">Ακουμπήστε το τηλέφωνό σας στη συσκευή.</string>
+    <string name="share_nfc_off">Το NFC είναι απενεργοποιημένο, επομένως η κοινοποίηση με άγγιγμα δεν είναι δυνατή. Ενεργοποιήστε το ή δείξτε αυτόν τον κωδικό QR στη συσκευή.</string>
+    <string name="share_nfc_unavailable">Αυτή η συσκευή δεν μπορεί να κοινοποιήσει με άγγιγμα. Δείξτε αυτόν τον κωδικό QR στη συσκευή.</string>
+    <string name="share_nfc_turn_on">Ενεργοποίηση NFC</string>
     <string name="share_bluetooth_denied">Απαιτείται άδεια Bluetooth για την αποστολή του πιστοποιητικού μετά τη σύνδεση της συσκευής.</string>
     <string name="about_text">Το SIROS ID Wallet φυλάσσει τα ψηφιακά πιστοποιητικά σας στη συσκευή σας και σας επιτρέπει να τα κοινοποιείτε διαδικτυακά και διά ζώσης.</string>
     <string name="about_version">Έκδοση</string>

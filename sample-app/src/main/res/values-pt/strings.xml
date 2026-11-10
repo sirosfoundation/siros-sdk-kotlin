@@ -372,6 +372,9 @@
     <string name="share_show_qr_caption">Mostre o seu código QR para o dispositivo ler.</string>
     <string name="share_show_qr_description">Código QR para o outro dispositivo ler</string>
     <string name="share_tap_caption">Encoste o telemóvel ao dispositivo.</string>
+    <string name="share_nfc_off">O NFC está desligado, por isso não é possível partilhar por aproximação. Ligue o NFC ou mostre este código QR ao dispositivo.</string>
+    <string name="share_nfc_unavailable">Este dispositivo não consegue partilhar por aproximação. Mostre este código QR ao dispositivo.</string>
+    <string name="share_nfc_turn_on">Ligar o NFC</string>
     <string name="share_bluetooth_denied">É necessária a permissão de Bluetooth para enviar a credencial depois de o dispositivo se ligar.</string>
     <string name="about_text">A SIROS ID Wallet guarda as suas credenciais digitais no seu dispositivo e permite partilhá-las online e presencialmente.</string>
     <string name="about_version">Versão</string>

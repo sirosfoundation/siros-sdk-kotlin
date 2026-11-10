@@ -32,6 +32,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,12 +63,13 @@ fun PresentationHistoryScreen(
     var query by rememberSaveable { mutableStateOf("") }
     val today = stringResource(R.string.history_today)
     val yesterday = stringResource(R.string.history_yesterday)
-    val groups = remember(history, filterCredentialId, query, today, yesterday) {
+    val now = rememberStartOfToday()
+    val groups = remember(history, filterCredentialId, query, today, yesterday, now) {
         history
             .filter { filterCredentialId == null || it.credentialIds.contains(filterCredentialId) }
             .filter { matchesHistoryQuery(it, query) }
             .sortedByDescending { it.timestamp }
-            .groupBy { historyDayLabel(it.timestamp, System.currentTimeMillis(), today, yesterday) }
+            .groupBy { historyDayLabel(it.timestamp, now, today, yesterday) }
             .toList()
     }
     Column(modifier = modifier.fillMaxSize().padding(horizontal = ScreenMargin).padding(top = 24.dp)) {
@@ -114,6 +118,31 @@ internal fun matchesHistoryQuery(record: PresentationRecord, query: String): Boo
     return (record.verifierName?.contains(q, ignoreCase = true) == true) ||
         record.credentialNames.any { it.contains(q, ignoreCase = true) } ||
         record.requestedClaims.any { it.contains(q, ignoreCase = true) }
+}
+
+/**
+ * A moment in the current local day that changes when the day does: re-read
+ * when the screen resumes and at midnight, so "Today" and "Yesterday" stay
+ * true on a screen left open.
+ */
+@Composable
+private fun rememberStartOfToday(): Long {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LifecycleResumeEffect(Unit) {
+        now = System.currentTimeMillis()
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(now) {
+        delay(millisUntilNextDay(now))
+        now = System.currentTimeMillis()
+    }
+    return now
+}
+
+/** How long after [now] the next local day starts in [zone]; at least one millisecond. */
+internal fun millisUntilNextDay(now: Long, zone: java.util.TimeZone = java.util.TimeZone.getDefault()): Long {
+    val local = now + zone.getOffset(now)
+    return (86_400_000L - Math.floorMod(local, 86_400_000L)).coerceAtLeast(1L)
 }
 
 /** The day heading a record at [timestamp] falls under, as seen at [now]: [today], [yesterday], or the date. */

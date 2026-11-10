@@ -394,6 +394,9 @@
     <string name="share_show_qr_caption">Show your QR code for the device to scan.</string>
     <string name="share_show_qr_description">QR code for the other device to scan</string>
     <string name="share_tap_caption">Tap your phone against the device.</string>
+    <string name="share_nfc_off">NFC is turned off, so tapping is not possible. Turn it on, or show this QR code to the device instead.</string>
+    <string name="share_nfc_unavailable">This device cannot share by tapping. Show this QR code to the device instead.</string>
+    <string name="share_nfc_turn_on">Turn on NFC</string>
     <string name="share_bluetooth_denied">Bluetooth permission is needed to send the credential once the device has connected.</string>
     <string name="about_text">SIROS ID Wallet keeps your digital credentials on your device and lets you share them online and in person.</string>
     <string name="about_version">Version</string>

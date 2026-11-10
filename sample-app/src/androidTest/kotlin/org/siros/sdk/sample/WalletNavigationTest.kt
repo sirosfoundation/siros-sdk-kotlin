@@ -2,6 +2,8 @@
 package org.siros.sdk.sample
 
 import androidx.compose.material3.Text
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -46,6 +48,9 @@ class WalletNavigationTest {
 
         composeRule.onNodeWithText(string(R.string.header_wallet_of, "Elisa")).assertExists()
         composeRule.onNodeWithText("content").assertExists()
+        // The destination in use is announced as selected, not only tinted.
+        composeRule.onNodeWithTag(NAV_HOME_TAG).assertIsSelected()
+        composeRule.onNodeWithTag(NAV_MENU_TAG).assertIsNotSelected()
         composeRule.onNodeWithTag(NAV_HOME_TAG).performClick()
         composeRule.onNodeWithTag(NAV_SCAN_QR_TAG).performClick()
         composeRule.onNodeWithTag(NAV_MENU_TAG).performClick()

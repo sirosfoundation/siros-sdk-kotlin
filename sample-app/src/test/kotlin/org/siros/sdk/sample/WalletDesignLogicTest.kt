@@ -144,4 +144,27 @@ class WalletDesignLogicTest {
         assertEquals("Yesterday", label(now - day))
         assertEquals("1 June 2026", label(now - 3 * day))
     }
+
+    @Test
+    fun theNextDayStartsAtLocalMidnight() {
+        val zone = TimeZone.getTimeZone("Europe/Stockholm")
+        // 2026-06-04 12:00 UTC = 14:00 in Stockholm: ten hours to midnight.
+        val now = 1_780_574_400_000L
+        assertEquals(10 * 3_600_000L, millisUntilNextDay(now, zone))
+        // One millisecond before midnight, then midnight itself: a whole day.
+        assertEquals(1L, millisUntilNextDay(now + 10 * 3_600_000L - 1, zone))
+        assertEquals(86_400_000L, millisUntilNextDay(now + 10 * 3_600_000L, zone))
+        // A record from before midnight moves from Today to Yesterday once the day turns.
+        val after = now + millisUntilNextDay(now, zone)
+        assertEquals("Today", historyDayLabel(now, now, "Today", "Yesterday", zone, Locale.ENGLISH))
+        assertEquals("Yesterday", historyDayLabel(now, after, "Today", "Yesterday", zone, Locale.ENGLISH))
+    }
+
+    @Test
+    fun tapFallsBackToTheQrCodeWhenNfcCannotBeUsed() {
+        assertEquals(ProximityStyle.Nfc, effectiveProximityStyle(ProximityStyle.Nfc, nfcOn = true))
+        assertEquals(ProximityStyle.Qr, effectiveProximityStyle(ProximityStyle.Nfc, nfcOn = false))
+        assertEquals(ProximityStyle.Qr, effectiveProximityStyle(ProximityStyle.Qr, nfcOn = true))
+        assertEquals(ProximityStyle.Qr, effectiveProximityStyle(ProximityStyle.Qr, nfcOn = false))
+    }
 }

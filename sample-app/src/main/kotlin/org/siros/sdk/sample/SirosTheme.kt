@@ -2,6 +2,11 @@ package org.siros.sdk.sample
 
 import android.app.Activity
 import android.content.ContextWrapper
+import android.content.res.Configuration
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
@@ -122,15 +127,19 @@ internal val SirosTypography = Typography().run {
 
 /**
  * Colours of the wallet design ("Mobile Landing & Navigation") that the
- * wallet's own screens use and credential cards do not: secondary text
- * #6E7582, the alternate surface #F8F9F9 and the attention amber #F9A917.
+ * wallet's own screens use and credential cards do not: secondary text,
+ * the alternate surface #F8F9F9 and the attention amber #F9A917.
+ *
+ * Secondary text is #69707D, a step darker than the design's #6E7582, which
+ * reaches only 4.4:1 on the alternate surface; this reads at 4.7:1 there and
+ * 5.0:1 on white.
  */
 object SirosDesign {
     private val dark: Boolean
         @Composable get() = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
     val secondaryText: Color
-        @Composable get() = if (dark) Color(0xFFB3BBC6) else Color(0xFF6E7582)
+        @Composable get() = if (dark) Color(0xFFB3BBC6) else Color(0xFF69707D)
 
     val altSurface: Color
         @Composable get() = if (dark) Color(0xFF1C2433) else Color(0xFFF8F9F9)
@@ -158,25 +167,49 @@ fun SirosTheme(
     // The status bar's icons follow the theme in use, which is the user's
     // choice (see ThemeSettings) and not necessarily the device's.
     StatusBarIcons(dark = !darkTheme)
-    MaterialTheme(
-        colorScheme = if (darkTheme) SirosDarkColorScheme else SirosLightColorScheme,
-        typography = SirosTypography,
-        content = content,
-    )
+    // Everything inside sees the theme in use as the device's: credential
+    // cards pick their light or dark registry design by isSystemInDarkTheme(),
+    // which reads this configuration.
+    val base = LocalConfiguration.current
+    val configuration = remember(base, darkTheme) {
+        Configuration(base).apply { uiMode = uiModeFor(uiMode, darkTheme) }
+    }
+    CompositionLocalProvider(LocalConfiguration provides configuration) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) SirosDarkColorScheme else SirosLightColorScheme,
+            typography = SirosTypography,
+            content = content,
+        )
+    }
 }
+
+/** [uiMode] with its night bits set to [dark], everything else as it was. */
+internal fun uiModeFor(uiMode: Int, dark: Boolean): Int =
+    (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+        (if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO)
 
 /**
  * Draws the status bar's icons [dark] (for a light surface behind them) or
- * light. Does nothing where there is no window to address (previews, tests).
+ * light. A screen that overrides the theme's choice passes [restoreTo], the
+ * appearance to put back when it leaves the composition. Does nothing where
+ * there is no window to address (previews, tests).
  */
 @Composable
-fun StatusBarIcons(dark: Boolean) {
+fun StatusBarIcons(dark: Boolean, restoreTo: Boolean? = null) {
     val view = LocalView.current
     if (view.isInEditMode) return
-    SideEffect {
+    fun apply(value: Boolean) {
         var context = view.context
         while (context is ContextWrapper && context !is Activity) context = context.baseContext
-        val window = (context as? Activity)?.window ?: return@SideEffect
-        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = dark
+        val window = (context as? Activity)?.window ?: return
+        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = value
+    }
+    if (restoreTo == null) {
+        SideEffect { apply(dark) }
+    } else {
+        DisposableEffect(view, dark, restoreTo) {
+            apply(dark)
+            onDispose { apply(restoreTo) }
+        }
     }
 }

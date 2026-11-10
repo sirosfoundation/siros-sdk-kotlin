@@ -1609,7 +1609,7 @@ private fun FilterPill(label: String, selected: Boolean, onClick: () -> Unit, mo
         modifier = modifier
             .clip(CircleShape)
             .then(if (selected) Modifier.background(MaterialTheme.colorScheme.primaryContainer) else Modifier)
-            .clickable(role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick)
+            .selectable(selected = selected, role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 8.dp),
     )
 }

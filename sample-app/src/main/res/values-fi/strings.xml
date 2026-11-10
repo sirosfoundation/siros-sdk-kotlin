@@ -372,6 +372,9 @@
     <string name="share_show_qr_caption">Näytä QR-koodisi laitteen skannattavaksi.</string>
     <string name="share_show_qr_description">QR-koodi toisen laitteen skannattavaksi</string>
     <string name="share_tap_caption">Kosketa puhelimella laitetta.</string>
+    <string name="share_nfc_off">NFC on pois päältä, joten koskettamalla jakaminen ei onnistu. Ota NFC käyttöön tai näytä sen sijaan tämä QR-koodi laitteelle.</string>
+    <string name="share_nfc_unavailable">Tämä laite ei voi jakaa koskettamalla. Näytä sen sijaan tämä QR-koodi laitteelle.</string>
+    <string name="share_nfc_turn_on">Ota NFC käyttöön</string>
     <string name="share_bluetooth_denied">Bluetooth-lupa tarvitaan todistuksen lähettämiseen, kun laite on yhdistänyt.</string>
     <string name="about_text">SIROS ID Wallet säilyttää digitaaliset todistuksesi laitteellasi, ja voit jakaa niitä verkossa ja paikan päällä.</string>
     <string name="about_version">Versio</string>

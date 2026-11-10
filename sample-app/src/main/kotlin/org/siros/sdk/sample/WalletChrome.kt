@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -89,7 +90,7 @@ fun WalletChrome(
     // Over the brand-blue header the status bar's icons are light in either
     // theme; elsewhere they follow the page (see SirosTheme).
     val pageIsLight = MaterialTheme.colorScheme.background.luminance() > 0.5f
-    StatusBarIcons(dark = pageIsLight && !brandHeader)
+    StatusBarIcons(dark = pageIsLight && !brandHeader, restoreTo = pageIsLight)
     // The frame paints its own background, so it also sets the colour text
     // on it defaults to - in either theme, wherever the frame is hosted.
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
@@ -214,7 +215,7 @@ private fun BottomBarItem(
         modifier = Modifier
             .width(96.dp)
             .clip(RoundedCornerShape(CardCorner))
-            .clickable(role = Role.Tab, onClick = onClick)
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
             .testTag(tag)
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

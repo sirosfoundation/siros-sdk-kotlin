@@ -31,4 +31,14 @@ class ThemeModeTest {
         assertEquals(ThemeMode.SYSTEM, ThemeMode.fromStored("dark"))
         assertEquals(ThemeMode.SYSTEM, ThemeMode.fromStored("SEPIA"))
     }
+
+    @Test
+    fun theThemeInUseReplacesOnlyTheNightBitsOfTheConfiguration() {
+        // UI_MODE_TYPE_NORMAL (0x01) with night no (0x10) / night yes (0x20).
+        assertEquals(0x21, uiModeFor(0x11, dark = true))
+        assertEquals(0x11, uiModeFor(0x21, dark = false))
+        assertEquals(0x21, uiModeFor(0x21, dark = true))
+        // Night undefined (0x00) is resolved too.
+        assertEquals(0x11, uiModeFor(0x01, dark = false))
+    }
 }
