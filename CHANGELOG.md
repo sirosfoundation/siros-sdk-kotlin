@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-10
+
+The sample app takes on the wallet design (landing, navigation, light and dark appearance); the SDK changes since 0.21.4, including the breaking ones marked below, ship with it.
+
 ### Changed
 - **Sample app: the wallet design ("Mobile Landing & Navigation") is the app's look and screen organisation.** Every signed-in
   screen sits in one frame: the wallet header (mark, product name, the owner's wallet) and a Home / Scan QR / Menu bar; the
