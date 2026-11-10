@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import okhttp3.OkHttpClient
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -175,6 +176,25 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _wmpSseUrl: MutableStateFlow<String>
     val wmpSseUrl: StateFlow<String> get() = _wmpSseUrl
 
+    /** See [org.siros.sdk.wallet.WmpEngineProvider.Local] - the in-process engine core. */
+    private val _engineLocalEnabled: MutableStateFlow<Boolean>
+    val engineLocalEnabled: StateFlow<Boolean> get() = _engineLocalEnabled
+
+    /** See [org.siros.sdk.wallet.WmpEngineProvider.RemoteHttpSse] - the HTTP+SSE binding. */
+    private val _engineRemoteEnabled: MutableStateFlow<Boolean>
+    val engineRemoteEnabled: StateFlow<Boolean> get() = _engineRemoteEnabled
+
+    /**
+     * The remote engine's bearer KIND: tenant-bound (the AS's pseudonymous
+     * engine token) or the user's own backend token. Must match the
+     * deployment's `ENGINE_PRINCIPAL_MODE`: on by default - every deployed
+     * engine this sample targets (sirosid-dev, GDC) runs tenant mode, where
+     * a user token keeps the flows working but attributes the traffic to the
+     * person instead of the tenant.
+     */
+    private val _engineTenantTokens: MutableStateFlow<Boolean>
+    val engineTenantTokens: StateFlow<Boolean> get() = _engineTenantTokens
+
     private val _showCredentialDetails: MutableStateFlow<Boolean>
     val showCredentialDetails: StateFlow<Boolean> get() = _showCredentialDetails
 
@@ -271,6 +291,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         )
         _wmpSendUrl = MutableStateFlow(prefs.getString("wmp_send_url", null) ?: "")
         _wmpSseUrl = MutableStateFlow(prefs.getString("wmp_sse_url", null) ?: "")
+        // The prioritized provider list (user-configured): local first (the
+        // in-process core), the remote binding second - both on by default,
+        // so a dead engine fails over to the other. An empty enabled set
+        // falls back to the legacy single-mode shape (the wmpEngineMode
+        // picker in Settings).
+        _engineLocalEnabled = MutableStateFlow(prefs.getBoolean("engine_local_enabled", true))
+        _engineRemoteEnabled = MutableStateFlow(prefs.getBoolean("engine_remote_enabled", true))
+        // On by default: every deployed engine this sample targets (the dev
+        // stack, GDC) runs tenant mode, where the engine bearer is the AS's
+        // pseudonymous kind - the user token keeps the flows working but
+        // attributes the traffic to the person instead of the tenant.
+        _engineTenantTokens = MutableStateFlow(prefs.getBoolean("engine_tenant_tokens", true))
         // Default follows build type (on for debug, off for release) - a
         // manual override either way is persisted across restarts, so e.g. a
         // tester can still flip it on in a release build if needed.
@@ -432,6 +464,30 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             .putString("wmp_engine_mode", mode.name)
             .putString("wmp_send_url", sendUrl)
             .putString("wmp_sse_url", sseUrl)
+            .apply()
+    }
+
+    fun updateEngineLocalEnabled(enabled: Boolean) {
+        _engineLocalEnabled.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("engine_local_enabled", enabled)
+            .apply()
+    }
+
+    fun updateEngineRemoteEnabled(enabled: Boolean) {
+        _engineRemoteEnabled.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("engine_remote_enabled", enabled)
+            .apply()
+    }
+
+    fun updateEngineTenantTokens(enabled: Boolean) {
+        _engineTenantTokens.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("engine_tenant_tokens", enabled)
             .apply()
     }
 
@@ -2908,6 +2964,51 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             wmpEngineMode = _wmpEngineMode.value,
             wmpSendUrl = _wmpSendUrl.value.trim().ifEmpty { null },
             wmpSseUrl = _wmpSseUrl.value.trim().ifEmpty { null },
+            // The single-mode path's (empty provider list) bearer kind - the
+            // same toggle the remote provider carries, so the two shapes
+            // agree on the deployment's ENGINE_PRINCIPAL_MODE either way.
+            wmpTenantTokens = _engineTenantTokens.value,
+            // The PRIORITIZED provider list (user-configured): local first
+            // (the in-process core), the remote binding second - each
+            // connected in order with the config's retries before failing
+            // over. An empty enabled set keeps the legacy single-mode
+            // shape (wmpEngineMode above, the picker in Settings). The
+            // local provider's trust goes through the backend proxy's
+            // TAC-gated PDP routes with the wallet's own backend bearer.
+            engineProviders = buildList {
+                if (_engineLocalEnabled.value) {
+                    add(
+                        org.siros.sdk.wallet.WmpEngineProvider.Local { ctx ->
+                            org.siros.sdk.transport.wmp.WmpUniFFITransport(
+                                http = OkHttpEngineHttp(),
+                                host = org.siros.sdk.transport.wmp.UniFfiEngineAskHost(ctx.asks),
+                                pdp = ProxyPdp(
+                                    client = OkHttpClient(),
+                                    baseUrl = _backendUrl.value,
+                                    bearerProvider = ctx.bearerProvider,
+                                ),
+                            )
+                        },
+                    )
+                }
+                val sendUrl = _wmpSendUrl.value.trim()
+                val sseUrl = _wmpSseUrl.value.trim()
+                if (_engineRemoteEnabled.value && sendUrl.isNotEmpty() && sseUrl.isNotEmpty()) {
+                    add(
+                        org.siros.sdk.wallet.WmpEngineProvider.RemoteHttpSse(
+                            sendUrl = sendUrl,
+                            sseUrl = sseUrl,
+                            // The bearer KIND must match the deployment's
+                            // ENGINE_PRINCIPAL_MODE: the tenant kind (the AS's
+                            // pseudonymous engine token) for the tenant-mode
+                            // engines this sample targets, the user's own
+                            // backend token for a user-mode engine.
+                            tenantTokens = _engineTenantTokens.value,
+                        ),
+                    )
+                }
+            },
+            engineConnectRetries = 2,
             wmpTransport = if (_wmpEngineMode.value == org.siros.sdk.wallet.WmpEngineMode.LOCAL) {
                 { asks ->
                     // The local engine over the app's HTTP port, the WALLET's
