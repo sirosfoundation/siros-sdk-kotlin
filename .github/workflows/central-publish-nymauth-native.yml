@@ -1,0 +1,71 @@
+name: Publish nymauth-native to Maven Central
+
+# org.siros:nymauth-native is built from native/nymauth-native in this
+# repository. The SDK's credentials module depends on it, and release.yml
+# refuses to publish the SDK until this artifact's AAR and POM are on Maven
+# Central (docs/NATIVE_DEV.md). This workflow is that publication: it builds
+# the AAR and POM with the same reusable workflow CI and the release use, and
+# pushes a signed bundle through .github/actions/central-publish.
+#
+# The version is native/nymauth-native/Cargo.toml's. Central rejects a
+# version that already exists, so running this twice for one version fails
+# at the upload and changes nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publishing-type:
+        description: AUTOMATIC or USER_MANAGED
+        default: AUTOMATIC
+
+permissions:
+  contents: read
+
+jobs:
+  nymauth-native:
+    uses: ./.github/workflows/nymauth-native.yml
+
+  publish:
+    name: Publish to Maven Central
+    runs-on: ubuntu-latest
+    needs: nymauth-native
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download nymauth-native Maven repository
+        uses: actions/download-artifact@v4
+        with:
+          name: nymauth-native-maven
+          path: build/native-repo
+
+      - name: Locate the artifact
+        id: artifact
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' native/nymauth-native/Cargo.toml | head -1)"
+          base="build/native-repo/org/siros/nymauth-native/$version/nymauth-native-$version"
+          test -f "$base.aar"
+          test -f "$base.pom"
+          {
+            echo "version=$version"
+            echo "aar=$base.aar"
+            echo "pom=$base.pom"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/central-publish
+        with:
+          artifact-id: nymauth-native
+          version: ${{ steps.artifact.outputs.version }}
+          file: ${{ steps.artifact.outputs.aar }}
+          pom: ${{ steps.artifact.outputs.pom }}
+          sources-dir: native/nymauth-native
+          name: nymauth-native
+          description: Native nymauth provers for the SIROS SDKs
+          url: https://github.com/sirosfoundation/siros-sdk-kotlin
+          license-name: BSD-2-Clause
+          license-url: https://opensource.org/license/bsd-2-clause
+          publishing-type: ${{ inputs.publishing-type }}
+          central-username: ${{ secrets.CENTRAL_USERNAME }}
+          central-password: ${{ secrets.CENTRAL_PASSWORD }}
+          signing-key: ${{ secrets.SIGNING_KEY }}
+          signing-password: ${{ secrets.SIGNING_PASSWORD }}
