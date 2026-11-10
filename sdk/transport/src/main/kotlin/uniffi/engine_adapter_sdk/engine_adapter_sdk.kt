@@ -3223,7 +3223,13 @@ data class SigningKeyParams (
     /**
      * The key the engine will sign with, named when the flow knows it.
      */
-    var `keyId`: kotlin.String?
+    var `keyId`: kotlin.String?, 
+    /**
+     * Whether the host must answer with a FRESH key (the OID4VCI batch
+     * rule: each credential in a batch binds to its own key —
+     * SDJWT-10.1). Default false.
+     */
+    var `fresh`: kotlin.Boolean
 ) {
     
     companion object
@@ -3237,17 +3243,20 @@ public object FfiConverterTypeSigningKeyParams: FfiConverterRustBuffer<SigningKe
         return SigningKeyParams(
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
     override fun allocationSize(value: SigningKeyParams) = (
             FfiConverterString.allocationSize(value.`flowId`) +
-            FfiConverterOptionalString.allocationSize(value.`keyId`)
+            FfiConverterOptionalString.allocationSize(value.`keyId`) +
+            FfiConverterBoolean.allocationSize(value.`fresh`)
     )
 
     override fun write(value: SigningKeyParams, buf: ByteBuffer) {
             FfiConverterString.write(value.`flowId`, buf)
             FfiConverterOptionalString.write(value.`keyId`, buf)
+            FfiConverterBoolean.write(value.`fresh`, buf)
     }
 }
 
