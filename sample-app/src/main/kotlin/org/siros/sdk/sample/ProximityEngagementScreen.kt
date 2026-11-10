@@ -5,6 +5,7 @@ import android.Manifest
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.outlined.Contactless
@@ -314,8 +315,12 @@ fun ProximityEngagementScreen(
     }
 
     // Chrome-free: the caller frames this screen (see WalletChrome) and owns Back.
-    Box(modifier = Modifier.fillMaxSize()) {
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val padding = PaddingValues()
+        // The QR code is a square no taller than the viewport leaves once
+        // the panel's padding, rule and caption are taken off, so the whole
+        // code is on screen at once in landscape too.
+        val qrMaxSide = qrMaxSideDp(maxHeight.value).dp
         when {
             result != null -> ProximityTerminalView(
                 success = result == true,
@@ -342,6 +347,7 @@ fun ProximityEngagementScreen(
                             bitmap = qrBitmap.asImageBitmap(),
                             contentDescription = stringResource(R.string.share_show_qr_description),
                             modifier = Modifier
+                                .widthIn(max = qrMaxSide)
                                 .fillMaxWidth()
                                 .aspectRatio(1f)
                                 .background(Color.White, RoundedCornerShape(20.dp))
@@ -655,3 +661,10 @@ private fun rememberNfcState(): NfcState {
 /** What the engagement screen presents: the [requested] face, or the QR code when a tap cannot happen. */
 internal fun effectiveProximityStyle(requested: ProximityStyle, nfcOn: Boolean): ProximityStyle =
     if (requested == ProximityStyle.Nfc && !nfcOn) ProximityStyle.Qr else requested
+
+/**
+ * The largest side of the QR code in a viewport [viewportHeightDp] tall: the
+ * height less the panel around it (padding, rule and caption, about 200dp),
+ * never under 160dp, below which a dense code stops scanning.
+ */
+internal fun qrMaxSideDp(viewportHeightDp: Float): Float = (viewportHeightDp - 200f).coerceAtLeast(160f)

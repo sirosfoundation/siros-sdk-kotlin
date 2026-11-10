@@ -2,6 +2,8 @@ package org.siros.sdk.sample
 
 import android.app.Activity
 import android.content.ContextWrapper
+import android.os.Build
+import androidx.compose.ui.graphics.toArgb
 import android.content.res.Configuration
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -165,7 +167,10 @@ fun SirosTheme(
 ) {
     // The status bar's icons follow the theme in use, which is the user's
     // choice (see ThemeSettings) and not necessarily the device's.
-    StatusBarIcons(dark = !darkTheme)
+    StatusBarIcons(
+        dark = !darkTheme,
+        barColor = (if (darkTheme) SirosDarkColorScheme else SirosLightColorScheme).background,
+    )
     // Everything inside sees the theme in use as the device's: credential
     // cards pick their light or dark registry design by isSystemInDarkTheme(),
     // which reads this configuration.
@@ -189,25 +194,33 @@ internal fun uiModeFor(uiMode: Int, dark: Boolean): Int =
 
 /**
  * Draws the status bar's icons [dark] (for a light surface behind them) or
- * light. A screen that overrides the theme's choice passes [restoreTo], the
- * appearance to put back when it leaves the composition. Does nothing where
+ * light, over a status bar of [barColor] where the bar has a colour of its
+ * own. A screen that overrides the theme's choice passes [restoreTo] and
+ * [restoreBarColor], what to put back when it leaves the composition. Does nothing where
  * there is no window to address (previews, tests).
  */
 @Composable
-fun StatusBarIcons(dark: Boolean, restoreTo: Boolean? = null) {
+fun StatusBarIcons(dark: Boolean, restoreTo: Boolean? = null, barColor: Color? = null, restoreBarColor: Color? = null) {
     val view = LocalView.current
     if (view.isInEditMode) return
-    fun apply(value: Boolean) {
+    fun apply(value: Boolean, color: Color?) {
         var context = view.context
         while (context is ContextWrapper && context !is Activity) context = context.baseContext
         val window = (context as? Activity)?.window ?: return
         WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = value
+        // Before Android 15 the app is not drawn behind the status bar, which
+        // has a colour of its own: match it to what the icons are chosen
+        // for. From 15 on the app's own header is behind the bar.
+        if (color != null && Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            @Suppress("DEPRECATION")
+            window.statusBarColor = color.toArgb()
+        }
     }
     // A keyed effect at every level, so that when the theme changes under a
     // screen that overrides it, the theme's effect runs first and the
     // screen's, further down the composition, has the last word.
-    DisposableEffect(view, dark, restoreTo) {
-        apply(dark)
-        onDispose { if (restoreTo != null) apply(restoreTo) }
+    DisposableEffect(view, dark, restoreTo, barColor, restoreBarColor) {
+        apply(dark, barColor)
+        onDispose { if (restoreTo != null) apply(restoreTo, restoreBarColor) }
     }
 }

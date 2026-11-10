@@ -187,4 +187,30 @@ class WalletDesignLogicTest {
         assertFalse(isCompactHeight(480f))
         assertFalse(isCompactHeight(700f))
     }
+
+    @Test
+    fun aPresentedCopyIsSpentOnlyUnderAConsumingPolicy() {
+        // Presented once, key still held: usable again when copies are reusable (NEVER_CONSUME).
+        assertFalse(entry(1, "PID", used).needsAttention(emptyMap(), copiesReusable = true))
+        assertTrue(entry(1, "PID", used).needsAttention(emptyMap(), copiesReusable = false))
+        // Without its key a copy is spent under either policy.
+        assertTrue(entry(1, "PID", keyless).needsAttention(emptyMap(), copiesReusable = true))
+        // A status that stops use needs attention whatever the policy.
+        assertTrue(entry(1, "PID", used).needsAttention(mapOf(1L to CredentialStatus.REVOKED), copiesReusable = true))
+    }
+
+    @Test
+    fun theNextExpiryAheadIsWhatIsWaitedFor() {
+        val now = 1_780_574_400_000L
+        val s = now / 1000
+        assertEquals(60_001L, millisUntilNextExpiry(listOf(s + 3600, null, s + 60, s - 5), now))
+        assertEquals(null, millisUntilNextExpiry(listOf(s - 5, null), now))
+        assertEquals(null, millisUntilNextExpiry(emptyList(), now))
+    }
+
+    @Test
+    fun theQrCodeFitsTheViewportAndStaysScannable() {
+        assertEquals(500f, qrMaxSideDp(700f))
+        assertEquals(160f, qrMaxSideDp(250f))
+    }
 }

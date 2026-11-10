@@ -90,7 +90,12 @@ fun WalletChrome(
     // Over the brand-blue header the status bar's icons are light in either
     // theme; elsewhere they follow the page (see SirosTheme).
     val pageIsLight = MaterialTheme.colorScheme.background.luminance() > 0.5f
-    StatusBarIcons(dark = pageIsLight && !brandHeader, restoreTo = pageIsLight)
+    StatusBarIcons(
+        dark = pageIsLight && !brandHeader,
+        restoreTo = pageIsLight,
+        barColor = if (brandHeader) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.background,
+        restoreBarColor = MaterialTheme.colorScheme.background,
+    )
     // The frame paints its own background, so it also sets the colour text
     // on it defaults to - in either theme, wherever the frame is hosted.
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {

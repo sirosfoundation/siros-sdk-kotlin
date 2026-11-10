@@ -79,17 +79,23 @@ fun CredentialStatus.ribbonContentColor(): Color = when (this) {
  * [countExhausted] is false until the signer's key inventory has been read:
  * before that every copy looks keyless, and a wallet full of healthy
  * credentials would briefly count as needing attention.
+ *
+ * [copiesReusable] is the wallet's consumption policy: under
+ * `NEVER_CONSUME` a copy that has been presented can be presented again, so
+ * only a copy without its key is spent. Under the consuming policies a
+ * presented copy is spent (as `CredentialUtils.eligibleInstances` has it).
  */
 fun org.siros.sdk.credentials.CredentialWithInstances.needsAttention(
     statuses: Map<Long, CredentialStatus>,
     countExhausted: Boolean = true,
     nowMillis: Long = System.currentTimeMillis(),
+    copiesReusable: Boolean = false,
 ): Boolean {
     // expiresAt is a JWT `exp` claim - always epoch SECONDS, not millis.
     val status = statuses[credential.id]
         ?: CredentialStatus.EXPIRED.takeIf { credential.expiresAt?.let { exp -> exp * 1000L < nowMillis } == true }
     if (status != null && !status.isUsable) return true
-    return countExhausted && instances.none { it.sigCount == 0 && it.hasKey }
+    return countExhausted && instances.none { it.hasKey && (copiesReusable || it.sigCount == 0) }
 }
 
 /**

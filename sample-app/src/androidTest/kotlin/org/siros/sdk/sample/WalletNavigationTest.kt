@@ -105,11 +105,11 @@ class WalletNavigationTest {
 
         composeRule.onNodeWithText(string(R.string.home_welcome_back_name, "Elisa")).assertExists()
         composeRule.onNodeWithText(string(R.string.home_attention_one)).assertExists()
-        composeRule.onNodeWithTag(HOME_ATTENTION_TAG).performClick()
-        composeRule.onNodeWithTag(HOME_MANAGE_TAG).performClick()
-        composeRule.onNodeWithTag(HOME_SHARE_TAG).performClick()
-        composeRule.onNodeWithText(string(R.string.home_prompt_get_started)).performClick()
-        composeRule.onNode(androidx.compose.ui.test.hasContentDescription(string(R.string.home_prompt_dismiss))).performClick()
+        composeRule.onNodeWithTag(HOME_ATTENTION_TAG).performScrollTo().performClick()
+        composeRule.onNodeWithTag(HOME_MANAGE_TAG).performScrollTo().performClick()
+        composeRule.onNodeWithTag(HOME_SHARE_TAG).performScrollTo().performClick()
+        composeRule.onNodeWithText(string(R.string.home_prompt_get_started)).performScrollTo().performClick()
+        composeRule.onNode(androidx.compose.ui.test.hasContentDescription(string(R.string.home_prompt_dismiss))).performScrollTo().performClick()
         assertEquals(listOf("attention", "manage", "share", "add", "dismiss"), taps)
     }
 
@@ -136,7 +136,7 @@ class WalletNavigationTest {
             SirosTheme { MenuScreen(current = MenuItem.Settings, onSelect = { selected += it }) }
         }
 
-        MenuItem.entries.forEach { composeRule.onNodeWithTag(menuItemTestTag(it)).performClick() }
+        MenuItem.entries.forEach { composeRule.onNodeWithTag(menuItemTestTag(it)).performScrollTo().performClick() }
         assertEquals(MenuItem.entries.toList(), selected)
     }
 
@@ -149,9 +149,9 @@ class WalletNavigationTest {
             }
         }
 
-        composeRule.onNodeWithTag(SHARE_TAP_TAG).performClick()
-        composeRule.onNodeWithTag(SHARE_SHOW_QR_TAG).performClick()
-        composeRule.onNodeWithTag(SHARE_SCAN_QR_TAG).performClick()
+        composeRule.onNodeWithTag(SHARE_TAP_TAG).performScrollTo().performClick()
+        composeRule.onNodeWithTag(SHARE_SHOW_QR_TAG).performScrollTo().performClick()
+        composeRule.onNodeWithTag(SHARE_SCAN_QR_TAG).performScrollTo().performClick()
         assertEquals(listOf("tap", "show", "scan"), taps)
     }
 

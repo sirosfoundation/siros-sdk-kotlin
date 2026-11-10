@@ -192,7 +192,7 @@ fun AddCredentialScreen(
     }
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().testTag(ADD_CREDENTIAL_LIST_TAG),
         contentPadding = PaddingValues(horizontal = ScreenMargin, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -537,3 +537,5 @@ private fun IDVPrerequisite(icon: ImageVector, label: String, modifier: Modifier
         )
     }
 }
+
+const val ADD_CREDENTIAL_LIST_TAG = "add_credential_list"

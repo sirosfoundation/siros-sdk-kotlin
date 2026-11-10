@@ -3,6 +3,9 @@ package org.siros.sdk.sample
 
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -53,6 +56,7 @@ class AddCredentialScreenTest {
         composeRule.onNodeWithText(photoId).assertExists()
         composeRule.onNodeWithText(available).assertExists()
         composeRule.onNodeWithText("Student ID").assertExists()
+        composeRule.onNodeWithTag(ADD_CREDENTIAL_LIST_TAG).performScrollToNode(hasText("Transit Pass"))
         composeRule.onNodeWithText("Transit Pass").assertExists()
     }
 
@@ -135,6 +139,7 @@ class AddCredentialScreenTest {
             )
         }
 
+        composeRule.onNodeWithTag(ADD_CREDENTIAL_LIST_TAG).performScrollToNode(hasText("Transit Pass"))
         composeRule.onNodeWithText("Transit Pass").performClick()
         assertEquals(listOf("Transit Pass"), selected)
     }

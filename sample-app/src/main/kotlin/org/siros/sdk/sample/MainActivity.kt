@@ -781,6 +781,16 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 }
                 val credentialStatuses by viewModel.credentialStatuses.collectAsState()
                 val ready = walletState as? WalletState.Ready
+                // What "needs attention" depends on beyond the credentials
+                // themselves: whether a presented copy can be presented again,
+                // which copies have been presented, and the time.
+                val copiesReusable = viewModel.credentialConsumptionPolicy.collectAsState().value ==
+                    org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME
+                val attentionNow = rememberNowAtExpiries(ready?.credentials.orEmpty().map { it.expiresAt })
+                androidx.lifecycle.compose.LifecycleResumeEffect(walletState, destination) {
+                    viewModel.refreshPresentationHistory()
+                    onPauseOrDispose { }
+                }
                 chrome(
                     when {
                         ready == null -> null
@@ -796,11 +806,11 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             WalletDestination.Home -> {
                                 val attentionCount = remember(
                                     state.credentials, presentationHistory, credentialsTabAvailableKeyIds,
-                                    credentialStatuses, keyInventoryKnown,
+                                    credentialStatuses, keyInventoryKnown, attentionNow, copiesReusable,
                                 ) {
                                     org.siros.sdk.credentials.CredentialUtils
                                         .groupForDisplay(state.credentials, presentationHistory, credentialsTabAvailableKeyIds)
-                                        .count { it.needsAttention(credentialStatuses, keyInventoryKnown) }
+                                        .count { it.needsAttention(credentialStatuses, keyInventoryKnown, attentionNow, copiesReusable) }
                                 }
                                 HomeScreen(
                                     displayName = state.displayName,
@@ -903,6 +913,8 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             needsAttentionOnly = needsAttentionOnly,
                             onNeedsAttentionOnlyChange = { needsAttentionOnly = it },
                             keyInventoryKnown = keyInventoryKnown,
+                            copiesReusable = copiesReusable,
+                            nowMillis = attentionNow,
                         )
                         }
                         is WalletState.FlowActive -> {
@@ -1406,6 +1418,10 @@ fun CredentialsTab(
     onNeedsAttentionOnlyChange: (Boolean) -> Unit = {},
     /** False until [availableKeyIds] has been read - see [needsAttention]'s `countExhausted`. */
     keyInventoryKnown: Boolean = true,
+    /** Whether a presented copy can be presented again - see [needsAttention]'s `copiesReusable`. */
+    copiesReusable: Boolean = false,
+    /** The time "needs attention" is judged at; the caller advances it as credentials expire. */
+    nowMillis: Long = System.currentTimeMillis(),
     /**
      * Why a credential cannot currently be used, by credential id - the SDK's
      * run of DIIP's Validity and Revocation Algorithm (see
@@ -1506,9 +1522,9 @@ fun CredentialsTab(
     }
 
     var query by rememberSaveable { mutableStateOf("") }
-    val shown = remember(grouped, credentialStatuses, needsAttentionOnly, keyInventoryKnown, query) {
+    val shown = remember(grouped, credentialStatuses, needsAttentionOnly, keyInventoryKnown, query, nowMillis, copiesReusable) {
         grouped.filter {
-            (!needsAttentionOnly || it.needsAttention(credentialStatuses, keyInventoryKnown)) &&
+            (!needsAttentionOnly || it.needsAttention(credentialStatuses, keyInventoryKnown, nowMillis, copiesReusable)) &&
                 it.credential.matchesSearch(query)
         }
     }
@@ -1601,6 +1617,30 @@ fun CredentialsTab(
         }
     }
 }
+
+/**
+ * The current time, re-read when the app resumes and each time one of
+ * [expiries] (JWT `exp`, epoch seconds) passes - so what is judged by it,
+ * such as "needs attention", changes when a credential expires on screen.
+ */
+@Composable
+internal fun rememberNowAtExpiries(expiries: List<Long?>): Long {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+        now = System.currentTimeMillis()
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(now, expiries) {
+        val wait = millisUntilNextExpiry(expiries, now) ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(wait)
+        now = System.currentTimeMillis()
+    }
+    return now
+}
+
+/** How long after [nowMillis] the next of [expiries] (epoch seconds) passes; null when none lies ahead. */
+internal fun millisUntilNextExpiry(expiries: List<Long?>, nowMillis: Long): Long? =
+    expiries.filterNotNull().map { it * 1000L }.filter { it >= nowMillis }.minOrNull()?.let { it - nowMillis + 1 }
 
 /**
  * Whether a Manage credentials viewport of [heightDp] is too short to hold
