@@ -1603,10 +1603,12 @@ private fun FilterPill(label: String, selected: Boolean, onClick: () -> Unit, mo
         text = label,
         style = MaterialTheme.typography.bodyLarge,
         fontWeight = FontWeight.Medium,
-        color = if (selected) Color.White else MaterialTheme.colorScheme.onBackground,
+        // Brand blue, not the design's paler #7C96BF: white text on that fill
+        // has a 3:1 contrast, below the 4.5:1 body text needs.
+        color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onBackground,
         modifier = modifier
             .clip(CircleShape)
-            .then(if (selected) Modifier.background(SirosChipSelected) else Modifier)
+            .then(if (selected) Modifier.background(MaterialTheme.colorScheme.primaryContainer) else Modifier)
             .clickable(role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 8.dp),
     )

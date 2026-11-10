@@ -69,6 +69,33 @@ class WalletDesignLogicTest {
     }
 
     @Test
+    fun aCredentialPastItsOwnExpiryNeedsAttentionBeforeTheSdkHasEvaluatedIt() {
+        val now = 2_000_000_000_000L
+        fun expiring(expSeconds: Long?) = CredentialWithInstances(
+            StoredCredential(id = 1, format = "dc+sd-jwt", raw = "", expiresAt = expSeconds, batchId = 1, instanceId = 0),
+            listOf(unused),
+        )
+        assertTrue(expiring(now / 1000 - 1).needsAttention(emptyMap(), nowMillis = now))
+        assertFalse(expiring(now / 1000 + 60).needsAttention(emptyMap(), nowMillis = now))
+        assertFalse(expiring(null).needsAttention(emptyMap(), nowMillis = now))
+        // Once the SDK has an answer, that answer stands.
+        assertFalse(expiring(now / 1000 - 1).needsAttention(mapOf(1L to CredentialStatus.VALID), nowMillis = now))
+    }
+
+    @Test
+    fun credentialSearchMatchesWhatTheCardShows() {
+        // No display metadata: the card resolves a title of its own, and that title is what a user types.
+        val bare = StoredCredential(
+            id = 3, format = "dc+sd-jwt", raw = "", credentialConfigurationId = "diploma", batchId = 3, instanceId = 0,
+        )
+        val meta = org.siros.sdk.credentials.CredentialUtils.buildFallbackMetadata(bare)
+        val labels = cardLabels(meta?.name, bare.format, meta?.vct ?: meta?.doctype)
+        assertTrue(bare.matchesSearch(labels.title))
+        labels.typeBadge?.let { assertTrue(bare.matchesSearch(it)) }
+        assertFalse(bare.matchesSearch("passport"))
+    }
+
+    @Test
     fun credentialSearchMatchesTheListedName() {
         val pid = entry(1, "Person Identification Data").credential
         assertTrue(pid.matchesSearch(""))

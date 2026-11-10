@@ -149,9 +149,6 @@ object SirosDesign {
         @Composable get() = if (dark) Color(0xFF0C0E11) else Color.White
 }
 
-/** Fill of the selected filter chip on Manage credentials (the design's #7C96BF). */
-val SirosChipSelected = Color(0xFF7C96BF)
-
 
 @Composable
 fun SirosTheme(
