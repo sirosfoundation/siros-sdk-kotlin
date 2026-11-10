@@ -1631,8 +1631,11 @@ internal fun rememberNowAtExpiries(expiries: List<Long?>): Long {
         onPauseOrDispose { }
     }
     LaunchedEffect(now, expiries) {
-        val wait = millisUntilNextExpiry(expiries, now) ?: return@LaunchedEffect
-        kotlinx.coroutines.delay(wait)
+        // `now` only picks which expiry is next; the wait is measured from the
+        // clock at the moment the effect (re)starts, so a change to `expiries`
+        // mid-wait still wakes at the expiry itself.
+        val deadline = now + (millisUntilNextExpiry(expiries, now) ?: return@LaunchedEffect)
+        kotlinx.coroutines.delay((deadline - System.currentTimeMillis()).coerceAtLeast(0))
         now = System.currentTimeMillis()
     }
     return now
