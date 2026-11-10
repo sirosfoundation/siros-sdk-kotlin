@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Sample app: the wallet design ("Mobile Landing & Navigation") is the app's look and screen organisation.** Every signed-in
+  screen sits in one frame: the wallet header (mark, product name, the owner's wallet) and a Home / Scan QR / Menu bar; the
+  camera, show-QR and NFC-tap screens carry a single Back button in place of the bar.
+  - **Home** greets the user on a brand-blue hero, shows a banner when credentials need attention (expired, revoked, suspended,
+    or no copy left to present) and leads to Manage Credentials and Share in-person; a dismissible card leads to Add Credentials.
+  - **Menu** lists every destination (Manage Credentials, Share in-person, History, Add Credentials, Settings, About, Verify a
+    credential) and Logout.
+  - **Manage credentials** adds a search field and the All / Needs attention filter over the credential deck, and a "+" button.
+  - **Add Credentials** shows Scan QR code, Scan Photo ID and the issuers' catalog on one screen ("Available credentials").
+  - **Share In-Person** offers Tap another device, Show QR code and Scan QR code; tap and show are two presentations of the one
+    ISO 18013-5 device engagement.
+  - **History** groups presentations under day headings and adds a search.
+  - **Appearance:** Settings offers System / Light / Dark. The choice is stored and applies from the login screen on; the status
+    bar's icons follow the theme in use.
+  - Credential cards are drawn from their registry designs exactly as before: the theme values a card reads are unchanged
+    (`CredentialCardThemeTest`), and the design's own colours live in `SirosDesign`.
+
 ### Fixed
 - **WMP: the wallet now answers the engine's sign and match sub-flows the way the engine reads them** (go-wallet-backend
   feat/wmp-integration, `wmphandler.go`). Verified against that code only; no run against a live engine.

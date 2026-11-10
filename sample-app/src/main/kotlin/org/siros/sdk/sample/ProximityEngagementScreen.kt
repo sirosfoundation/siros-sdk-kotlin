@@ -2,7 +2,20 @@
 package org.siros.sdk.sample
 
 import android.Manifest
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.outlined.Contactless
+import androidx.compose.ui.graphics.Color
 import android.content.pm.PackageManager
+import android.content.Intent
+import android.provider.Settings
+import android.nfc.NfcAdapter
+import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,7 +35,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material3.AlertDialog
@@ -30,15 +42,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -94,6 +102,7 @@ fun ProximityEngagementScreen(
     filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
     evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     onBack: () -> Unit,
+    style: ProximityStyle = ProximityStyle.Qr,
 ) {
     val context = LocalContext.current
     val engagement = remember {
@@ -305,22 +314,13 @@ fun ProximityEngagementScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Tap to share") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
-        },
-    ) { padding ->
+    // Chrome-free: the caller frames this screen (see WalletChrome) and owns Back.
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val padding = PaddingValues()
+        // The QR code is a square no taller than the viewport leaves once
+        // the panel's padding, rule and caption are taken off, so the whole
+        // code is on screen at once in landscape too.
+        val qrMaxSide = qrMaxSideDp(maxHeight.value).dp
         when {
             result != null -> ProximityTerminalView(
                 success = result == true,
@@ -335,41 +335,67 @@ fun ProximityEngagementScreen(
             else -> Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = ScreenMargin, vertical = 24.dp),
             ) {
-                Text(
-                    text = "Scan with an ISO 18013-5 mdoc reader",
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Image(
-                    bitmap = qrBitmap.asImageBitmap(),
-                    contentDescription = "Device engagement QR code",
-                    modifier = Modifier.fillMaxWidth().height(280.dp),
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = if (blePermissionsDenied) {
-                        "Bluetooth permissions not granted - BLE data retrieval disabled " +
-                            "(QR/NFC engagement still active)."
-                    } else {
-                        "NFC is also active: tap this device against a reader's NFC antenna " +
-                            "for static handover instead of scanning the QR code. Both BLE data " +
-                            "retrieval modes are active - peripheral server mode is advertising, and " +
-                            "central client mode is scanning for a reader - a real reader can " +
-                            "complete a presentation via whichever mode it supports, if a stored " +
-                            "credential matches its requested docType."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+                // One engagement, two faces: the NFC handover and the QR code
+                // are both live whichever of them this screen presents.
+                val nfc = rememberNfcState()
+                when (effectiveProximityStyle(style, nfc == NfcState.On)) {
+                    ProximityStyle.Qr -> BrandPanel(caption = stringResource(R.string.share_show_qr_caption)) {
+                        Image(
+                            bitmap = qrBitmap.asImageBitmap(),
+                            contentDescription = stringResource(R.string.share_show_qr_description),
+                            modifier = Modifier
+                                .widthIn(max = qrMaxSide)
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                .background(Color.White, RoundedCornerShape(20.dp))
+                                .padding(20.dp),
+                        )
+                    }
+                    ProximityStyle.Nfc -> BrandPanel(caption = stringResource(R.string.share_tap_caption)) {
+                        Icon(
+                            Icons.Outlined.Contactless,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(72.dp),
+                        )
+                    }
+                }
+                if (style == ProximityStyle.Nfc && nfc != NfcState.On) {
+                    // Tap was asked for and cannot happen: say so under the
+                    // QR code shown in its place, with the way to turn NFC on
+                    // where the device has it.
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(
+                            if (nfc == NfcState.Off) R.string.share_nfc_off else R.string.share_nfc_unavailable,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().testTag(SHARE_NFC_FALLBACK_TAG),
+                    )
+                    if (nfc == NfcState.Off) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                runCatching { context.startActivity(Intent(Settings.ACTION_NFC_SETTINGS)) }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(stringResource(R.string.share_nfc_turn_on)) }
+                    }
+                }
+                if (blePermissionsDenied) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.share_bluetooth_denied),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
     }
@@ -423,7 +449,7 @@ private fun ProximityProgressView(step: String, onCancel: () -> Unit, modifier: 
         Text(
             text = stringResource(flowStepLabelRes(step)),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = SirosDesign.secondaryText,
         )
         Spacer(modifier = Modifier.height(32.dp))
         OutlinedButton(
@@ -580,7 +606,7 @@ private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: susp
                                         color = if (isEligible) {
                                             MaterialTheme.colorScheme.onSurface
                                         } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                            SirosDesign.secondaryText.copy(alpha = 0.5f)
                                         },
                                     )
                                     if (!isEligible) {
@@ -605,3 +631,40 @@ private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: susp
         },
     )
 }
+
+const val SHARE_NFC_FALLBACK_TAG = "share_nfc_fallback"
+
+/** Whether this device can do the NFC handover right now. */
+internal enum class NfcState { On, Off, Unavailable }
+
+/** The device's NFC state, re-read each time the screen resumes (the user may come back from Settings). */
+@Composable
+private fun rememberNfcState(): NfcState {
+    val context = LocalContext.current
+    fun read(): NfcState {
+        val hce = context.packageManager.hasSystemFeature(PackageManager.FEATURE_NFC_HOST_CARD_EMULATION)
+        val adapter = if (hce) NfcAdapter.getDefaultAdapter(context) else null
+        return when {
+            adapter == null -> NfcState.Unavailable
+            adapter.isEnabled -> NfcState.On
+            else -> NfcState.Off
+        }
+    }
+    var state by remember { mutableStateOf(read()) }
+    LifecycleResumeEffect(Unit) {
+        state = read()
+        onPauseOrDispose { }
+    }
+    return state
+}
+
+/** What the engagement screen presents: the [requested] face, or the QR code when a tap cannot happen. */
+internal fun effectiveProximityStyle(requested: ProximityStyle, nfcOn: Boolean): ProximityStyle =
+    if (requested == ProximityStyle.Nfc && !nfcOn) ProximityStyle.Qr else requested
+
+/**
+ * The largest side of the QR code in a viewport [viewportHeightDp] tall: the
+ * height less the panel around it (padding, rule and caption, about 200dp),
+ * never under 160dp, below which a dense code stops scanning.
+ */
+internal fun qrMaxSideDp(viewportHeightDp: Float): Float = (viewportHeightDp - 200f).coerceAtLeast(160f)

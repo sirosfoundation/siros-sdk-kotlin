@@ -1,6 +1,18 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.sample
 
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.Badge
+import androidx.compose.material.icons.outlined.SentimentSatisfied
+import androidx.compose.material.icons.outlined.CropFree
+import androidx.compose.material.icons.outlined.Contactless
+import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.SignalCellularAlt
+import androidx.compose.material.icons.outlined.VerifiedUser
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -65,27 +77,16 @@ import androidx.compose.ui.unit.dp
 import org.siros.sdk.credentials.CredentialOffer
 
 /**
- * Add-credential entry point — a top-level 3-way chooser (requested live
- * during gdc e2e testing, replacing a single flat list that mixed the IDV
- * path and every issuer's offers into one undifferentiated scroll):
+ * Add Credentials: two ways to bring a credential in from outside - scan an
+ * issuer's QR code ([onScanQr], the wallet's one QR scanner) or scan a
+ * passport into a Photo ID ([onStartIDV], shown when IDV is configured; it
+ * opens [IDVPreparationScreen]) - followed by the catalog of credentials the
+ * wallet's issuers offer, listed in place.
  *
- * 1. [ScanPhysicalIDCard] - the existing IDV/physical-document flow, shown
- *    whenever [onStartIDV] is non-null. Tapping it is unchanged: it drives
- *    straight into the real, top-level IDV preparation screen
- *    ([WalletViewModel.openIDVPreparation]/[IDVPreparationScreen]) exactly
- *    as before, stacked over this screen rather than living inside it.
- * 2. "Scan QR code" - [onScanQr], routed by the caller to the same
- *    QR-scanning entry point ([WalletViewModel.openActivate]/
- *    [ActivateScreen]) Home uses, stacked over this screen the same way as
- *    IDV above.
- * 3. "All known credentials" - the old flat offer list, now reached by
- *    tapping through rather than shown inline by default. This one stays
- *    local to this composable (see [showAllCredentials] below) since it's
- *    not a separate top-level destination, just a sub-view of Add
- *    Credential itself.
- *
- * Modeled after the wallet-frontend's AddCredentials page for the list
- * itself: each row shows the credential name, issuer badge, and format.
+ * The Photo ID card depends only on [onStartIDV] being non-null, never on
+ * [offers]: a tenant whose one catalog offer is the Photo ID itself still
+ * sees the card while the list below is empty. Chrome-free - the caller
+ * frames it (see [WalletChrome]).
  */
 @Composable
 fun AddCredentialScreen(
@@ -101,13 +102,6 @@ fun AddCredentialScreen(
     onRetry: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    // Which of the chooser's 3 options is showing: false is the top-level
-    // chooser itself (options 1 and 2 route straight out to their own
-    // top-level screens and never flip this), true is the "All known
-    // credentials" sub-view (option 3). rememberSaveable so a config change
-    // (rotation) while browsing the sub-list doesn't silently bounce the
-    // user back to the chooser.
-    var showAllCredentials by rememberSaveable { mutableStateOf(false) }
     // Long-press detail modal — lets the user inspect an offer's full
     // description/format before committing to the issuance-consent dialog
     // below, without the row's own tap target already starting that flow.
@@ -129,7 +123,7 @@ fun AddCredentialScreen(
                         Text(
                             text = offer.credentialDescription!!,
                             style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = SirosDesign.secondaryText,
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -170,14 +164,14 @@ fun AddCredentialScreen(
                     Text(
                         text = pendingOffer.credentialName,
                         style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = SirosDesign.secondaryText,
                     )
                     if (pendingOffer.credentialDescription != null) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = pendingOffer.credentialDescription!!,
                             style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = SirosDesign.secondaryText,
                         )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -197,218 +191,83 @@ fun AddCredentialScreen(
         )
     }
 
-    if (showAllCredentials) {
-        AllKnownCredentialsList(
-            offers = offers,
-            isLoading = isLoading,
-            isRefreshing = isRefreshing,
-            onOfferSelected = onOfferSelected,
-            onOfferLongClick = { detailOffer = it },
-            onRetry = onRetry,
-            onBack = { showAllCredentials = false },
-            modifier = modifier,
-        )
-    } else {
-        AddCredentialChooser(
-            onStartIDV = onStartIDV,
-            onScanQr = onScanQr,
-            onShowAllCredentials = { showAllCredentials = true },
-            modifier = modifier,
-        )
-    }
-}
-
-/**
- * Top-level 3-way chooser: "Scan passport" (when IDV is configured for this
- * tenant), "Scan QR code", and "All known credentials". Unlike the old flat
- * list, none of these three rows depends on `offers` having loaded or being
- * non-empty - in particular, [ScanPhysicalIDCard] is conditioned solely on
- * [onStartIDV] being non-null, never on `offers`, which is what keeps task
- * #275's fix intact: a tenant whose only catalog offer is the plain
- * "siros_id" one (filtered out by `openAddCredential` precisely because this
- * IDV row is the one, unified path to that same credential) still always
- * sees this row regardless of how many offers remain afterward.
- */
-@Composable
-private fun AddCredentialChooser(
-    onStartIDV: (() -> Unit)?,
-    onScanQr: () -> Unit,
-    onShowAllCredentials: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    // A plain Column, not a LazyColumn, since it's always exactly 3 rows -
-    // but still wrapped in verticalScroll rather than left to clip: at large
-    // accessibility font scales, or in a short landscape/split-screen
-    // viewport, 3 rows (each with a title + subtitle) can exceed the space
-    // below the TopAppBar even though 3 fixed items would never need
-    // lazy/windowed layout otherwise.
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+    LazyColumn(
+        modifier = modifier.fillMaxSize().testTag(ADD_CREDENTIAL_LIST_TAG),
+        contentPadding = PaddingValues(horizontal = ScreenMargin, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        item { ScreenTitle(stringResource(R.string.add_credential_title)) }
+        item {
+            ActionCard(
+                title = stringResource(R.string.add_credential_option_scan_qr_title),
+                subtitle = stringResource(R.string.add_credential_option_scan_qr_subtitle),
+                icon = Icons.Filled.QrCode2,
+                onClick = onScanQr,
+            )
+        }
         if (onStartIDV != null) {
-            ScanPhysicalIDCard(onClick = onStartIDV)
-            HorizontalDivider()
-        }
-        AddCredentialOptionRow(
-            icon = Icons.Filled.QrCodeScanner,
-            title = stringResource(R.string.add_credential_option_scan_qr_title),
-            subtitle = stringResource(R.string.add_credential_option_scan_qr_subtitle),
-            onClick = onScanQr,
-        )
-        HorizontalDivider()
-        AddCredentialOptionRow(
-            icon = Icons.AutoMirrored.Filled.List,
-            title = stringResource(R.string.add_credential_option_all_title),
-            subtitle = stringResource(R.string.add_credential_option_all_subtitle),
-            onClick = onShowAllCredentials,
-        )
-        HorizontalDivider()
-    }
-}
-
-@Composable
-private fun AddCredentialOptionRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/**
- * Option 3's sub-view: the full flat catalog of issuer offers, exactly as it
- * rendered before this redesign (same loading/empty/list states), just
- * reached by tapping through from [AddCredentialChooser] instead of showing
- * inline by default. [ScanPhysicalIDCard] is deliberately NOT part of this
- * view any more - it's a top-level chooser option now (see
- * [AddCredentialScreen]'s doc comment), so the old
- * "offers.isEmpty() && onStartIDV == null" combined empty-check no longer
- * applies here: this view's own empty state only ever depends on `offers`.
- */
-@Composable
-private fun AllKnownCredentialsList(
-    offers: List<CredentialOffer>,
-    isLoading: Boolean,
-    isRefreshing: Boolean = false,
-    onOfferSelected: (CredentialOffer) -> Unit,
-    onOfferLongClick: (CredentialOffer) -> Unit,
-    onRetry: () -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.add_credential_all_back),
+            item {
+                ActionCard(
+                    title = stringResource(R.string.add_credential_option_photo_id_title),
+                    subtitle = stringResource(R.string.add_credential_option_photo_id_subtitle),
+                    icon = Icons.Outlined.PhotoCamera,
+                    onClick = onStartIDV,
                 )
             }
-            Text(
-                text = stringResource(R.string.add_credential_option_all_title),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
         }
-        HorizontalDivider()
-
-        // The list shown is the SDK's cached catalog; this only says that it is being refreshed in the background.
-        if (isRefreshing && !isLoading) {
-            androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        item {
+            Column(modifier = Modifier.padding(top = 14.dp)) {
+                Text(stringResource(R.string.add_credential_available), style = MaterialTheme.typography.titleSmall)
+                // The list shown is the SDK's cached catalog; this only says that it is being refreshed in the background.
+                if (isRefreshing && !isLoading) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
         }
-        if (isLoading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        when {
+            isLoading -> item {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     CircularProgressIndicator()
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(stringResource(R.string.add_credential_loading))
                 }
             }
-        } else if (offers.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            offers.isEmpty() -> item {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     Text(
                         text = stringResource(R.string.add_credential_empty),
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = SirosDesign.secondaryText,
                     )
                     Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = onRetry) {
+                    Button(onClick = onRetry, shape = RoundedCornerShape(CardCorner)) {
                         Text(stringResource(R.string.add_credential_retry))
                     }
                 }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(0.dp),
-            ) {
-                items(offers) { offer ->
-                    CredentialOfferRow(
-                        offer = offer,
-                        onClick = { onOfferSelected(offer) },
-                        onLongClick = { onOfferLongClick(offer) },
-                    )
-                    HorizontalDivider()
-                }
+            else -> items(offers) { offer ->
+                CredentialOfferRow(
+                    offer = offer,
+                    onClick = { onOfferSelected(offer) },
+                    onLongClick = { detailOffer = offer },
+                )
             }
         }
     }
 }
 
+/**
+ * One offer of the catalog, as a card: the issuer's logo (or a generic
+ * credential mark) on a pale tile, the credential's name, its description,
+ * and the issuer on a grey chip with the format's capability icons.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CredentialOfferRow(
@@ -416,97 +275,78 @@ private fun CredentialOfferRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
 ) {
+    val shape = RoundedCornerShape(CardCorner)
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, shape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(16.dp),
+        verticalAlignment = Alignment.Top,
     ) {
-        // Credential badge: the issuer's own logo image when published
-        // (credential_metadata.display[].logo - real graphical metadata, not
-        // just a color), falling back to a colored initial letter otherwise.
-        // Sized to the standard ID-1/credit-card ratio (15.86:10), not
-        // square: these issuers' "logo" is frequently the full card-body
-        // template (e.g. a ~829x504 SVG with {{given_name}}-style
-        // placeholders), not a small icon - a square Crop just showed an
-        // unrecognizable, randomly-cropped sliver of it.
-        val bgColor = offer.backgroundColor?.let { parseColor(it) }
-            ?: MaterialTheme.colorScheme.secondaryContainer
-        val fgColor = offer.textColor?.let { parseColor(it) }
-            ?: MaterialTheme.colorScheme.onSecondaryContainer
-
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        if (offer.logoUri != null) {
+            // The issuer's own logo, at the ID-1 card ratio (15.86:10): what
+            // issuers publish as a "logo" is frequently the full card-body
+            // template, which a square crop reduces to an unrecognizable sliver.
             Box(
                 modifier = Modifier
-                    .height(40.dp)
+                    .height(44.dp)
                     .aspectRatio(15.86f / 10f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(bgColor),
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(offer.backgroundColor?.let { parseColor(it) } ?: MaterialTheme.colorScheme.secondaryContainer),
                 contentAlignment = Alignment.Center,
             ) {
                 IssuerLogo(
                     uri = offer.logoUri,
                     initial = offer.credentialName,
-                    contentDescription = offer.credentialName,
+                    contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
-                    initialColor = fgColor,
+                    initialColor = offer.textColor?.let { parseColor(it) } ?: MaterialTheme.colorScheme.onSecondaryContainer,
                     initialStyle = MaterialTheme.typography.titleMedium,
                 )
             }
-            Spacer(modifier = Modifier.height(4.dp))
-            CapabilityIconRow(capabilityFlagsFor(offer.format))
+        } else {
+            SoftIconTile(Icons.Outlined.Badge)
         }
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        // Credential name + description + issuer
+        Spacer(modifier = Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = offer.credentialName,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             // Issuer-authored description is often the clearest signal for
             // telling apart two same-named offers (e.g. "Physical card" vs
-            // "Digital-only ID") - shown here, not just in the confirm
-            // dialog, since that's exactly where users need it.
+            // "Digital-only ID").
             if (!offer.credentialDescription.isNullOrBlank()) {
                 Text(
                     text = offer.credentialDescription!!,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = SirosDesign.secondaryText,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(16.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = offer.issuerName.take(1).uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(modifier = Modifier.width(4.dp))
                 Text(
                     text = offer.issuerName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = SirosDesign.secondaryText,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .background(SirosDesign.altSurface, RoundedCornerShape(2.dp))
+                        .padding(horizontal = 12.dp, vertical = 2.dp),
                 )
+                Spacer(modifier = Modifier.width(10.dp))
+                CapabilityIconRow(capabilityFlagsFor(offer.format))
             }
         }
     }
@@ -547,9 +387,9 @@ private fun CapabilityIcon(icon: ImageVector, enabled: Boolean, description: Str
         icon,
         contentDescription = if (enabled) description else null,
         tint = if (enabled) {
-            MaterialTheme.colorScheme.onSurfaceVariant
+            SirosDesign.secondaryText
         } else {
-            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+            SirosDesign.secondaryText.copy(alpha = 0.25f)
         },
         modifier = Modifier.size(14.dp),
     )
@@ -574,63 +414,17 @@ private fun parseColor(hex: String): Color? {
     } catch (_: Exception) { null }
 }
 
-// ── Scan Physical ID ────────────────────────────────────────────────
+// ── Scan Photo ID ───────────────────────────────────────────────────
 
-@Composable
-private fun ScanPhysicalIDCard(onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.Outlined.Info,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "Digital ID (scanned passport)",
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                text = "Scan your face and passport",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
+const val IDV_CONSENT_TAG = "idv_consent"
+const val IDV_START_TAG = "idv_start"
 
 /**
- * IDV preparation screen matching the wallet-frontend's ScanPhysicalID.tsx UX.
- *
- * Shows:
- * 1. Three steps with icons (face scan → document scan → NFC read)
- * 2. Prerequisites
- * 3. Privacy explanation
- * 4. Consent checkbox
- * 5. "Start Scan" CTA
+ * Scan Photo ID: what the scan will ask of the user (three steps), what to
+ * have ready, why a face scan is part of it, and the consent to biometric
+ * processing that enables Start Scan. Chrome-free - the caller frames it
+ * (see [WalletChrome]).
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun IDVPreparationScreen(
     onStartScan: () -> Unit,
@@ -639,148 +433,109 @@ fun IDVPreparationScreen(
 ) {
     var consentGiven by remember { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Scan Physical ID") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = ScreenMargin, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        ScreenTitle(stringResource(R.string.add_credential_option_photo_id_title), onBack = onBack)
+
+        OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                IDVStepRow(1, Icons.Outlined.SentimentSatisfied, stringResource(R.string.idv_step_face))
+                IDVStepRow(2, Icons.Outlined.CropFree, stringResource(R.string.idv_step_document))
+                IDVStepRow(3, Icons.Outlined.Contactless, stringResource(R.string.idv_step_nfc))
+            }
+        }
+
+        OutlinedCard(modifier = Modifier.fillMaxWidth(), container = SirosDesign.altSurface) {
+            Column {
+                Text(stringResource(R.string.idv_before_title), style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IDVPrerequisite(Icons.Outlined.Badge, stringResource(R.string.idv_before_passport), Modifier.weight(1f))
+                    IDVPrerequisite(Icons.Outlined.LightMode, stringResource(R.string.idv_before_lighting), Modifier.weight(1f))
+                    IDVPrerequisite(Icons.Outlined.SignalCellularAlt, stringResource(R.string.idv_before_connection), Modifier.weight(1f))
+                }
+            }
+        }
+
+        OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.idv_why_title), style = MaterialTheme.typography.titleSmall)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(stringResource(R.string.idv_why_text), style = MaterialTheme.typography.bodyMedium)
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Box(
+                    modifier = Modifier.size(64.dp).background(SirosDesign.altSurface, RoundedCornerShape(4.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.VerifiedUser,
+                        contentDescription = null,
+                        tint = SirosDesign.brandOnPage,
+                        modifier = Modifier.size(40.dp),
+                    )
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { consentGiven = !consentGiven },
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Steps
-            Text(
-                "How it works",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+            Checkbox(
+                checked = consentGiven,
+                onCheckedChange = { consentGiven = it },
+                modifier = Modifier.testTag(IDV_CONSENT_TAG),
             )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.idv_consent), style = MaterialTheme.typography.bodyMedium)
+        }
 
-            IDVStepRow(
-                stepNumber = 1,
-                icon = Icons.Outlined.Info,
-                title = "Face scan",
-                description = "Scan your face to show you are a real, live human",
-            )
-            IDVStepRow(
-                stepNumber = 2,
-                icon = Icons.Outlined.Info,
-                title = "Document scan",
-                description = "Scan the photo page of your passport or ID card",
-            )
-            IDVStepRow(
-                stepNumber = 3,
-                icon = Icons.Outlined.Info,
-                title = "NFC chip read",
-                description = "Place your phone on your document to read the NFC chip",
-            )
+        Button(
+            onClick = onStartScan,
+            enabled = consentGiven,
+            modifier = Modifier.fillMaxWidth().height(48.dp).testTag(IDV_START_TAG),
+            shape = RoundedCornerShape(CardCorner),
+        ) {
+            Text(stringResource(R.string.idv_start), style = MaterialTheme.typography.titleSmall)
+        }
 
-            HorizontalDivider()
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
 
-            // Prerequisites
-            Text(
-                "Before you start",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text("• Have your passport or ID card ready", style = MaterialTheme.typography.bodyMedium)
-            Text("• Ensure good lighting conditions", style = MaterialTheme.typography.bodyMedium)
-            Text("• Ensure a stable internet connection", style = MaterialTheme.typography.bodyMedium)
-
-            HorizontalDivider()
-
-            // Privacy explanation
-            Text(
-                "Why a face scan?",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                "A 3D face scan verifies you are a real, live person. Your biometric data is encrypted during capture and processed only for identity verification. It is not stored after the session.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            // Consent checkbox
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { consentGiven = !consentGiven },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Checkbox(
-                    checked = consentGiven,
-                    onCheckedChange = { consentGiven = it },
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    "I consent to biometric processing for identity verification.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-
-            // Start Scan button
-            Button(
-                onClick = onStartScan,
-                enabled = consentGiven,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Text("Start Scan")
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
+@Composable
+private fun IDVStepRow(stepNumber: Int, icon: ImageVector, description: String) {
+    Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+        SoftIconTile(icon, shape = RoundedCornerShape(4.dp))
+        Spacer(modifier = Modifier.width(20.dp))
+        Column {
+            Text(stringResource(R.string.idv_step_number, stepNumber), style = MaterialTheme.typography.titleSmall)
+            Text(description, style = MaterialTheme.typography.bodyLarge)
         }
     }
 }
 
 @Composable
-private fun IDVStepRow(
-    stepNumber: Int,
-    icon: ImageVector,
-    title: String,
-    description: String,
-) {
-    Row(
-        verticalAlignment = Alignment.Top,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "$stepNumber",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-            }
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+private fun IDVPrerequisite(icon: ImageVector, label: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        SoftIconTile(icon, modifier = Modifier.size(54.dp), shape = CircleShape)
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
     }
 }
+
+const val ADD_CREDENTIAL_LIST_TAG = "add_credential_list"

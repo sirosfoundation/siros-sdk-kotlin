@@ -2,6 +2,12 @@
 package org.siros.sdk.sample
 
 import android.Manifest
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.draw.clip
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -195,6 +201,96 @@ fun QrScannerScreen(
     }
 }
 
+/**
+ * The wallet's QR scanner as the design draws it: the camera in a square
+ * window on the brand panel with one line of instruction, and under the panel
+ * a field for pasting the link a QR code would have carried. Chrome-free -
+ * the caller frames it (see [WalletChrome]) and owns Back.
+ *
+ * Like [QrScannerScreen], it forwards whatever it decodes to [onQrScanned];
+ * telling a credential offer from a presentation request is the caller's job.
+ */
+@Composable
+fun ScanQrContent(onQrScanned: (String) -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        hasCameraPermission = granted
+    }
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) launcher.launch(Manifest.permission.CAMERA)
+    }
+    var pasteUri by remember { mutableStateOf("") }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = ScreenMargin, vertical = 24.dp),
+    ) {
+        BrandPanel(caption = stringResource(R.string.scan_qr_caption)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(CardCorner))
+                    .border(1.dp, MaterialTheme.colorScheme.onPrimaryContainer, RoundedCornerShape(CardCorner)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (hasCameraPermission) {
+                    CameraPreviewWithScanner(onQrScanned = onQrScanned, modifier = Modifier.fillMaxSize(), showHint = false)
+                } else {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.qr_scanner_permission_required),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = { launcher.launch(Manifest.permission.CAMERA) },
+                            shape = RoundedCornerShape(CardCorner),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            ),
+                        ) {
+                            Text(stringResource(R.string.qr_scanner_grant_permission))
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(text = stringResource(R.string.scan_qr_paste_label), style = MaterialTheme.typography.labelLarge)
+        Spacer(modifier = Modifier.height(6.dp))
+        OutlinedTextField(
+            value = pasteUri,
+            onValueChange = { pasteUri = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("openid-credential-offer://...") },
+            singleLine = true,
+            shape = RoundedCornerShape(CardCorner),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Button(
+            onClick = { if (pasteUri.isNotBlank()) onQrScanned(pasteUri.trim()) },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            enabled = pasteUri.isNotBlank(),
+            shape = RoundedCornerShape(CardCorner),
+        ) {
+            Text(stringResource(R.string.scan_qr_paste_button))
+        }
+    }
+}
+
 /** How long the detection flash/checkmark stays on screen before handing off to [onQrScanned]. */
 private const val DETECTION_FEEDBACK_DELAY_MS = 350L
 
@@ -203,6 +299,7 @@ private const val DETECTION_FEEDBACK_DELAY_MS = 350L
 private fun CameraPreviewWithScanner(
     onQrScanned: (String) -> Unit,
     modifier: Modifier = Modifier,
+    showHint: Boolean = true,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -342,7 +439,7 @@ private fun CameraPreviewWithScanner(
         }
 
         // Hint overlay
-        Text(
+        if (showHint) Text(
             text = stringResource(R.string.qr_scanner_hint),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),

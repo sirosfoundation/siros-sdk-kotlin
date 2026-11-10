@@ -20,7 +20,7 @@
     <string name="nav_settings">Settings</string>
 
     <!-- Top bar -->
-    <string name="topbar_title">SIROS Wallet</string>
+    <string name="topbar_title">SIROS ID Wallet</string>
     <string name="topbar_logo_description" translatable="false">SIROS</string>
 
     <!-- Credentials tab -->
@@ -28,10 +28,10 @@
     <string name="credentials_count_one">%1$d credential</string>
     <string name="credentials_count_other">%1$d credentials</string>
     <string name="credentials_empty_title">No credentials yet</string>
-    <string name="credentials_empty_subtitle">Tap the Add tab below to get started</string>
+    <string name="credentials_empty_subtitle">Tap + to add your first credential</string>
 
     <!-- Add credential screen -->
-    <string name="add_credential_title">Add Credential</string>
+    <string name="add_credential_title">Add Credentials</string>
     <string name="add_credential_loading">Loading available credentials\u2026</string>
     <string name="add_credential_empty">No credentials available</string>
     <string name="add_credential_retry">Try Again</string>
@@ -42,7 +42,7 @@
          all known credentials), requested live during gdc e2e testing to
          replace the old flat list of every issuer offer. -->
     <string name="add_credential_option_scan_qr_title">Scan QR code</string>
-    <string name="add_credential_option_scan_qr_subtitle">Scan an issuer\'s QR code</string>
+    <string name="add_credential_option_scan_qr_subtitle">Scan a QR code to add a credential to your wallet.</string>
     <string name="add_credential_option_all_title">All known credentials</string>
     <string name="add_credential_option_all_subtitle">Browse every credential offered by your issuers</string>
     <string name="add_credential_all_back">Back to add credential options</string>
@@ -363,4 +363,73 @@
     <string name="settings_policy_proof_system_default">Default (catalog order)</string>
     <string name="settings_policy_proof_system_longfellow">Longfellow only</string>
     <string name="settings_policy_proof_system_vega">Vega only</string>
+
+    <!-- Wallet design: header, bottom bar, home, menu, share, history, add credentials, scan Photo ID -->
+    <string name="header_my_wallet">My Wallet</string>
+    <string name="header_wallet_of">%1$s\'s Wallet</string>
+    <string name="nav_scan_qr">Scan QR</string>
+    <string name="nav_menu">Menu</string>
+    <string name="home_welcome_back">Welcome back.</string>
+    <string name="home_welcome_back_name">Welcome back, %1$s.</string>
+    <string name="home_attention_one">1 credential needs attention</string>
+    <string name="home_attention_other">%1$d credentials need attention</string>
+    <string name="home_manage_credentials">Manage Credentials</string>
+    <string name="home_share_in_person">Share in-person</string>
+    <string name="home_prompt_begin">Begin</string>
+    <string name="home_prompt_get_started">Get started</string>
+    <string name="home_add_credentials_text">Access pre-configured credential offers from your wallet.</string>
+    <string name="home_prompt_dismiss">Dismiss</string>
+    <string name="menu_history">History</string>
+    <string name="menu_about">About</string>
+    <string name="menu_verify">Verify a credential</string>
+    <string name="menu_logout">Logout</string>
+    <string name="menu_powered_by" translatable="false">Powered by SIROS Foundation</string>
+    <string name="share_title">Share In-Person</string>
+    <string name="share_intro">Share a credential with a nearby device in one of three ways:</string>
+    <string name="share_tap_title">Tap another device</string>
+    <string name="share_tap_subtitle">Share data with a requester by holding your device to theirs.</string>
+    <string name="share_show_qr_title">Show QR code</string>
+    <string name="share_show_qr_subtitle">Show your QR code for the device to scan.</string>
+    <string name="share_scan_qr_subtitle">Scan the device\'s QR code with your phone.</string>
+    <string name="share_show_qr_caption">Show your QR code for the device to scan.</string>
+    <string name="share_show_qr_description">QR code for the other device to scan</string>
+    <string name="share_tap_caption">Tap your phone against the device.</string>
+    <string name="share_nfc_off">NFC is turned off, so tapping is not possible. Turn it on, or show this QR code to the device instead.</string>
+    <string name="share_nfc_unavailable">This device cannot share by tapping. Show this QR code to the device instead.</string>
+    <string name="share_nfc_turn_on">Turn on NFC</string>
+    <string name="share_bluetooth_denied">Bluetooth permission is needed to send the credential once the device has connected.</string>
+    <string name="about_text">SIROS ID Wallet keeps your digital credentials on your device and lets you share them online and in person.</string>
+    <string name="about_version">Version</string>
+    <string name="about_license">License</string>
+    <string name="scan_qr_caption">Scan the device\'s QR code with your phone.</string>
+    <string name="scan_qr_paste_label">Or paste the link instead</string>
+    <string name="scan_qr_paste_button">Continue</string>
+    <string name="history_today">Today</string>
+    <string name="history_yesterday">Yesterday</string>
+    <string name="history_search">Search</string>
+    <string name="add_credential_option_photo_id_title">Scan Photo ID</string>
+    <string name="add_credential_option_photo_id_subtitle">Use your passport to create a digital Photo ID.</string>
+    <string name="add_credential_available">Available credentials</string>
+    <string name="idv_step_number">Step %1$d</string>
+    <string name="idv_step_face">Scan your face to show you are a real, live human</string>
+    <string name="idv_step_document">Scan your document</string>
+    <string name="idv_step_nfc">Place your phone on your document to read the NFC-chip</string>
+    <string name="idv_before_title">Before you begin</string>
+    <string name="idv_before_passport">Have passport ready</string>
+    <string name="idv_before_lighting">Have good lighting</string>
+    <string name="idv_before_connection">Have good internet connection</string>
+    <string name="idv_why_title">Why face scan?</string>
+    <string name="idv_why_text">We use a quick 3D face verification to prevent fraudulent use of your document. Your biometric data is encrypted and discarded after the verification is complete.</string>
+    <string name="idv_consent">I consent to biometric processing for identity verification.</string>
+    <string name="idv_start">Start Scan</string>
+    <string name="manage_title">Manage credentials</string>
+    <string name="manage_search">Search credential...</string>
+    <string name="manage_filter_all">All (%1$d)</string>
+    <string name="manage_filter_attention">Needs attention</string>
+    <string name="manage_none_need_attention">No credentials need attention.</string>
+    <string name="manage_no_match">No credentials match your search.</string>
+    <string name="settings_appearance_section">Appearance</string>
+    <string name="settings_appearance_system">System</string>
+    <string name="settings_appearance_light">Light</string>
+    <string name="settings_appearance_dark">Dark</string>
 </resources>

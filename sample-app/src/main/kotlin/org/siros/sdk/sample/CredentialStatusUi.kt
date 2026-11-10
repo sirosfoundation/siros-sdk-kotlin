@@ -65,3 +65,48 @@ fun CredentialStatus.ribbonContentColor(): Color = when (this) {
         MaterialTheme.colorScheme.onTertiary
     CredentialStatus.VALID -> MaterialTheme.colorScheme.onPrimary
 }
+
+/**
+ * Whether this credential belongs under "Needs attention": its status stops
+ * it being used, or - when [countExhausted] - no copy of it is left to
+ * present, the state its card shows as renew-only.
+ *
+ * The status is the SDK's ([statuses], see
+ * `WalletViewModel.credentialStatuses`). Where the SDK has not evaluated the
+ * credential yet, its own `exp` decides, exactly as on its card - so the
+ * banner and the filter never disagree with what the card says.
+ *
+ * [countExhausted] is false until the signer's key inventory has been read:
+ * before that every copy looks keyless, and a wallet full of healthy
+ * credentials would briefly count as needing attention.
+ *
+ * [copiesReusable] is the wallet's consumption policy: under
+ * `NEVER_CONSUME` a copy that has been presented can be presented again, so
+ * only a copy without its key is spent. Under the consuming policies a
+ * presented copy is spent (as `CredentialUtils.eligibleInstances` has it).
+ */
+fun org.siros.sdk.credentials.CredentialWithInstances.needsAttention(
+    statuses: Map<Long, CredentialStatus>,
+    countExhausted: Boolean = true,
+    nowMillis: Long = System.currentTimeMillis(),
+    copiesReusable: Boolean = false,
+): Boolean {
+    // expiresAt is a JWT `exp` claim - always epoch SECONDS, not millis.
+    val status = statuses[credential.id]
+        ?: CredentialStatus.EXPIRED.takeIf { credential.expiresAt?.let { exp -> exp * 1000L < nowMillis } == true }
+    if (status != null && !status.isUsable) return true
+    return countExhausted && instances.none { it.hasKey && (copiesReusable || it.sigCount == 0) }
+}
+
+/**
+ * Whether [query] occurs in what the credential's card calls it: the title
+ * and the type label under it, resolved the way the card resolves them (see
+ * [cardLabels]). A blank query matches every credential.
+ */
+fun org.siros.sdk.credentials.StoredCredential.matchesSearch(query: String): Boolean {
+    val q = query.trim()
+    if (q.isEmpty()) return true
+    val meta = metadata ?: org.siros.sdk.credentials.CredentialUtils.buildFallbackMetadata(this)
+    val labels = cardLabels(meta?.name, format, meta?.vct ?: meta?.doctype)
+    return labels.title.contains(q, ignoreCase = true) || labels.typeBadge?.contains(q, ignoreCase = true) == true
+}

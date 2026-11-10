@@ -18,7 +18,7 @@
     <string name="nav_settings">Asetukset</string>
 
     <!-- Top bar -->
-    <string name="topbar_title">SIROS Wallet</string>
+    <string name="topbar_title">SIROS ID Wallet</string>
 
     <!-- Credentials tab -->
     <string name="credentials_welcome">Tervetuloa, %1$s</string>
@@ -342,4 +342,72 @@
     <string name="settings_policy_proof_system_default">Oletus (luettelon järjestys)</string>
     <string name="settings_policy_proof_system_longfellow">Vain Longfellow</string>
     <string name="settings_policy_proof_system_vega">Vain Vega</string>
+
+    <!-- Wallet design: header, bottom bar, home, menu, share, history, add credentials, scan Photo ID -->
+    <string name="header_my_wallet">Lompakkoni</string>
+    <string name="header_wallet_of">%1$s – lompakko</string>
+    <string name="nav_scan_qr">Skannaa QR</string>
+    <string name="nav_menu">Valikko</string>
+    <string name="home_welcome_back">Tervetuloa takaisin.</string>
+    <string name="home_welcome_back_name">Tervetuloa takaisin, %1$s.</string>
+    <string name="home_attention_one">1 todistus vaatii huomiota</string>
+    <string name="home_attention_other">%1$d todistusta vaatii huomiota</string>
+    <string name="home_manage_credentials">Hallitse todistuksia</string>
+    <string name="home_share_in_person">Jaa paikan päällä</string>
+    <string name="home_prompt_begin">Aloita</string>
+    <string name="home_prompt_get_started">Aloita</string>
+    <string name="home_add_credentials_text">Katso lompakkosi tarjoamat todistukset.</string>
+    <string name="home_prompt_dismiss">Sulje</string>
+    <string name="menu_history">Historia</string>
+    <string name="menu_about">Tietoja</string>
+    <string name="menu_verify">Tarkista todistus</string>
+    <string name="menu_logout">Kirjaudu ulos</string>
+    <string name="share_title">Jaa paikan päällä</string>
+    <string name="share_intro">Jaa todistus lähellä olevan laitteen kanssa yhdellä kolmesta tavasta:</string>
+    <string name="share_tap_title">Kosketa toista laitetta</string>
+    <string name="share_tap_subtitle">Jaa tiedot pitämällä laitettasi pyytäjän laitetta vasten.</string>
+    <string name="share_show_qr_title">Näytä QR-koodi</string>
+    <string name="share_show_qr_subtitle">Näytä QR-koodisi laitteen skannattavaksi.</string>
+    <string name="share_scan_qr_subtitle">Skannaa laitteen QR-koodi puhelimellasi.</string>
+    <string name="share_show_qr_caption">Näytä QR-koodisi laitteen skannattavaksi.</string>
+    <string name="share_show_qr_description">QR-koodi toisen laitteen skannattavaksi</string>
+    <string name="share_tap_caption">Kosketa puhelimella laitetta.</string>
+    <string name="share_nfc_off">NFC on pois päältä, joten koskettamalla jakaminen ei onnistu. Ota NFC käyttöön tai näytä sen sijaan tämä QR-koodi laitteelle.</string>
+    <string name="share_nfc_unavailable">Tämä laite ei voi jakaa koskettamalla. Näytä sen sijaan tämä QR-koodi laitteelle.</string>
+    <string name="share_nfc_turn_on">Ota NFC käyttöön</string>
+    <string name="share_bluetooth_denied">Bluetooth-lupa tarvitaan todistuksen lähettämiseen, kun laite on yhdistänyt.</string>
+    <string name="about_text">SIROS ID Wallet säilyttää digitaaliset todistuksesi laitteellasi, ja voit jakaa niitä verkossa ja paikan päällä.</string>
+    <string name="about_version">Versio</string>
+    <string name="about_license">Lisenssi</string>
+    <string name="scan_qr_caption">Skannaa laitteen QR-koodi puhelimellasi.</string>
+    <string name="scan_qr_paste_label">Tai liitä linkki</string>
+    <string name="scan_qr_paste_button">Jatka</string>
+    <string name="history_today">Tänään</string>
+    <string name="history_yesterday">Eilen</string>
+    <string name="history_search">Hae</string>
+    <string name="add_credential_option_photo_id_title">Skannaa kuvallinen henkilötodistus</string>
+    <string name="add_credential_option_photo_id_subtitle">Luo digitaalinen kuvallinen henkilötodistus passisi avulla.</string>
+    <string name="add_credential_available">Saatavilla olevat todistukset</string>
+    <string name="idv_step_number">Vaihe %1$d</string>
+    <string name="idv_step_face">Skannaa kasvosi osoittaaksesi, että olet todellinen, elävä ihminen</string>
+    <string name="idv_step_document">Skannaa asiakirjasi</string>
+    <string name="idv_step_nfc">Aseta puhelin asiakirjan päälle NFC-sirun lukemiseksi</string>
+    <string name="idv_before_title">Ennen kuin aloitat</string>
+    <string name="idv_before_passport">Pidä passi valmiina</string>
+    <string name="idv_before_lighting">Varmista hyvä valaistus</string>
+    <string name="idv_before_connection">Varmista hyvä verkkoyhteys</string>
+    <string name="idv_why_title">Miksi kasvojen skannaus?</string>
+    <string name="idv_why_text">Käytämme nopeaa 3D-kasvojentunnistusta estääksemme asiakirjasi väärinkäytön. Biometriset tietosi salataan ja poistetaan, kun tarkistus on valmis.</string>
+    <string name="idv_consent">Annan suostumukseni biometriseen käsittelyyn henkilöllisyyden varmentamiseksi.</string>
+    <string name="idv_start">Aloita skannaus</string>
+    <string name="manage_title">Hallitse todistuksia</string>
+    <string name="manage_search">Hae todistusta...</string>
+    <string name="manage_filter_all">Kaikki (%1$d)</string>
+    <string name="manage_filter_attention">Vaatii huomiota</string>
+    <string name="manage_none_need_attention">Mikään todistus ei vaadi huomiota.</string>
+    <string name="manage_no_match">Mikään todistus ei vastaa hakua.</string>
+    <string name="settings_appearance_section">Ulkoasu</string>
+    <string name="settings_appearance_system">Järjestelmä</string>
+    <string name="settings_appearance_light">Vaalea</string>
+    <string name="settings_appearance_dark">Tumma</string>
 </resources>

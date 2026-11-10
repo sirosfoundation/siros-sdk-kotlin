@@ -18,7 +18,7 @@
     <string name="nav_settings">Inställningar</string>
 
     <!-- Top bar -->
-    <string name="topbar_title">SIROS Wallet</string>
+    <string name="topbar_title">SIROS ID Wallet</string>
 
     <!-- Credentials tab -->
     <string name="credentials_welcome">Välkommen, %1$s</string>
@@ -342,4 +342,72 @@
     <string name="settings_policy_proof_system_default">Standard (katalogordning)</string>
     <string name="settings_policy_proof_system_longfellow">Endast Longfellow</string>
     <string name="settings_policy_proof_system_vega">Endast Vega</string>
+
+    <!-- Wallet design: header, bottom bar, home, menu, share, history, add credentials, scan Photo ID -->
+    <string name="header_my_wallet">Min plånbok</string>
+    <string name="header_wallet_of">%1$s – plånbok</string>
+    <string name="nav_scan_qr">Skanna QR</string>
+    <string name="nav_menu">Meny</string>
+    <string name="home_welcome_back">Välkommen tillbaka.</string>
+    <string name="home_welcome_back_name">Välkommen tillbaka, %1$s.</string>
+    <string name="home_attention_one">1 intyg behöver åtgärdas</string>
+    <string name="home_attention_other">%1$d intyg behöver åtgärdas</string>
+    <string name="home_manage_credentials">Hantera intyg</string>
+    <string name="home_share_in_person">Dela på plats</string>
+    <string name="home_prompt_begin">Börja</string>
+    <string name="home_prompt_get_started">Kom igång</string>
+    <string name="home_add_credentials_text">Se de intyg som din plånbok erbjuder.</string>
+    <string name="home_prompt_dismiss">Stäng</string>
+    <string name="menu_history">Historik</string>
+    <string name="menu_about">Om</string>
+    <string name="menu_verify">Verifiera ett intyg</string>
+    <string name="menu_logout">Logga ut</string>
+    <string name="share_title">Dela på plats</string>
+    <string name="share_intro">Dela ett intyg med en enhet i närheten på ett av tre sätt:</string>
+    <string name="share_tap_title">Håll mot en annan enhet</string>
+    <string name="share_tap_subtitle">Dela uppgifter genom att hålla din enhet mot mottagarens.</string>
+    <string name="share_show_qr_title">Visa QR-kod</string>
+    <string name="share_show_qr_subtitle">Visa din QR-kod så att enheten kan skanna den.</string>
+    <string name="share_scan_qr_subtitle">Skanna enhetens QR-kod med din telefon.</string>
+    <string name="share_show_qr_caption">Visa din QR-kod så att enheten kan skanna den.</string>
+    <string name="share_show_qr_description">QR-kod som den andra enheten skannar</string>
+    <string name="share_tap_caption">Håll telefonen mot enheten.</string>
+    <string name="share_nfc_off">NFC är avstängt, så det går inte att dela genom att hålla telefonen mot enheten. Slå på NFC eller visa den här QR-koden för enheten i stället.</string>
+    <string name="share_nfc_unavailable">Den här enheten kan inte dela via NFC. Visa den här QR-koden för enheten i stället.</string>
+    <string name="share_nfc_turn_on">Slå på NFC</string>
+    <string name="share_bluetooth_denied">Bluetooth-behörighet krävs för att skicka intyget när enheten har anslutit.</string>
+    <string name="about_text">SIROS ID Wallet förvarar dina digitala intyg på din enhet och låter dig dela dem online och på plats.</string>
+    <string name="about_version">Version</string>
+    <string name="about_license">Licens</string>
+    <string name="scan_qr_caption">Skanna enhetens QR-kod med din telefon.</string>
+    <string name="scan_qr_paste_label">Eller klistra in länken</string>
+    <string name="scan_qr_paste_button">Fortsätt</string>
+    <string name="history_today">I dag</string>
+    <string name="history_yesterday">I går</string>
+    <string name="history_search">Sök</string>
+    <string name="add_credential_option_photo_id_title">Skanna foto-ID</string>
+    <string name="add_credential_option_photo_id_subtitle">Använd ditt pass för att skapa ett digitalt foto-ID.</string>
+    <string name="add_credential_available">Tillgängliga intyg</string>
+    <string name="idv_step_number">Steg %1$d</string>
+    <string name="idv_step_face">Skanna ditt ansikte för att visa att du är en verklig, levande människa</string>
+    <string name="idv_step_document">Skanna din handling</string>
+    <string name="idv_step_nfc">Lägg telefonen på handlingen för att läsa NFC-chippet</string>
+    <string name="idv_before_title">Innan du börjar</string>
+    <string name="idv_before_passport">Ha passet redo</string>
+    <string name="idv_before_lighting">Ha bra belysning</string>
+    <string name="idv_before_connection">Ha bra internetanslutning</string>
+    <string name="idv_why_title">Varför ansiktsskanning?</string>
+    <string name="idv_why_text">Vi använder en snabb 3D-ansiktsverifiering för att förhindra att din handling används bedrägligt. Dina biometriska uppgifter krypteras och raderas när verifieringen är klar.</string>
+    <string name="idv_consent">Jag samtycker till biometrisk behandling för identitetsverifiering.</string>
+    <string name="idv_start">Starta skanning</string>
+    <string name="manage_title">Hantera intyg</string>
+    <string name="manage_search">Sök intyg...</string>
+    <string name="manage_filter_all">Alla (%1$d)</string>
+    <string name="manage_filter_attention">Behöver åtgärdas</string>
+    <string name="manage_none_need_attention">Inga intyg behöver åtgärdas.</string>
+    <string name="manage_no_match">Inga intyg matchar din sökning.</string>
+    <string name="settings_appearance_section">Utseende</string>
+    <string name="settings_appearance_system">System</string>
+    <string name="settings_appearance_light">Ljust</string>
+    <string name="settings_appearance_dark">Mörkt</string>
 </resources>

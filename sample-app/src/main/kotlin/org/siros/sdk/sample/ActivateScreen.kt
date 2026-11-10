@@ -7,22 +7,17 @@ import org.siros.sdk.keystore.mdoc.ReaderTrustResult
 import org.siros.sdk.sample.WalletViewModel.ActivateMode
 
 /**
- * Merged QR scan + ISO 18013-5 proximity (BLE) engagement screen. QR scanning
- * is the default mode; [QrScannerScreen] surfaces a low-emphasis
- * "use proximity instead" CTA that calls [onUseProximityInstead] to switch.
- *
- * This is a thin dispatcher, not a refactor of either underlying screen -
- * [QrScannerScreen] and [ProximityEngagementScreen] each keep their own
- * Scaffold/TopAppBar, so switching modes is a plain content swap with no
- * shared chrome to keep in sync. Both screens' [onBack] always means "leave
- * Activate entirely" - switching to proximity mode is forward-only, back
- * never returns to QR from proximity.
+ * The wallet's two engagement screens behind one entry point: scanning a QR
+ * code ([ScanQrContent]) and presenting an ISO 18013-5 device engagement
+ * ([ProximityEngagementScreen], as an NFC tap or a displayed QR code per
+ * [proximityStyle]). Both are chrome-free; the caller frames them and owns
+ * Back, which always means "leave Activate entirely".
  */
 @Composable
 fun ActivateScreen(
     mode: ActivateMode,
+    proximityStyle: ProximityStyle,
     onQrScanned: (String) -> Unit,
-    onUseProximityInstead: () -> Unit,
     getCredentials: suspend () -> List<StoredCredential>,
     signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
     filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
@@ -30,17 +25,14 @@ fun ActivateScreen(
     onBack: () -> Unit,
 ) {
     when (mode) {
-        ActivateMode.Qr -> QrScannerScreen(
-            onQrScanned = onQrScanned,
-            onBack = onBack,
-            onUseProximityInstead = onUseProximityInstead,
-        )
+        ActivateMode.Qr -> ScanQrContent(onQrScanned = onQrScanned)
         ActivateMode.Proximity -> ProximityEngagementScreen(
             getCredentials = getCredentials,
             signPresentation = signPresentation,
             filterEligible = filterEligible,
             evaluateReaderTrust = evaluateReaderTrust,
             onBack = onBack,
+            style = proximityStyle,
         )
     }
 }

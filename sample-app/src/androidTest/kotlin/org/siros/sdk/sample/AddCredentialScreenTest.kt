@@ -2,8 +2,10 @@
 package org.siros.sdk.sample
 
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -14,18 +16,21 @@ import org.junit.runner.RunWith
 import org.siros.sdk.credentials.CredentialOffer
 
 /**
- * Drives [AddCredentialScreen]'s top-level 3-way chooser (scan passport /
- * scan QR / all known credentials) - requested live during gdc e2e testing
- * to replace a single flat list that mixed the IDV row and every issuer's
- * offers into one scroll. Renders the composable directly with plain
- * lambdas, no wallet session or SDK backing it, since it's a pure composable
- * over its callback parameters.
+ * Drives [AddCredentialScreen]: the Scan QR code and Scan Photo ID cards on
+ * top and the issuers' catalog listed in place under "Available credentials".
+ * Renders the composable directly with plain lambdas, no wallet session or
+ * SDK backing it, since it's a pure composable over its callback parameters.
  */
 @RunWith(AndroidJUnit4::class)
 class AddCredentialScreenTest {
 
     @get:Rule
     val composeRule = createComposeRule()
+
+    private fun string(id: Int) = InstrumentationRegistry.getInstrumentation().targetContext.getString(id)
+    private val scanQr get() = string(R.string.add_credential_option_scan_qr_title)
+    private val photoId get() = string(R.string.add_credential_option_photo_id_title)
+    private val available get() = string(R.string.add_credential_available)
 
     private fun offer(name: String) = CredentialOffer(
         credentialConfigurationId = "cfg-$name",
@@ -34,15 +39,9 @@ class AddCredentialScreenTest {
         issuerName = "Example Issuer",
     )
 
-    /**
-     * The chooser itself must show exactly the 3 top-level options and never
-     * the flat offer catalog inline - that's the whole point of this
-     * redesign. Two offers are passed in to prove they're hidden until the
-     * user drills into "All known credentials", not merely absent because
-     * the list happened to be empty.
-     */
+    /** Both entry cards and every offer of the catalog are on the one screen. */
     @Test
-    fun chooserShowsThreeOptionsNotTheFlatOfferList() {
+    fun showsTheEntryCardsAndTheCatalogInPlace() {
         composeRule.setContent {
             AddCredentialScreen(
                 offers = listOf(offer("Student ID"), offer("Transit Pass")),
@@ -53,26 +52,25 @@ class AddCredentialScreenTest {
             )
         }
 
-        composeRule.onNodeWithText("Digital ID (scanned passport)").assertExists()
-        composeRule.onNodeWithText("Scan QR code").assertExists()
-        composeRule.onNodeWithText("All known credentials").assertExists()
-
-        // The flat list's own rows must not be reachable without drilling in.
-        composeRule.onNodeWithText("Student ID").assertDoesNotExist()
-        composeRule.onNodeWithText("Transit Pass").assertDoesNotExist()
+        composeRule.onNodeWithText(scanQr).assertExists()
+        composeRule.onNodeWithText(photoId).assertExists()
+        composeRule.onNodeWithText(available).assertExists()
+        composeRule.onNodeWithText("Student ID").assertExists()
+        composeRule.onNodeWithTag(ADD_CREDENTIAL_LIST_TAG).performScrollToNode(hasText("Transit Pass"))
+        composeRule.onNodeWithText("Transit Pass").assertExists()
     }
 
     /**
      * Regression guard for task #275: a tenant whose only catalog offer is
      * the plain "siros_id" one (filtered out upstream by
-     * `WalletViewModel.openAddCredential` precisely because the IDV row
-     * below is the one, unified path to that same credential) must still
-     * always see "Scan passport" - its visibility must depend solely on
+     * `WalletViewModel.openAddCredential` precisely because the Photo ID card
+     * is the one, unified path to that same credential) must still always
+     * see Scan Photo ID - its visibility depends solely on
      * [AddCredentialScreen]'s `onStartIDV` being non-null, never on `offers`
      * being empty.
      */
     @Test
-    fun scanPassportSurvivesAnEmptyOfferCatalog() {
+    fun scanPhotoIdSurvivesAnEmptyOfferCatalog() {
         composeRule.setContent {
             AddCredentialScreen(
                 offers = emptyList(),
@@ -83,14 +81,14 @@ class AddCredentialScreenTest {
             )
         }
 
-        composeRule.onNodeWithText("Digital ID (scanned passport)").assertExists()
-        composeRule.onNodeWithText("Scan QR code").assertExists()
-        composeRule.onNodeWithText("All known credentials").assertExists()
+        composeRule.onNodeWithText(photoId).assertExists()
+        composeRule.onNodeWithText(scanQr).assertExists()
+        composeRule.onNodeWithText(string(R.string.add_credential_empty)).assertExists()
     }
 
-    /** When IDV isn't configured for this tenant, its row simply isn't shown - the other two options still are. */
+    /** When IDV isn't configured for this tenant, its card simply isn't shown - Scan QR code still is. */
     @Test
-    fun scanPassportHiddenWhenIdvUnavailable() {
+    fun scanPhotoIdHiddenWhenIdvUnavailable() {
         composeRule.setContent {
             AddCredentialScreen(
                 offers = emptyList(),
@@ -101,81 +99,48 @@ class AddCredentialScreenTest {
             )
         }
 
-        composeRule.onNodeWithText("Digital ID (scanned passport)").assertDoesNotExist()
-        composeRule.onNodeWithText("Scan QR code").assertExists()
-        composeRule.onNodeWithText("All known credentials").assertExists()
+        composeRule.onNodeWithText(photoId).assertDoesNotExist()
+        composeRule.onNodeWithText(scanQr).assertExists()
     }
 
-    /** Tapping "Scan QR code" calls [onScanQr] directly - no intermediate sub-screen, same as Scan passport's onStartIDV. */
+    /** Tapping "Scan QR code" calls [onScanQr] directly, and Scan Photo ID calls onStartIDV. */
     @Test
-    fun tappingScanQrInvokesCallback() {
+    fun tappingTheEntryCardsInvokesTheirCallbacks() {
         var qrTapped = 0
+        var idvTapped = 0
         composeRule.setContent {
             AddCredentialScreen(
                 offers = emptyList(),
                 isLoading = false,
                 onOfferSelected = {},
-                onStartIDV = {},
+                onStartIDV = { idvTapped++ },
                 onScanQr = { qrTapped++ },
             )
         }
 
-        composeRule.onNodeWithText("Scan QR code").performClick()
+        composeRule.onNodeWithText(scanQr).performClick()
         assertEquals(1, qrTapped)
+        assertEquals(0, idvTapped)
+        composeRule.onNodeWithText(photoId).performClick()
+        assertEquals(1, idvTapped)
     }
 
-    /**
-     * Tapping "All known credentials" drills into the old flat list (now the
-     * sub-view) and a back control returns to the 3-option chooser without
-     * leaving [AddCredentialScreen] entirely (that's still the caller's
-     * separate `onStartIDV`/`onScanQr`/outer close affordance, not this
-     * composable's concern).
-     */
+    /** Tapping an offer of the in-place catalog selects that offer. */
     @Test
-    fun allKnownCredentialsDrillsInAndBackReturnsToChooser() {
+    fun tappingAnOfferSelectsIt() {
+        val selected = mutableListOf<String>()
         composeRule.setContent {
             AddCredentialScreen(
-                offers = listOf(offer("Student ID")),
+                offers = listOf(offer("Student ID"), offer("Transit Pass")),
                 isLoading = false,
-                onOfferSelected = {},
+                onOfferSelected = { selected += it.credentialName },
                 onStartIDV = {},
                 onScanQr = {},
             )
         }
 
-        composeRule.onNodeWithText("All known credentials").performClick()
-        composeRule.onNodeWithText("Student ID").assertExists()
-        // The chooser's own options are no longer on screen while drilled in.
-        composeRule.onNodeWithText("Digital ID (scanned passport)").assertDoesNotExist()
-
-        // The back control is an IconButton whose Icon carries this string as
-        // its contentDescription, not a Text node - onNodeWithText here would
-        // never match, so the earlier version of this test failed before it
-        // could verify navigation back to the chooser at all.
-        val backLabel = InstrumentationRegistry.getInstrumentation().targetContext
-            .getString(R.string.add_credential_all_back)
-        composeRule.onNodeWithContentDescription(backLabel).performClick()
-
-        composeRule.onNodeWithText("Digital ID (scanned passport)").assertExists()
-        composeRule.onNodeWithText("Student ID").assertDoesNotExist()
-    }
-
-    /** Selecting an offer from the drilled-in list still invokes [onOfferSelected], unchanged from before this redesign. */
-    @Test
-    fun selectingAnOfferFromTheDrilledInListInvokesCallback() {
-        var selected: CredentialOffer? = null
-        composeRule.setContent {
-            AddCredentialScreen(
-                offers = listOf(offer("Student ID")),
-                isLoading = false,
-                onOfferSelected = { selected = it },
-                onStartIDV = {},
-                onScanQr = {},
-            )
-        }
-
-        composeRule.onNodeWithText("All known credentials").performClick()
-        composeRule.onNodeWithText("Student ID").performClick()
-        assertEquals("Student ID", selected?.credentialName)
+        composeRule.onNodeWithTag(ADD_CREDENTIAL_LIST_TAG).performScrollToNode(hasText("Transit Pass"))
+        composeRule.onNodeWithText("Transit Pass").performClick()
+        assertEquals(listOf("Transit Pass"), selected)
     }
 }

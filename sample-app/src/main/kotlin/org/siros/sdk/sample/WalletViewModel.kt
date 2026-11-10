@@ -1766,8 +1766,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     // ── Presentation history ────────────────────────────────────────
 
-    fun openHistory() {
+    /** Publishes the wallet's presentation log as it stands; Home's attention count and the credential deck read it. */
+    fun refreshPresentationHistory() {
         _presentationHistory.value = wallet.presentationHistory
+    }
+
+    fun openHistory() {
+        refreshPresentationHistory()
         _showHistory.value = true
     }
 
