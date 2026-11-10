@@ -425,4 +425,8 @@
     <string name="manage_filter_attention">Needs attention</string>
     <string name="manage_none_need_attention">No credentials need attention.</string>
     <string name="manage_no_match">No credentials match your search.</string>
+    <string name="settings_appearance_section">Appearance</string>
+    <string name="settings_appearance_system">System</string>
+    <string name="settings_appearance_light">Light</string>
+    <string name="settings_appearance_dark">Dark</string>
 </resources>

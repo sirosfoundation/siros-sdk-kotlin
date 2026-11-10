@@ -403,4 +403,8 @@
     <string name="manage_filter_attention">Vaatii huomiota</string>
     <string name="manage_none_need_attention">Mikään todistus ei vaadi huomiota.</string>
     <string name="manage_no_match">Mikään todistus ei vastaa hakua.</string>
+    <string name="settings_appearance_section">Ulkoasu</string>
+    <string name="settings_appearance_system">Järjestelmä</string>
+    <string name="settings_appearance_light">Vaalea</string>
+    <string name="settings_appearance_dark">Tumma</string>
 </resources>

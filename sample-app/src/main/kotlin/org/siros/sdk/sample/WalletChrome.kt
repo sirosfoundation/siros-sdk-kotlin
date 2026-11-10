@@ -30,15 +30,18 @@ import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
@@ -83,14 +86,22 @@ fun WalletChrome(
     onBottomBarHeight: (Int) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
-    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        WalletHeader(displayName = displayName, onBrand = brandHeader, onAccount = onAccount)
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) { content() }
-        Box(modifier = Modifier.onGloballyPositioned { onBottomBarHeight(it.size.height) }) {
-            if (onBack != null) {
-                BackBar(onBack = onBack)
-            } else {
-                WalletBottomBar(selected = selected, onHome = onHome, onScanQr = onScanQr, onMenu = onMenu)
+    // Over the brand-blue header the status bar's icons are light in either
+    // theme; elsewhere they follow the page (see SirosTheme).
+    val pageIsLight = MaterialTheme.colorScheme.background.luminance() > 0.5f
+    StatusBarIcons(dark = pageIsLight && !brandHeader)
+    // The frame paints its own background, so it also sets the colour text
+    // on it defaults to - in either theme, wherever the frame is hosted.
+    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+        Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            WalletHeader(displayName = displayName, onBrand = brandHeader, onAccount = onAccount)
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) { content() }
+            Box(modifier = Modifier.onGloballyPositioned { onBottomBarHeight(it.size.height) }) {
+                if (onBack != null) {
+                    BackBar(onBack = onBack)
+                } else {
+                    WalletBottomBar(selected = selected, onHome = onHome, onScanQr = onScanQr, onMenu = onMenu)
+                }
             }
         }
     }
@@ -175,10 +186,10 @@ fun WalletBottomBar(selected: WalletNavItem?, onHome: () -> Unit, onScanQr: () -
             tag = NAV_SCAN_QR_TAG,
         ) {
             Box(
-                modifier = Modifier.size(48.dp).background(SirosScanButton, CircleShape),
+                modifier = Modifier.size(48.dp).background(SirosDesign.scanButton, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.QrCode2, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
+                Icon(Icons.Filled.QrCode2, contentDescription = null, tint = SirosDesign.onScanButton, modifier = Modifier.size(26.dp))
             }
         }
         BottomBarItem(
@@ -331,7 +342,7 @@ fun ActionCard(
                 Icon(
                     Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = SirosDesign.brandOnPage,
                     modifier = Modifier.size(28.dp),
                 )
             } else {

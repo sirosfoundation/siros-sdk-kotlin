@@ -170,13 +170,13 @@ private fun AttentionBanner(count: Int, onClick: () -> Unit) {
                     stringResource(R.string.home_attention_other, count)
                 },
                 style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = SirosDesign.brandOnPage,
                 modifier = Modifier.weight(1f),
             )
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = SirosDesign.brandOnPage,
                 modifier = Modifier.size(28.dp),
             )
         }
@@ -191,7 +191,7 @@ private fun HomeTile(icon: ImageVector, label: String, onClick: () -> Unit, modi
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(64.dp))
+            Icon(icon, contentDescription = null, tint = SirosDesign.brandOnPage, modifier = Modifier.size(64.dp))
             Spacer(modifier = Modifier.height(16.dp))
             Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
         }
@@ -216,7 +216,7 @@ private fun HomePromptCard(
                     .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(4.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(36.dp))
+                Icon(icon, contentDescription = null, tint = SirosDesign.brandOnPage, modifier = Modifier.size(36.dp))
             }
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {

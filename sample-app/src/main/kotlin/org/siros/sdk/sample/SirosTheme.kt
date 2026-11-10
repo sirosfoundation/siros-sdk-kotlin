@@ -1,6 +1,11 @@
 package org.siros.sdk.sample
 
+import android.app.Activity
+import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -131,22 +136,50 @@ object SirosDesign {
         @Composable get() = if (dark) Color(0xFF1C2433) else Color(0xFFF8F9F9)
 
     val attention: Color = Color(0xFFF9A917)
+
+    /** Brand-coloured text and icons on a page or card: the brand blue, lightened in the dark theme so it stays legible. */
+    val brandOnPage: Color
+        @Composable get() = if (dark) Color(0xFF9DB8EC) else Color(0xFF1B4587)
+
+    /** The Scan QR button at the centre of the bottom bar: black with a white mark, inverted in the dark theme. */
+    val scanButton: Color
+        @Composable get() = if (dark) Color(0xFFEEF0F3) else Color.Black
+
+    val onScanButton: Color
+        @Composable get() = if (dark) Color(0xFF0C0E11) else Color.White
 }
 
 /** Fill of the selected filter chip on Manage credentials (the design's #7C96BF). */
 val SirosChipSelected = Color(0xFF7C96BF)
 
-/** Fill of the Scan QR button at the centre of the bottom bar - black in the design, in both themes. */
-val SirosScanButton = Color(0xFF000000)
 
 @Composable
 fun SirosTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
+    // The status bar's icons follow the theme in use, which is the user's
+    // choice (see ThemeSettings) and not necessarily the device's.
+    StatusBarIcons(dark = !darkTheme)
     MaterialTheme(
         colorScheme = if (darkTheme) SirosDarkColorScheme else SirosLightColorScheme,
         typography = SirosTypography,
         content = content,
     )
+}
+
+/**
+ * Draws the status bar's icons [dark] (for a light surface behind them) or
+ * light. Does nothing where there is no window to address (previews, tests).
+ */
+@Composable
+fun StatusBarIcons(dark: Boolean) {
+    val view = LocalView.current
+    if (view.isInEditMode) return
+    SideEffect {
+        var context = view.context
+        while (context is ContextWrapper && context !is Activity) context = context.baseContext
+        val window = (context as? Activity)?.window ?: return@SideEffect
+        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = dark
+    }
 }

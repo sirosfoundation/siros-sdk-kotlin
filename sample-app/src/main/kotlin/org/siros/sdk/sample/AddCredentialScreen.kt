@@ -477,7 +477,7 @@ fun IDVPreparationScreen(
                     Icon(
                         Icons.Outlined.VerifiedUser,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = SirosDesign.brandOnPage,
                         modifier = Modifier.size(40.dp),
                     )
                 }

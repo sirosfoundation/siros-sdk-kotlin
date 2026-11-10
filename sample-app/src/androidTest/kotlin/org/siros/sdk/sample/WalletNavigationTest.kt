@@ -163,4 +163,27 @@ class WalletNavigationTest {
         composeRule.onNodeWithTag(IDV_START_TAG).performScrollTo().performClick()
         assertEquals(1, started)
     }
+
+    /** The Settings card stores the choice, and a later read of the same preferences starts from it. */
+    @Test
+    fun theAppearanceChoiceIsStoredAndReadBack() {
+        val prefs = InstrumentationRegistry.getInstrumentation().targetContext
+            .getSharedPreferences("siros_appearance_test", android.content.Context.MODE_PRIVATE)
+        prefs.edit().clear().commit()
+        val settings = ThemeSettings(prefs)
+        assertEquals(ThemeMode.SYSTEM, settings.mode.value)
+        composeRule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalThemeSettings provides settings) {
+                SirosTheme { AppearanceSetting() }
+            }
+        }
+
+        composeRule.onNodeWithTag(themeModeTestTag(ThemeMode.DARK)).performClick()
+        assertEquals(ThemeMode.DARK, settings.mode.value)
+        assertEquals(ThemeMode.DARK, ThemeSettings(prefs).mode.value)
+
+        composeRule.onNodeWithTag(themeModeTestTag(ThemeMode.LIGHT)).performClick()
+        assertEquals(ThemeMode.LIGHT, ThemeSettings(prefs).mode.value)
+        prefs.edit().clear().commit()
+    }
 }

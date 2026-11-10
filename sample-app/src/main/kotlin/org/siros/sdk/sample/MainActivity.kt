@@ -147,8 +147,11 @@ class MainActivity : ComponentActivity() {
             pendingWscaIntent = intent
         }
         val vmFactory = WalletViewModel.Factory(this)
+        val themeSettings = ThemeSettings(getSharedPreferences(ThemeSettings.PREFS, MODE_PRIVATE))
         setContent {
-            SirosTheme {
+            val themeMode by themeSettings.mode.collectAsState()
+            androidx.compose.runtime.CompositionLocalProvider(LocalThemeSettings provides themeSettings) {
+            SirosTheme(darkTheme = themeMode.isDark(androidx.compose.foundation.isSystemInDarkTheme())) {
                 Surface(
                     modifier = Modifier.fillMaxSize().navigationBarsPadding(),
                     color = MaterialTheme.colorScheme.background,
@@ -198,6 +201,7 @@ class MainActivity : ComponentActivity() {
                         WalletScreen(viewModel, onVerify = { showVerifier = true })
                     }
                 }
+            }
             }
         }
     }
@@ -1719,6 +1723,10 @@ fun SettingsTab(
             fontWeight = FontWeight.SemiBold,
         )
         Spacer(modifier = Modifier.height(24.dp))
+
+        // Appearance: follow the device, or always light, or always dark.
+        AppearanceSetting()
+        Spacer(modifier = Modifier.height(16.dp))
 
         // Account section
         Card(

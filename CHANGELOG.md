@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Share In-Person** offers Tap another device, Show QR code and Scan QR code; tap and show are two presentations of the one
     ISO 18013-5 device engagement.
   - **History** groups presentations under day headings and adds a search.
+  - **Appearance:** Settings offers System / Light / Dark. The choice is stored and applies from the login screen on; the status
+    bar's icons follow the theme in use.
   - Credential cards are drawn from their registry designs exactly as before: the theme values a card reads are unchanged
     (`CredentialCardThemeTest`), and the design's own colours live in `SirosDesign`.
 
