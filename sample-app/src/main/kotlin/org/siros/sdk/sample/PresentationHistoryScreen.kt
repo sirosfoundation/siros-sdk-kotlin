@@ -1,6 +1,12 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.sample
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.clip
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,21 +24,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,84 +47,109 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Displays presentation history — a log of credential presentations
- * made to verifiers.
+ * History: the wallet's log of presentations, newest first under day
+ * headings, with a search over who it was shown to and what was shown.
+ * Chrome-free - the caller frames it (see [WalletChrome]).
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PresentationHistoryScreen(
     history: List<PresentationRecord>,
-    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
     filterCredentialId: Long? = null,
 ) {
-    val filtered = if (filterCredentialId != null) {
-        history.filter { it.credentialIds.contains(filterCredentialId) }
-    } else {
+    var query by rememberSaveable { mutableStateOf("") }
+    val today = stringResource(R.string.history_today)
+    val yesterday = stringResource(R.string.history_yesterday)
+    val groups = remember(history, filterCredentialId, query, today, yesterday) {
         history
+            .filter { filterCredentialId == null || it.credentialIds.contains(filterCredentialId) }
+            .filter { matchesHistoryQuery(it, query) }
+            .sortedByDescending { it.timestamp }
+            .groupBy { historyDayLabel(it.timestamp, System.currentTimeMillis(), today, yesterday) }
+            .toList()
     }
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.history_title)) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.nav_back))
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        if (filtered.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center,
-            ) {
+    Column(modifier = modifier.fillMaxSize().padding(horizontal = ScreenMargin).padding(top = 24.dp)) {
+        Text(stringResource(R.string.menu_history), style = MaterialTheme.typography.headlineSmall)
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text(stringResource(R.string.history_search), color = SirosDesign.secondaryText) },
+            trailingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.outlineVariant) },
+            singleLine = true,
+            shape = RoundedCornerShape(CardCorner),
+        )
+        if (groups.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     text = stringResource(R.string.history_empty),
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
             }
         } else {
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 16.dp, bottom = 24.dp),
             ) {
-                items(filtered) { record ->
-                    PresentationRecordCard(record)
+                groups.forEach { (day, records) ->
+                    item(key = "day-$day") {
+                        Text(day, style = MaterialTheme.typography.titleMedium)
+                    }
+                    items(records, key = { it.id }) { record ->
+                        PresentationRecordCard(record)
+                    }
                 }
             }
         }
     }
 }
 
+/** Whether [record] mentions [query] in its verifier, its credentials or its disclosed claims. A blank query matches all. */
+internal fun matchesHistoryQuery(record: PresentationRecord, query: String): Boolean {
+    val q = query.trim()
+    if (q.isEmpty()) return true
+    return (record.verifierName?.contains(q, ignoreCase = true) == true) ||
+        record.credentialNames.any { it.contains(q, ignoreCase = true) } ||
+        record.requestedClaims.any { it.contains(q, ignoreCase = true) }
+}
+
+/** The day heading a record at [timestamp] falls under, as seen at [now]: [today], [yesterday], or the date. */
+internal fun historyDayLabel(
+    timestamp: Long,
+    now: Long,
+    today: String,
+    yesterday: String,
+    zone: java.util.TimeZone = java.util.TimeZone.getDefault(),
+    locale: Locale = Locale.getDefault(),
+): String {
+    fun dayOf(millis: Long): Long = (millis + zone.getOffset(millis)) / 86_400_000L
+    return when (dayOf(now) - dayOf(timestamp)) {
+        0L -> today
+        1L -> yesterday
+        else -> SimpleDateFormat("d MMMM yyyy", locale).apply { timeZone = zone }.format(Date(timestamp))
+    }
+}
 
 @Composable
 private fun PresentationRecordCard(record: PresentationRecord) {
-    val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy HH:mm", Locale.getDefault()) }
+    val dateFormatter = remember { SimpleDateFormat("dd/MM/yyyy, HH:mm:ss", Locale.getDefault()) }
     var expanded by remember { androidx.compose.runtime.mutableStateOf(false) }
 
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(CardCorner))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(CardCorner))
+            .clickable { expanded = !expanded },
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 20.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Status icon
@@ -149,7 +172,7 @@ private fun PresentationRecordCard(record: PresentationRecord) {
                 // Verifier name or credential names
                 val verifier = record.verifierName
                 val title = if (verifier != null) {
-                    stringResource(R.string.history_presented_to, verifier)
+                    verifier
                 } else if (record.credentialNames.isNotEmpty()) {
                     record.credentialNames.joinToString(", ")
                 } else {
@@ -159,8 +182,7 @@ private fun PresentationRecordCard(record: PresentationRecord) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
+                        style = MaterialTheme.typography.titleSmall,
                     )
                     if (record.zkProof) {
                         Spacer(modifier = Modifier.width(6.dp))
@@ -172,12 +194,12 @@ private fun PresentationRecordCard(record: PresentationRecord) {
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = dateFormatter.format(Date(record.timestamp)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (verifier != null && record.credentialNames.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(text = record.credentialNames.joinToString(", "), style = MaterialTheme.typography.bodyLarge)
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(text = dateFormatter.format(Date(record.timestamp)), style = MaterialTheme.typography.bodyLarge)
                 if (record.requestedClaims.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
@@ -186,7 +208,7 @@ private fun PresentationRecordCard(record: PresentationRecord) {
                                 .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
                         },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
+                        color = SirosDesign.secondaryText,
                     )
                 }
             }
@@ -204,7 +226,7 @@ private fun PresentationRecordCard(record: PresentationRecord) {
 
                 if (record.credentialNames.isNotEmpty()) {
                     Text("Credentials shared:", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        color = SirosDesign.secondaryText)
                     record.credentialNames.forEach { name ->
                         Text("  • $name", style = MaterialTheme.typography.bodySmall)
                     }
@@ -213,7 +235,7 @@ private fun PresentationRecordCard(record: PresentationRecord) {
 
                 if (record.requestedClaims.isNotEmpty()) {
                     Text("Data disclosed:", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        color = SirosDesign.secondaryText)
                     record.requestedClaims.forEach { claim ->
                         val formatted = claim.split(".", "_")
                             .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }

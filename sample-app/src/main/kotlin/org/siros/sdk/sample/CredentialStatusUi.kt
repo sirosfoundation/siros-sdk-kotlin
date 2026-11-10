@@ -65,3 +65,28 @@ fun CredentialStatus.ribbonContentColor(): Color = when (this) {
         MaterialTheme.colorScheme.onTertiary
     CredentialStatus.VALID -> MaterialTheme.colorScheme.onPrimary
 }
+
+/**
+ * Whether this credential belongs under "Needs attention": the SDK reports a
+ * status that stops it being used ([statuses], see
+ * `WalletViewModel.credentialStatuses`), or - when [countExhausted] - no copy
+ * of it is left to present, the state its card shows as renew-only.
+ *
+ * [countExhausted] is false until the signer's key inventory has been read:
+ * before that every copy looks keyless, and a wallet full of healthy
+ * credentials would briefly count as needing attention.
+ */
+fun org.siros.sdk.credentials.CredentialWithInstances.needsAttention(
+    statuses: Map<Long, CredentialStatus>,
+    countExhausted: Boolean = true,
+): Boolean {
+    val status = statuses[credential.id]
+    if (status != null && status != CredentialStatus.VALID) return true
+    return countExhausted && instances.none { it.sigCount == 0 && it.hasKey }
+}
+
+/** Whether [query] occurs in the name the credential is listed under. A blank query matches every credential. */
+fun org.siros.sdk.credentials.StoredCredential.matchesSearch(query: String): Boolean {
+    val q = query.trim()
+    return q.isEmpty() || (metadata?.name ?: format).contains(q, ignoreCase = true)
+}

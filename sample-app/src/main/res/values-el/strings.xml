@@ -18,7 +18,7 @@
     <string name="nav_settings">Ρυθμίσεις</string>
 
     <!-- Top bar -->
-    <string name="topbar_title">SIROS Wallet</string>
+    <string name="topbar_title">SIROS ID Wallet</string>
 
     <!-- Credentials tab -->
     <string name="credentials_welcome">Καλώς ήρθατε, %1$s</string>
@@ -342,4 +342,65 @@
     <string name="settings_policy_proof_system_default">Προεπιλογή (σειρά καταλόγου)</string>
     <string name="settings_policy_proof_system_longfellow">Μόνο Longfellow</string>
     <string name="settings_policy_proof_system_vega">Μόνο Vega</string>
+
+    <!-- Wallet design: header, bottom bar, home, menu, share, history, add credentials, scan Photo ID -->
+    <string name="header_my_wallet">Το πορτοφόλι μου</string>
+    <string name="header_wallet_of">Πορτοφόλι: %1$s</string>
+    <string name="nav_scan_qr">Σάρωση QR</string>
+    <string name="nav_menu">Μενού</string>
+    <string name="home_welcome_back">Καλώς ήρθατε ξανά.</string>
+    <string name="home_welcome_back_name">Καλώς ήρθατε ξανά, %1$s.</string>
+    <string name="home_attention_one">1 πιστοποιητικό χρειάζεται προσοχή</string>
+    <string name="home_attention_other">%1$d πιστοποιητικά χρειάζονται προσοχή</string>
+    <string name="home_manage_credentials">Διαχείριση πιστοποιητικών</string>
+    <string name="home_share_in_person">Κοινοποίηση διά ζώσης</string>
+    <string name="home_prompt_begin">Έναρξη</string>
+    <string name="home_prompt_get_started">Ξεκινήστε</string>
+    <string name="home_add_credentials_text">Δείτε τα πιστοποιητικά που προσφέρει το πορτοφόλι σας.</string>
+    <string name="home_prompt_dismiss">Κλείσιμο</string>
+    <string name="menu_history">Ιστορικό</string>
+    <string name="menu_about">Σχετικά</string>
+    <string name="menu_verify">Επαλήθευση πιστοποιητικού</string>
+    <string name="menu_logout">Αποσύνδεση</string>
+    <string name="share_title">Κοινοποίηση διά ζώσης</string>
+    <string name="share_intro">Κοινοποιήστε ένα πιστοποιητικό σε κοντινή συσκευή με έναν από τρεις τρόπους:</string>
+    <string name="share_tap_title">Άγγιγμα σε άλλη συσκευή</string>
+    <string name="share_tap_subtitle">Κοινοποιήστε δεδομένα ακουμπώντας τη συσκευή σας στη συσκευή του αιτούντος.</string>
+    <string name="share_show_qr_title">Εμφάνιση κωδικού QR</string>
+    <string name="share_show_qr_subtitle">Εμφανίστε τον κωδικό QR σας για σάρωση από τη συσκευή.</string>
+    <string name="share_scan_qr_subtitle">Σαρώστε τον κωδικό QR της συσκευής με το τηλέφωνό σας.</string>
+    <string name="share_show_qr_caption">Εμφανίστε τον κωδικό QR σας για σάρωση από τη συσκευή.</string>
+    <string name="share_show_qr_description">Κωδικός QR για σάρωση από την άλλη συσκευή</string>
+    <string name="share_tap_caption">Ακουμπήστε το τηλέφωνό σας στη συσκευή.</string>
+    <string name="share_bluetooth_denied">Απαιτείται άδεια Bluetooth για την αποστολή του πιστοποιητικού μετά τη σύνδεση της συσκευής.</string>
+    <string name="about_text">Το SIROS ID Wallet φυλάσσει τα ψηφιακά πιστοποιητικά σας στη συσκευή σας και σας επιτρέπει να τα κοινοποιείτε διαδικτυακά και διά ζώσης.</string>
+    <string name="about_version">Έκδοση</string>
+    <string name="about_license">Άδεια</string>
+    <string name="scan_qr_caption">Σαρώστε τον κωδικό QR της συσκευής με το τηλέφωνό σας.</string>
+    <string name="scan_qr_paste_label">Ή επικολλήστε τον σύνδεσμο</string>
+    <string name="scan_qr_paste_button">Συνέχεια</string>
+    <string name="history_today">Σήμερα</string>
+    <string name="history_yesterday">Χθες</string>
+    <string name="history_search">Αναζήτηση</string>
+    <string name="add_credential_option_photo_id_title">Σάρωση ταυτότητας με φωτογραφία</string>
+    <string name="add_credential_option_photo_id_subtitle">Χρησιμοποιήστε το διαβατήριό σας για να δημιουργήσετε ψηφιακή ταυτότητα με φωτογραφία.</string>
+    <string name="add_credential_available">Διαθέσιμα πιστοποιητικά</string>
+    <string name="idv_step_number">Βήμα %1$d</string>
+    <string name="idv_step_face">Σαρώστε το πρόσωπό σας για να δείξετε ότι είστε πραγματικός άνθρωπος</string>
+    <string name="idv_step_document">Σαρώστε το έγγραφό σας</string>
+    <string name="idv_step_nfc">Τοποθετήστε το τηλέφωνο πάνω στο έγγραφο για ανάγνωση του τσιπ NFC</string>
+    <string name="idv_before_title">Πριν ξεκινήσετε</string>
+    <string name="idv_before_passport">Έχετε έτοιμο το διαβατήριο</string>
+    <string name="idv_before_lighting">Εξασφαλίστε καλό φωτισμό</string>
+    <string name="idv_before_connection">Εξασφαλίστε καλή σύνδεση στο διαδίκτυο</string>
+    <string name="idv_why_title">Γιατί σάρωση προσώπου;</string>
+    <string name="idv_why_text">Χρησιμοποιούμε γρήγορη τρισδιάστατη επαλήθευση προσώπου για να αποτρέψουμε τη δόλια χρήση του εγγράφου σας. Τα βιομετρικά σας δεδομένα κρυπτογραφούνται και διαγράφονται μετά την επαλήθευση.</string>
+    <string name="idv_consent">Συναινώ στη βιομετρική επεξεργασία για την επαλήθευση ταυτότητας.</string>
+    <string name="idv_start">Έναρξη σάρωσης</string>
+    <string name="manage_title">Διαχείριση πιστοποιητικών</string>
+    <string name="manage_search">Αναζήτηση πιστοποιητικού...</string>
+    <string name="manage_filter_all">Όλα (%1$d)</string>
+    <string name="manage_filter_attention">Χρειάζεται προσοχή</string>
+    <string name="manage_none_need_attention">Κανένα πιστοποιητικό δεν χρειάζεται προσοχή.</string>
+    <string name="manage_no_match">Κανένα πιστοποιητικό δεν ταιριάζει με την αναζήτηση.</string>
 </resources>

@@ -18,7 +18,7 @@
     <string name="nav_settings">Configurações</string>
 
     <!-- Top bar -->
-    <string name="topbar_title">SIROS Wallet</string>
+    <string name="topbar_title">SIROS ID Wallet</string>
 
     <!-- Credentials tab -->
     <string name="credentials_welcome">Bem-vindo, %1$s</string>
@@ -342,4 +342,65 @@
     <string name="settings_policy_proof_system_default">Predefinição (ordem do catálogo)</string>
     <string name="settings_policy_proof_system_longfellow">Apenas Longfellow</string>
     <string name="settings_policy_proof_system_vega">Apenas Vega</string>
+
+    <!-- Wallet design: header, bottom bar, home, menu, share, history, add credentials, scan Photo ID -->
+    <string name="header_my_wallet">A minha carteira</string>
+    <string name="header_wallet_of">Carteira de %1$s</string>
+    <string name="nav_scan_qr">Ler QR</string>
+    <string name="nav_menu">Menu</string>
+    <string name="home_welcome_back">Bem-vindo de volta.</string>
+    <string name="home_welcome_back_name">Bem-vindo de volta, %1$s.</string>
+    <string name="home_attention_one">1 credencial requer atenção</string>
+    <string name="home_attention_other">%1$d credenciais requerem atenção</string>
+    <string name="home_manage_credentials">Gerir credenciais</string>
+    <string name="home_share_in_person">Partilhar presencialmente</string>
+    <string name="home_prompt_begin">Começar</string>
+    <string name="home_prompt_get_started">Começar</string>
+    <string name="home_add_credentials_text">Aceda às credenciais disponibilizadas pela sua carteira.</string>
+    <string name="home_prompt_dismiss">Fechar</string>
+    <string name="menu_history">Histórico</string>
+    <string name="menu_about">Sobre</string>
+    <string name="menu_verify">Verificar uma credencial</string>
+    <string name="menu_logout">Terminar sessão</string>
+    <string name="share_title">Partilhar presencialmente</string>
+    <string name="share_intro">Partilhe uma credencial com um dispositivo próximo de uma de três formas:</string>
+    <string name="share_tap_title">Encostar a outro dispositivo</string>
+    <string name="share_tap_subtitle">Partilhe dados encostando o seu dispositivo ao do requerente.</string>
+    <string name="share_show_qr_title">Mostrar código QR</string>
+    <string name="share_show_qr_subtitle">Mostre o seu código QR para o dispositivo ler.</string>
+    <string name="share_scan_qr_subtitle">Leia o código QR do dispositivo com o seu telemóvel.</string>
+    <string name="share_show_qr_caption">Mostre o seu código QR para o dispositivo ler.</string>
+    <string name="share_show_qr_description">Código QR para o outro dispositivo ler</string>
+    <string name="share_tap_caption">Encoste o telemóvel ao dispositivo.</string>
+    <string name="share_bluetooth_denied">É necessária a permissão de Bluetooth para enviar a credencial depois de o dispositivo se ligar.</string>
+    <string name="about_text">A SIROS ID Wallet guarda as suas credenciais digitais no seu dispositivo e permite partilhá-las online e presencialmente.</string>
+    <string name="about_version">Versão</string>
+    <string name="about_license">Licença</string>
+    <string name="scan_qr_caption">Leia o código QR do dispositivo com o seu telemóvel.</string>
+    <string name="scan_qr_paste_label">Ou cole a ligação</string>
+    <string name="scan_qr_paste_button">Continuar</string>
+    <string name="history_today">Hoje</string>
+    <string name="history_yesterday">Ontem</string>
+    <string name="history_search">Pesquisar</string>
+    <string name="add_credential_option_photo_id_title">Digitalizar documento com fotografia</string>
+    <string name="add_credential_option_photo_id_subtitle">Utilize o seu passaporte para criar um documento digital com fotografia.</string>
+    <string name="add_credential_available">Credenciais disponíveis</string>
+    <string name="idv_step_number">Passo %1$d</string>
+    <string name="idv_step_face">Digitalize o seu rosto para mostrar que é uma pessoa real</string>
+    <string name="idv_step_document">Digitalize o seu documento</string>
+    <string name="idv_step_nfc">Coloque o telemóvel sobre o documento para ler o chip NFC</string>
+    <string name="idv_before_title">Antes de começar</string>
+    <string name="idv_before_passport">Tenha o passaporte à mão</string>
+    <string name="idv_before_lighting">Tenha boa iluminação</string>
+    <string name="idv_before_connection">Tenha boa ligação à internet</string>
+    <string name="idv_why_title">Porquê a digitalização facial?</string>
+    <string name="idv_why_text">Utilizamos uma verificação facial 3D rápida para impedir o uso fraudulento do seu documento. Os seus dados biométricos são cifrados e eliminados após a verificação.</string>
+    <string name="idv_consent">Consinto o tratamento biométrico para verificação de identidade.</string>
+    <string name="idv_start">Iniciar digitalização</string>
+    <string name="manage_title">Gerir credenciais</string>
+    <string name="manage_search">Pesquisar credencial...</string>
+    <string name="manage_filter_all">Todas (%1$d)</string>
+    <string name="manage_filter_attention">Requer atenção</string>
+    <string name="manage_none_need_attention">Nenhuma credencial requer atenção.</string>
+    <string name="manage_no_match">Nenhuma credencial corresponde à pesquisa.</string>
 </resources>

@@ -2,6 +2,13 @@
 package org.siros.sdk.sample
 
 import android.Manifest
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.outlined.Contactless
+import androidx.compose.ui.graphics.Color
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -22,7 +29,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material3.AlertDialog
@@ -30,15 +36,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -94,6 +96,7 @@ fun ProximityEngagementScreen(
     filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
     evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     onBack: () -> Unit,
+    style: ProximityStyle = ProximityStyle.Qr,
 ) {
     val context = LocalContext.current
     val engagement = remember {
@@ -305,22 +308,9 @@ fun ProximityEngagementScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Tap to share") },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
-        },
-    ) { padding ->
+    // Chrome-free: the caller frames this screen (see WalletChrome) and owns Back.
+    Box(modifier = Modifier.fillMaxSize()) {
+        val padding = PaddingValues()
         when {
             result != null -> ProximityTerminalView(
                 success = result == true,
@@ -335,41 +325,42 @@ fun ProximityEngagementScreen(
             else -> Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = ScreenMargin, vertical = 24.dp),
             ) {
-                Text(
-                    text = "Scan with an ISO 18013-5 mdoc reader",
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Image(
-                    bitmap = qrBitmap.asImageBitmap(),
-                    contentDescription = "Device engagement QR code",
-                    modifier = Modifier.fillMaxWidth().height(280.dp),
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = if (blePermissionsDenied) {
-                        "Bluetooth permissions not granted - BLE data retrieval disabled " +
-                            "(QR/NFC engagement still active)."
-                    } else {
-                        "NFC is also active: tap this device against a reader's NFC antenna " +
-                            "for static handover instead of scanning the QR code. Both BLE data " +
-                            "retrieval modes are active - peripheral server mode is advertising, and " +
-                            "central client mode is scanning for a reader - a real reader can " +
-                            "complete a presentation via whichever mode it supports, if a stored " +
-                            "credential matches its requested docType."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+                // One engagement, two faces: the NFC handover and the QR code
+                // are both live whichever of them this screen presents.
+                when (style) {
+                    ProximityStyle.Qr -> BrandPanel(caption = stringResource(R.string.share_show_qr_caption)) {
+                        Image(
+                            bitmap = qrBitmap.asImageBitmap(),
+                            contentDescription = stringResource(R.string.share_show_qr_description),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                .background(Color.White, RoundedCornerShape(20.dp))
+                                .padding(20.dp),
+                        )
+                    }
+                    ProximityStyle.Nfc -> BrandPanel(caption = stringResource(R.string.share_tap_caption)) {
+                        Icon(
+                            Icons.Outlined.Contactless,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(72.dp),
+                        )
+                    }
+                }
+                if (blePermissionsDenied) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.share_bluetooth_denied),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
     }
@@ -423,7 +414,7 @@ private fun ProximityProgressView(step: String, onCancel: () -> Unit, modifier: 
         Text(
             text = stringResource(flowStepLabelRes(step)),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = SirosDesign.secondaryText,
         )
         Spacer(modifier = Modifier.height(32.dp))
         OutlinedButton(
@@ -580,7 +571,7 @@ private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: susp
                                         color = if (isEligible) {
                                             MaterialTheme.colorScheme.onSurface
                                         } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                            SirosDesign.secondaryText.copy(alpha = 0.5f)
                                         },
                                     )
                                     if (!isEligible) {

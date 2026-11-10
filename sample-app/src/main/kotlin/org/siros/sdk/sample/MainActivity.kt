@@ -1,5 +1,9 @@
 package org.siros.sdk.sample
 
+import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -287,6 +291,9 @@ private suspend fun openMdocBleTransport(
     }
 }
 
+/** The screens the bottom bar and the menu lead to. */
+enum class WalletDestination { Home, Menu, Credentials, Share, Settings, About }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
@@ -495,7 +502,20 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     // WSCA developer sub-screen state (read here so it's available in the `when` below)
     val showWscaDeveloper by viewModel.showWscaDeveloper.collectAsState()
     val showDevices by viewModel.showDevices.collectAsState()
-    var selectedTab by rememberSaveable { mutableIntStateOf(1) }
+    // Where the user is among the screens the Home / Scan QR / Menu bar and the
+    // menu lead to. The view-model's own flags (history, add credential, the
+    // scanner, ...) stack over whichever of these is current.
+    var destination by rememberSaveable { mutableStateOf(WalletDestination.Home) }
+    // The row the menu highlights: the screen it was opened from.
+    var menuOrigin by rememberSaveable { mutableStateOf<MenuItem?>(null) }
+    var needsAttentionOnly by rememberSaveable { mutableStateOf(false) }
+    var proximityStyle by rememberSaveable { mutableStateOf(ProximityStyle.Qr) }
+    var addCredentialsPromptDismissed by rememberSaveable { mutableStateOf(false) }
+    // The header names the wallet's owner on every screen, including the ones
+    // shown while a flow is running and the state is no longer Ready.
+    val readyDisplayName = (walletState as? WalletState.Ready)?.displayName
+    var lastDisplayName by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(readyDisplayName) { if (readyDisplayName != null) lastDisplayName = readyDisplayName }
 
     // Measured height of the custom bottom tab bar Row below, so the shared
     // SnackbarHost (which spans every sub-screen in the Box below - see its
@@ -509,6 +529,75 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     // render, no matter which sub-screen is active - previously each sub-screen
     // branch `return`ed before ever reaching a SnackbarHost, so post-login errors
     // (e.g. a failed credential issuance) were silently swallowed.
+    val closeOverlays = {
+        viewModel.closeActivate()
+        viewModel.closeIDVPreparation()
+        viewModel.closeAddCredential()
+        viewModel.closeHistory()
+    }
+    val go: (WalletDestination) -> Unit = {
+        closeOverlays()
+        destination = it
+    }
+    val currentMenuItem = when {
+        showHistory -> MenuItem.History
+        showAddCredential || showIDVPreparation -> MenuItem.AddCredentials
+        else -> when (destination) {
+            WalletDestination.Credentials -> MenuItem.ManageCredentials
+            WalletDestination.Share -> MenuItem.ShareInPerson
+            WalletDestination.Settings -> MenuItem.Settings
+            WalletDestination.About -> MenuItem.About
+            WalletDestination.Home, WalletDestination.Menu -> null
+        }
+    }
+    // The frame of every signed-in screen (see WalletChrome): `back` non-null
+    // swaps the three-way bar for a single Back button.
+    val chrome: @Composable (WalletNavItem?, Boolean, (() -> Unit)?, @Composable () -> Unit) -> Unit =
+        { selected, brandHeader, back, content ->
+            DisposableEffect(Unit) {
+                onDispose { bottomNavBarHeightPx = 0 }
+            }
+            WalletChrome(
+                displayName = readyDisplayName ?: lastDisplayName,
+                selected = selected,
+                onHome = { go(WalletDestination.Home) },
+                onScanQr = {
+                    closeOverlays()
+                    viewModel.openActivate()
+                },
+                onMenu = {
+                    if (currentMenuItem != null || destination != WalletDestination.Menu) menuOrigin = currentMenuItem
+                    go(WalletDestination.Menu)
+                },
+                onAccount = { go(WalletDestination.Settings) },
+                brandHeader = brandHeader,
+                onBack = back,
+                onBottomBarHeight = { bottomNavBarHeightPx = it },
+                content = content,
+            )
+        }
+
+    // System Back steps out of the stacked screens one at a time, then from
+    // any destination to Home. The full-screen states above the chrome
+    // (consent, credential detail, settings sub-screens) keep their own Back.
+    val chromeVisible = pendingPresentation == null && pendingTransactionConsent == null &&
+        pendingPresentationConsent == null && !showTransactionLog && selectedCredential == null &&
+        !showDevices && !showWscaDeveloper && flowStarting == null
+    androidx.activity.compose.BackHandler(
+        enabled = chromeVisible && (
+            activateMode != null || showIDVPreparation || showAddCredential || showHistory ||
+                (destination != WalletDestination.Home && walletState is WalletState.Ready)
+            ),
+    ) {
+        when {
+            showHistory -> viewModel.closeHistory()
+            activateMode != null -> viewModel.closeActivate()
+            showIDVPreparation -> viewModel.closeIDVPreparation()
+            showAddCredential -> viewModel.closeAddCredential()
+            else -> destination = WalletDestination.Home
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             // Presentation consent dialog — shown as a full-screen overlay
@@ -562,10 +651,9 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             )
 
             // Presentation history sub-screen
-            showHistory -> PresentationHistoryScreen(
-                history = presentationHistory,
-                onBack = viewModel::closeHistory,
-            )
+            showHistory -> chrome(null, false, null) {
+                PresentationHistoryScreen(history = presentationHistory)
+            }
 
             // Settings → Devices: this user's wallet instances (SID-AUTH-06).
             showDevices -> DevicesScreen(
@@ -618,19 +706,22 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 )
             }
 
-            // Activate sub-screen: QR scan and ISO 18013-5 proximity (BLE)
-            // engagement are two modes of one merged entry point - see
-            // WalletViewModel.ActivateMode's doc comment.
-            activateMode != null -> ActivateScreen(
-                mode = activateMode!!,
-                onQrScanned = viewModel::handleQrResult,
-                onUseProximityInstead = viewModel::switchToProximityEngagement,
-                getCredentials = viewModel::getCredentialsForProximity,
-                signPresentation = viewModel::signMdocPresentationForProximity,
-                filterEligible = viewModel::filterEligibleForProximity,
-                evaluateReaderTrust = viewModel::evaluateReaderTrustForProximity,
-                onBack = viewModel::closeActivate,
-            )
+            // Activate: the QR scanner, or an ISO 18013-5 device engagement
+            // presented as an NFC tap or a displayed QR code - see
+            // WalletViewModel.ActivateMode's doc comment. A full-attention
+            // screen: Back replaces the three-way bar.
+            activateMode != null -> chrome(null, false, viewModel::closeActivate) {
+                ActivateScreen(
+                    mode = activateMode!!,
+                    proximityStyle = proximityStyle,
+                    onQrScanned = viewModel::handleQrResult,
+                    getCredentials = viewModel::getCredentialsForProximity,
+                    signPresentation = viewModel::signMdocPresentationForProximity,
+                    filterEligible = viewModel::filterEligibleForProximity,
+                    evaluateReaderTrust = viewModel::evaluateReaderTrustForProximity,
+                    onBack = viewModel::closeActivate,
+                )
+            }
 
             // Transitional "starting…" sub-screen: shown the instant a QR-triggered
             // flow is handed off to the wallet/engine, until a real subsequent state
@@ -641,125 +732,123 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 onCancel = viewModel::cancelFlowStarting,
             )
 
-            // IDV (FaceTec) preparation/consent sub-screen - the real entry
-            // point for the "Scan Physical ID card" row below (previously
-            // wired straight to startIDV(), skipping this explainer/consent
-            // screen entirely) and, later, Home's PhotoID onboarding CTA.
-            showIDVPreparation -> IDVPreparationScreen(
-                onStartScan = viewModel::startIDV,
-                onBack = viewModel::closeIDVPreparation,
-            )
-
-            // Add credential sub-screen
-            showAddCredential -> {
-                Scaffold(
-                    topBar = {
-                        TopAppBar(
-                            title = { Text(stringResource(R.string.add_credential_title)) },
-                            colors = TopAppBarDefaults.topAppBarColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                titleContentColor = MaterialTheme.colorScheme.onSurface,
-                            ),
-                            navigationIcon = {
-                                IconButton(onClick = viewModel::closeAddCredential) {
-                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.nav_back))
-                                }
-                            },
-                        )
-                    },
-                ) { padding ->
-                    val pendingOffer by viewModel.pendingIssuanceOffer.collectAsState()
-                    AddCredentialScreen(
-                        offers = availableCredentials,
-                        isLoading = isLoadingOffers,
-                        isRefreshing = isRefreshingOffers,
-                        onOfferSelected = viewModel::selectCredentialOffer,
-                        pendingOffer = pendingOffer,
-                        onConfirmIssuance = viewModel::confirmIssuance,
-                        onCancelIssuance = viewModel::cancelIssuance,
-                        onStartIDV = viewModel::openIDVPreparation,
-                        // Same QR-scanning entry point Home's "Activate" ball
-                        // uses (see WalletViewModel.openActivate/ActivateMode's
-                        // doc comment) - promoted here to a peer top-level
-                        // option alongside Scan Passport, stacked over this
-                        // screen exactly like IDV above rather than
-                        // duplicating any scanning logic.
-                        onScanQr = viewModel::openActivate,
-                        // NOT openAddCredential, which now only reads the cache (#298 review): the empty-state Retry
-                        // button must actually fetch, or it does nothing during the cache's TTL window.
-                        onRetry = viewModel::retryAvailableCredentials,
-                        modifier = Modifier.padding(padding),
-                    )
-                }
+            // Scan Photo ID (FaceTec): what the scan involves and the consent
+            // that starts it - reached from Add Credentials and from Home's
+            // Photo ID prompt.
+            showIDVPreparation -> chrome(null, false, null) {
+                IDVPreparationScreen(
+                    onStartScan = viewModel::startIDV,
+                    onBack = viewModel::closeIDVPreparation,
+                )
             }
 
-            // Main app with bottom navigation
-            else -> Column(modifier = Modifier.fillMaxSize()) {
-        DisposableEffect(Unit) {
-            onDispose { bottomNavBarHeightPx = 0 }
-        }
-        // Top bar - hidden on the Home tab, which already shows the logo
-        // centered in its own body (see HomeScreen); showing it there too
-        // would just duplicate the branding.
-        if (selectedTab != 1) {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Image(
-                            painter = painterResource(R.drawable.ic_siros_mark),
-                            contentDescription = stringResource(R.string.topbar_logo_description),
-                            modifier = Modifier.size(28.dp),
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = stringResource(R.string.topbar_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                ),
-                actions = {
-                    // Credentials tab's add-credential entry point now that the
-                    // bottom nav's center slot is Home, not "+" - see HomeScreen
-                    // for the parallel (less prominent) entry point shown there
-                    // only when the wallet is empty.
-                    if (selectedTab == 0) {
-                        IconButton(onClick = viewModel::openAddCredential) {
-                            Icon(Icons.Filled.Add, stringResource(R.string.nav_add))
-                        }
-                    }
-                },
-            )
-        }
+            // Add Credentials
+            showAddCredential -> chrome(null, false, null) {
+                val pendingOffer by viewModel.pendingIssuanceOffer.collectAsState()
+                AddCredentialScreen(
+                    offers = availableCredentials,
+                    isLoading = isLoadingOffers,
+                    isRefreshing = isRefreshingOffers,
+                    onOfferSelected = viewModel::selectCredentialOffer,
+                    pendingOffer = pendingOffer,
+                    onConfirmIssuance = viewModel::confirmIssuance,
+                    onCancelIssuance = viewModel::cancelIssuance,
+                    onStartIDV = viewModel::openIDVPreparation,
+                    // The wallet's one QR scanner, stacked over this screen
+                    // exactly like Scan Photo ID above.
+                    onScanQr = viewModel::openActivate,
+                    // NOT openAddCredential, which now only reads the cache (#298 review): the empty-state Retry
+                    // button must actually fetch, or it does nothing during the cache's TTL window.
+                    onRetry = viewModel::retryAvailableCredentials,
+                )
+            }
 
-        // Recomputed whenever wallet state changes (new credential, key
-        // restored after unlock, etc.) so the credential list's "shadow"
-        // (renew-only) display state - see CredentialCard.isExhausted -
-        // never lags behind the signer's actual key inventory.
-        var credentialsTabAvailableKeyIds by remember { mutableStateOf(emptySet<String>()) }
-        LaunchedEffect(walletState) {
-            credentialsTabAvailableKeyIds = viewModel.currentAvailableKeyIds()
-        }
-
-        // Content area
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when (val state = walletState) {
-                is WalletState.Ready -> {
-                    when (selectedTab) {
-                        1 -> HomeScreen(
-                            hasCredentials = state.credentials.isNotEmpty(),
-                            onActivate = viewModel::openActivate,
-                            onActivateProximity = viewModel::switchToProximityEngagement,
-                            onAddCredential = viewModel::openAddCredential,
-                            showPhotoIdOnboarding = viewModel.showPhotoIdOnboarding.collectAsState().value &&
-                                !viewModel.hasPhotoIdCredential(state.credentials),
-                            onStartPhotoIdOnboarding = viewModel::openIDVPreparation,
-                        )
-                        2 -> SettingsTab(
+            // The destinations of the bottom bar and the menu
+            else -> {
+                // Recomputed whenever wallet state changes (new credential, key
+                // restored after unlock, etc.) so the credential list's "shadow"
+                // (renew-only) display state - see CredentialCard.isExhausted -
+                // never lags behind the signer's actual key inventory.
+                var credentialsTabAvailableKeyIds by remember { mutableStateOf(emptySet<String>()) }
+                var keyInventoryKnown by remember { mutableStateOf(false) }
+                LaunchedEffect(walletState) {
+                    credentialsTabAvailableKeyIds = viewModel.currentAvailableKeyIds()
+                    keyInventoryKnown = true
+                }
+                val credentialStatuses by viewModel.credentialStatuses.collectAsState()
+                val ready = walletState as? WalletState.Ready
+                chrome(
+                    when {
+                        ready == null -> null
+                        destination == WalletDestination.Home -> WalletNavItem.Home
+                        destination == WalletDestination.Menu -> WalletNavItem.Menu
+                        else -> null
+                    },
+                    ready != null && destination == WalletDestination.Home,
+                    null,
+                ) {
+                    when (val state = walletState) {
+                        is WalletState.Ready -> when (destination) {
+                            WalletDestination.Home -> {
+                                val attentionCount = remember(
+                                    state.credentials, presentationHistory, credentialsTabAvailableKeyIds,
+                                    credentialStatuses, keyInventoryKnown,
+                                ) {
+                                    org.siros.sdk.credentials.CredentialUtils
+                                        .groupForDisplay(state.credentials, presentationHistory, credentialsTabAvailableKeyIds)
+                                        .count { it.needsAttention(credentialStatuses, keyInventoryKnown) }
+                                }
+                                HomeScreen(
+                                    displayName = state.displayName,
+                                    attentionCount = attentionCount,
+                                    onShowAttention = {
+                                        needsAttentionOnly = true
+                                        go(WalletDestination.Credentials)
+                                    },
+                                    onManageCredentials = {
+                                        needsAttentionOnly = false
+                                        go(WalletDestination.Credentials)
+                                    },
+                                    onShareInPerson = { go(WalletDestination.Share) },
+                                    showAddCredentials = !addCredentialsPromptDismissed,
+                                    onAddCredentials = viewModel::openAddCredential,
+                                    onDismissAddCredentials = { addCredentialsPromptDismissed = true },
+                                    showPhotoIdOnboarding = viewModel.showPhotoIdOnboarding.collectAsState().value &&
+                                        !viewModel.hasPhotoIdCredential(state.credentials),
+                                    onStartPhotoIdOnboarding = viewModel::openIDVPreparation,
+                                )
+                            }
+                            WalletDestination.Menu -> MenuScreen(
+                                current = menuOrigin,
+                                onSelect = { item ->
+                                    when (item) {
+                                        MenuItem.ManageCredentials -> {
+                                            needsAttentionOnly = false
+                                            go(WalletDestination.Credentials)
+                                        }
+                                        MenuItem.ShareInPerson -> go(WalletDestination.Share)
+                                        MenuItem.History -> viewModel.openHistory()
+                                        MenuItem.AddCredentials -> viewModel.openAddCredential()
+                                        MenuItem.Settings -> go(WalletDestination.Settings)
+                                        MenuItem.About -> go(WalletDestination.About)
+                                        MenuItem.Verify -> onVerify()
+                                        MenuItem.Logout -> viewModel.disconnect()
+                                    }
+                                },
+                            )
+                            WalletDestination.Share -> ShareInPersonScreen(
+                                onTap = {
+                                    proximityStyle = ProximityStyle.Nfc
+                                    viewModel.switchToProximityEngagement()
+                                },
+                                onShowQr = {
+                                    proximityStyle = ProximityStyle.Qr
+                                    viewModel.switchToProximityEngagement()
+                                },
+                                onScanQr = viewModel::openActivate,
+                            )
+                            WalletDestination.About -> AboutScreen()
+                            WalletDestination.Settings -> SettingsTab(
                             state = state,
                             backendUrl = viewModel.backendUrl.collectAsState().value,
                             tenantId = viewModel.tenantId.collectAsState().value,
@@ -798,7 +887,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             walletPolicy = viewModel.walletPolicy.collectAsState().value,
                             onUpdateWalletPolicy = viewModel::updateWalletPolicy,
                         )
-                        else -> CredentialsTab(
+                            WalletDestination.Credentials -> CredentialsTab(
                             state = state,
                             presentationHistory = presentationHistory,
                             onCredentialClick = viewModel::openCredentialDetail,
@@ -806,101 +895,26 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             onDeleteCredential = { viewModel.deleteCredential(it.id) },
                             onAddCredential = viewModel::openAddCredential,
                             availableKeyIds = credentialsTabAvailableKeyIds,
-                            credentialStatuses = viewModel.credentialStatuses.collectAsState().value,
+                            credentialStatuses = credentialStatuses,
+                            needsAttentionOnly = needsAttentionOnly,
+                            onNeedsAttentionOnlyChange = { needsAttentionOnly = it },
+                            keyInventoryKnown = keyInventoryKnown,
                         )
+                        }
+                        is WalletState.FlowActive -> {
+                            FlowActiveView(
+                                state = state,
+                                onCancel = viewModel::cancelCurrentFlow,
+                                showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
+                            )
+                        }
+                        is WalletState.Error -> {
+                            ErrorView(message = state.message, onRetry = viewModel::disconnect)
+                        }
+                        else -> { /* Disconnected/Connecting handled above */ }
                     }
                 }
-                is WalletState.FlowActive -> {
-                    FlowActiveView(
-                        state = state,
-                        onCancel = viewModel::cancelCurrentFlow,
-                        showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
-                    )
-                }
-                is WalletState.Error -> {
-                    ErrorView(message = state.message, onRetry = viewModel::disconnect)
-                }
-                else -> { /* Disconnected/Connecting handled above */ }
             }
-        }
-
-        // Bottom tab bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .onGloballyPositioned { bottomNavBarHeightPx = it.size.height }
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable { selectedTab = 0 },
-            ) {
-                Icon(
-                    ImageVector.vectorResource(R.drawable.ic_wallet),
-                    stringResource(R.string.nav_credentials),
-                    tint = if (selectedTab == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    stringResource(R.string.nav_credentials),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (selectedTab == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable { selectedTab = 1 },
-            ) {
-                // The SIROS mark is two-tone (navy star on white), so it's
-                // rendered untinted via Image rather than Icon(tint = ...) -
-                // Icon would flatten both colors to one, per the other two
-                // tabs' single-color vector icons. Slightly larger than
-                // those, since this is the app's primary "home" anchor.
-                Image(
-                    painter = painterResource(R.drawable.ic_siros_mark),
-                    contentDescription = stringResource(R.string.nav_home),
-                    modifier = Modifier.size(32.dp),
-                )
-                Text(
-                    stringResource(R.string.nav_home),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (selectedTab == 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable { selectedTab = 2 },
-            ) {
-                Icon(
-                    Icons.Outlined.Settings,
-                    stringResource(R.string.nav_settings),
-                    tint = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    stringResource(R.string.nav_settings),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.clickable { onVerify() },
-            ) {
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = "Verify",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Verify",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
         }
 
         val bottomNavBarHeightDp = with(LocalDensity.current) { bottomNavBarHeightPx.toDp() }
@@ -989,7 +1003,7 @@ fun LoginScreen(
                             Icon(
                                 Icons.Outlined.Settings,
                                 contentDescription = "Settings",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = SirosDesign.secondaryText,
                             )
                         }
                     },
@@ -1023,12 +1037,12 @@ fun LoginScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Outlined.Info, contentDescription = "Backend info", modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    tint = SirosDesign.secondaryText)
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
                     if (showBackendInfo) backendUrl else stringResource(R.string.login_tagline),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
             }
             Spacer(modifier = Modifier.height(20.dp))
@@ -1207,7 +1221,7 @@ fun PreLoginSettingsSheet(
             Text(
                 "Configure before registering. Changes take effect on next connection.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = SirosDesign.secondaryText,
             )
 
             OutlinedTextField(
@@ -1254,7 +1268,7 @@ fun PreLoginSettingsSheet(
                     Text(
                         if (useWmpProtocol) "JSON-RPC 2.0 (WMP)" else "Legacy engine protocol",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = SirosDesign.secondaryText,
                     )
                 }
                 Switch(
@@ -1328,7 +1342,7 @@ fun PreLoginSettingsSheet(
                         "A dev stack with WMP_ENGINE=yes serves these at " +
                             "http://<host>:8780/wmp and /wmp/events.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = SirosDesign.secondaryText,
                     )
                 }
             }
@@ -1348,7 +1362,7 @@ fun PreLoginSettingsSheet(
                         "Skip the remote RICAL trust check and validate proximity readers " +
                             "only against the root certificate below.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = SirosDesign.secondaryText,
                     )
                 }
                 Switch(
@@ -1383,6 +1397,11 @@ fun CredentialsTab(
     onAddCredential: () -> Unit,
     modifier: Modifier = Modifier,
     availableKeyIds: Set<String> = emptySet(),
+    /** The "Needs attention" filter, held by the caller so Home's banner can open this screen on it. */
+    needsAttentionOnly: Boolean = false,
+    onNeedsAttentionOnlyChange: (Boolean) -> Unit = {},
+    /** False until [availableKeyIds] has been read - see [needsAttention]'s `countExhausted`. */
+    keyInventoryKnown: Boolean = true,
     /**
      * Why a credential cannot currently be used, by credential id - the SDK's
      * run of DIIP's Validity and Revocation Algorithm (see
@@ -1482,48 +1501,111 @@ fun CredentialsTab(
         )
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.credentials_welcome, state.displayName ?: stringResource(R.string.user_fallback_name)),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = if (grouped.size == 1) stringResource(R.string.credentials_count_one, 1)
-                   else stringResource(R.string.credentials_count_other, grouped.size),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (grouped.isEmpty()) {
-            EmptyCredentialsCard(onClick = onAddCredential)
-        } else {
-            // A partially-overlapping, interactive deck instead of a plain
-            // scrolling list: the phone screen has far more vertical than
-            // horizontal real estate, so a one-at-a-time horizontal pager
-            // wastes the available space, but a full-height list of cards
-            // asks for a lot of scrolling to see what's further down.
-            // CredentialStack owns its own scrolling (a card's drag and a
-            // plain vertical scroll are the same gesture, so it has to
-            // arbitrate between them itself) and its own reorder state, so
-            // there's nothing further to wrap it in here.
-            CredentialStack(
-                entries = grouped,
-                onCredentialClick = onCredentialClick,
-                onCredentialLongClick = { actionMenuFor = it },
-                onRenewCredential = onRenewCredential,
-                onDeleteCredential = { pendingDeleteFor = it },
-                modifier = Modifier.fillMaxSize(),
-                credentialStatuses = credentialStatuses,
-            )
+    var query by rememberSaveable { mutableStateOf("") }
+    val shown = remember(grouped, credentialStatuses, needsAttentionOnly, keyInventoryKnown, query) {
+        grouped.filter {
+            (!needsAttentionOnly || it.needsAttention(credentialStatuses, keyInventoryKnown)) &&
+                it.credential.matchesSearch(query)
         }
     }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = ScreenMargin)
+                .padding(top = 12.dp),
+        ) {
+            ScreenTitle(stringResource(R.string.manage_title))
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().testTag(MANAGE_SEARCH_TAG),
+                placeholder = {
+                    Text(stringResource(R.string.manage_search), color = SirosDesign.secondaryText)
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(4.dp),
+                colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = SirosDesign.altSurface,
+                    focusedContainerColor = SirosDesign.altSurface,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                ),
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterPill(
+                    label = stringResource(R.string.manage_filter_all, grouped.size),
+                    selected = !needsAttentionOnly,
+                    onClick = { onNeedsAttentionOnlyChange(false) },
+                    modifier = Modifier.testTag(MANAGE_FILTER_ALL_TAG),
+                )
+                FilterPill(
+                    label = stringResource(R.string.manage_filter_attention),
+                    selected = needsAttentionOnly,
+                    onClick = { onNeedsAttentionOnlyChange(true) },
+                    modifier = Modifier.testTag(MANAGE_FILTER_ATTENTION_TAG),
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            when {
+                grouped.isEmpty() -> EmptyCredentialsCard(onClick = onAddCredential)
+                shown.isEmpty() -> Text(
+                    text = stringResource(
+                        if (needsAttentionOnly && query.isBlank()) R.string.manage_none_need_attention else R.string.manage_no_match,
+                    ),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = SirosDesign.secondaryText,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+                // A partially-overlapping, interactive deck: CredentialStack
+                // owns its own scrolling (a card's drag and a plain vertical
+                // scroll are the same gesture, so it has to arbitrate between
+                // them itself) and its own reorder state, so there's nothing
+                // further to wrap it in here.
+                else -> CredentialStack(
+                    entries = shown,
+                    onCredentialClick = onCredentialClick,
+                    onCredentialLongClick = { actionMenuFor = it },
+                    onRenewCredential = onRenewCredential,
+                    onDeleteCredential = { pendingDeleteFor = it },
+                    modifier = Modifier.fillMaxSize(),
+                    credentialStatuses = credentialStatuses,
+                )
+            }
+        }
+        androidx.compose.material3.FloatingActionButton(
+            onClick = onAddCredential,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = ScreenMargin, bottom = 16.dp).size(64.dp),
+            shape = CircleShape,
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.add_credential_title), modifier = Modifier.size(32.dp))
+        }
+    }
+}
+
+const val MANAGE_SEARCH_TAG = "manage_search"
+const val MANAGE_FILTER_ALL_TAG = "manage_filter_all"
+const val MANAGE_FILTER_ATTENTION_TAG = "manage_filter_attention"
+
+/** One of the two filter pills over the credential list; the selected one is filled. */
+@Composable
+private fun FilterPill(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.bodyLarge,
+        fontWeight = FontWeight.Medium,
+        color = if (selected) Color.White else MaterialTheme.colorScheme.onBackground,
+        modifier = modifier
+            .clip(CircleShape)
+            .then(if (selected) Modifier.background(SirosChipSelected) else Modifier)
+            .clickable(role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+    )
 }
 
 @Composable
@@ -1532,7 +1614,7 @@ fun EmptyCredentialsCard(onClick: () -> Unit) {
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        colors = CardDefaults.cardColors(containerColor = SirosDesign.altSurface),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -1554,7 +1636,7 @@ fun EmptyCredentialsCard(onClick: () -> Unit) {
             Text(
                 text = stringResource(R.string.credentials_empty_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = SirosDesign.secondaryText,
                 textAlign = TextAlign.Center,
             )
         }
@@ -1650,7 +1732,7 @@ fun SettingsTab(
                     text = stringResource(R.string.settings_account_section),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 SettingsRow(stringResource(R.string.settings_signed_in_as), state.displayName ?: state.userId)
@@ -1684,7 +1766,7 @@ fun SettingsTab(
                         Text(
                             stringResource(R.string.settings_credential_details_description),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = SirosDesign.secondaryText,
                         )
                     }
                     Switch(
@@ -1707,7 +1789,7 @@ fun SettingsTab(
                         Text(
                             stringResource(R.string.settings_diagnostic_messages_description),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = SirosDesign.secondaryText,
                         )
                     }
                     Switch(
@@ -1730,7 +1812,7 @@ fun SettingsTab(
                         Text(
                             stringResource(R.string.settings_photo_id_onboarding_description),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = SirosDesign.secondaryText,
                         )
                     }
                     Switch(
@@ -1753,7 +1835,7 @@ fun SettingsTab(
                         Text(
                             stringResource(R.string.settings_transaction_data_description),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = SirosDesign.secondaryText,
                         )
                     }
                     Switch(
@@ -1789,7 +1871,7 @@ fun SettingsTab(
                     "Reader Trust (RICAL)",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
@@ -1803,7 +1885,7 @@ fun SettingsTab(
                             "Skip the remote RICAL trust check and validate proximity readers " +
                                 "only against the root certificate below.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = SirosDesign.secondaryText,
                         )
                     }
                     Switch(
@@ -1848,7 +1930,7 @@ fun SettingsTab(
                         Text(
                             stringResource(R.string.settings_vega_profiling_description),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = SirosDesign.secondaryText,
                         )
                     }
                     Switch(
@@ -1878,12 +1960,12 @@ fun SettingsTab(
                     stringResource(R.string.settings_credential_consumption_title),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
                 Text(
                     stringResource(R.string.settings_credential_consumption_description),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Column(Modifier.selectableGroup()) {
@@ -1936,13 +2018,13 @@ fun SettingsTab(
                     "Security Key (WSCD)",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
                 Text(
                     "Which secure key storage (software, R2PS remote HSM, or a FIDO2 security " +
                         "key) backs each credential, plus enrollment and developer diagnostics.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(
@@ -1971,12 +2053,12 @@ fun SettingsTab(
                     stringResource(R.string.devices_title),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
                 Text(
                     stringResource(R.string.devices_description),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = SirosDesign.secondaryText,
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(
@@ -2000,11 +2082,11 @@ fun SettingsTab(
         ) {
             Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
                 Text("Passkeys", style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    fontWeight = FontWeight.SemiBold, color = SirosDesign.secondaryText)
                 Spacer(modifier = Modifier.height(8.dp))
                 if (passkeys.isEmpty()) {
                     Text("No passkeys registered", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        color = SirosDesign.secondaryText)
                 } else {
                     passkeys.forEach { passkey ->
                         var editing by remember { mutableStateOf(false) }
@@ -2041,7 +2123,7 @@ fun SettingsTab(
                                     Text(
                                         "ID: ${passkey.credentialId.take(16)}...",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = SirosDesign.secondaryText,
                                     )
                                 }
                                 IconButton(onClick = { editing = true }) {
@@ -2103,7 +2185,7 @@ fun SettingsTab(
             ) {
                 Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
                     Text("Other Accounts", style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        fontWeight = FontWeight.SemiBold, color = SirosDesign.secondaryText)
                     Spacer(modifier = Modifier.height(8.dp))
                     state.cachedAccounts
                         .filter { it.accountId != "${tenantId}:${state.userId}" }
@@ -2115,7 +2197,7 @@ fun SettingsTab(
                                 Text(account.displayName, modifier = Modifier.weight(1f),
                                     style = MaterialTheme.typography.bodyMedium)
                                 Text(account.tenantId, style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    color = SirosDesign.secondaryText)
                                 if (onForgetAccount != null) {
                                     IconButton(onClick = { onForgetAccount(account.accountId) },
                                         modifier = Modifier.size(32.dp)) {
@@ -2213,7 +2295,7 @@ private fun SettingsRow(label: String, value: String) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = SirosDesign.secondaryText,
         )
         Text(
             text = value,
@@ -2263,7 +2345,7 @@ fun FlowStartingView(
         Text(
             text = stringResource(R.string.flow_starting_subtitle),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = SirosDesign.secondaryText,
             textAlign = TextAlign.Center,
         )
         Spacer(modifier = Modifier.height(32.dp))
@@ -2320,14 +2402,14 @@ fun FlowActiveView(
         Text(
             text = stringResource(flowStepLabelRes(state.status)),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = SirosDesign.secondaryText,
         )
         if (showDiagnosticMessages) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = stringResource(R.string.flow_diagnostic_label, state.status),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                color = SirosDesign.secondaryText.copy(alpha = 0.7f),
             )
         }
         Spacer(modifier = Modifier.height(32.dp))

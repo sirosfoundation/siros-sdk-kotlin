@@ -24,6 +24,9 @@ class LoginVerifierEntryTest {
                 tenantId = "default",
                 engineUrl = "",
                 useWmpProtocol = false,
+                wmpEngineMode = org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS,
+                wmpSendUrl = "",
+                wmpSseUrl = "",
                 zkCircuitUrls = emptyList(),
                 showPreLoginSettings = false,
                 isLoading = false,
@@ -37,6 +40,7 @@ class LoginVerifierEntryTest {
                 onUpdateTenantId = {},
                 onUpdateEngineUrl = {},
                 onUpdateUseWmpProtocol = {},
+                onUpdateWmpEngineMode = { _, _, _ -> },
                 onUpdateZkCircuitUrls = {},
             )
         }
