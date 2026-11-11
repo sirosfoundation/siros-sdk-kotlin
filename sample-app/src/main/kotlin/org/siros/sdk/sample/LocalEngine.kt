@@ -72,6 +72,18 @@ class OkHttpEngineHttp(
             // response if it exceeded the limit (the engine's own port
             // rule, applied on the app's side of the adapter).
             val bytes = executed.body?.bytes() ?: ByteArray(0)
+            // The refusal's own words: the engine surfaces only the status
+            // ("response_uri answered 400"), and the reason - which of the
+            // verifier's validations refused - rides the body (found driving
+            // the GDC presentation: the 400's error_description named the
+            // exact check, invisible without this).
+            if (executed.code !in 200..299) {
+                timber.log.Timber.w(
+                    "EngineHttp: %s %s answered %d: %.400s",
+                    request.method, request.url, executed.code,
+                    String(bytes, Charsets.UTF_8),
+                )
+            }
             if (bytes.size.toULong() > request.maxResponseBytes) {
                 throw SdkException.Transport("response exceeded the engine's declared limit")
             }

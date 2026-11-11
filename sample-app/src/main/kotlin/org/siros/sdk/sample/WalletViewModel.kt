@@ -1174,6 +1174,41 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 }
             }
 
+            override suspend fun onConsentRequested(
+                flowId: String,
+                purpose: String?,
+                requestedClaims: List<String>,
+            ): Boolean {
+                // The WMP OID4VP consent: the same on-screen YES/NO the
+                // circuit_zk presentation consent rides, over the engine's
+                // ask (the purpose and the claims the verifier will receive).
+                // The listener's default DECLINES (fail closed) - found
+                // on-device: without this override every WMP presentation's
+                // consent was declined in 0.3s and no dialog was ever shown.
+                val request = org.siros.sdk.credentials.PresentationConsentRequest(
+                    verifier = org.siros.sdk.credentials.ConsentVerifier(
+                        label = purpose ?: "the verifier",
+                    ),
+                    entries = listOf(
+                        org.siros.sdk.credentials.ConsentEntry(
+                            credential = org.siros.sdk.credentials.CredentialRef(
+                                name = null,
+                                issuer = null,
+                            ),
+                            items = requestedClaims.map {
+                                org.siros.sdk.credentials.ConsentItem.Claim(it)
+                            },
+                        ),
+                    ),
+                    // The engine verified the request object's x5c signature
+                    // before this ask (S1's own parser check) - stated, not
+                    // assumed.
+                    requestSigned = true,
+                    locale = java.util.Locale.getDefault().toLanguageTag(),
+                )
+                return presentationConsentGate.handler.confirm(request)
+            }
+
             override fun onAuthorizationRequired(
                 flowId: String,
                 authorizationUrl: String,
