@@ -78,6 +78,24 @@ dependencyResolutionManagement {
                 ).getOrElse("")
             }
         }
+        // siros-wallet-core AAR — the LOCAL WMP engine's native library
+        // (libengine_adapter_sdk.so, one build per release tag). Published by
+        // siros-wallet-core's release.yml per tag; its own GH Packages Maven
+        // for the same per-repo-scoping reason as the entries below. The
+        // vendored UniFFI bindings (sdk/transport) must match the AAR's
+        // version — both come from the same wallet-core release.
+        maven {
+            name = "GitHubPackagesWalletCore"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/siros-wallet-core")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
         // siros-verifier-core proximity Reader AAR. Local PR builds use
         // -PsirosNativeRepo=<directory> like the other native dependencies.
         maven {

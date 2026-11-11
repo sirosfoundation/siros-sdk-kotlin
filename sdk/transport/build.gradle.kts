@@ -25,6 +25,11 @@ android {
 }
 
 dependencies {
+    // The wallet-core AAR's version: MUST match the vendored UniFFI bindings
+    // (uniffi/engine_adapter_sdk) - both come from the same wallet-core
+    // release, bump them together (issue #396).
+    val walletCoreVersion: String = providers.gradleProperty("walletCoreVersion").getOrElse("0.2.1")
+
     // `api`, not `implementation`: FlowStartMessage.authorizationDetails is a
     // public field of type AuthorizationDetail, so a consumer of this module
     // needs that type on its compile classpath.
@@ -33,6 +38,18 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.okhttp)
     implementation(libs.timber)
+    // The LOCAL WMP engine's native library (libengine_adapter_sdk.so) -
+    // published per release tag by siros-wallet-core's release.yml, consumed
+    // here so the in-process engine mode ships its .so with the SDK build
+    // instead of the hand-built jniLibs workaround (issue #396). The version
+    // MUST match the vendored UniFFI bindings (uniffi/engine_adapter_sdk):
+    // both come from the same wallet-core release - bump them together.
+    implementation("org.siros:siros-wallet-core:$walletCoreVersion") {
+        // The AAR's POM carries JNA as a plain jar; this SDK consumes
+        // net.java.dev.jna:jna:5.19.1@aar (sdk/keystore's wscd wiring) -
+        // without the exclude the two packagings duplicate every class.
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
