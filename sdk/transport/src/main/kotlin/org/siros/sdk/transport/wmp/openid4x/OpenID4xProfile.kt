@@ -302,6 +302,15 @@ data class SignSubFlowParams(
     /** PoP/proof `iss` (the flow's OAuth client_id) for `request_attestation` and `sign_client_auth`. */
     val issuer: String? = null,
     /**
+     * The mDoc session transcript's response_uri and the request-signing
+     * leaf's JWK thumbprint - both members of the engine's vp ask
+     * (`EngineVpParams`), carried through so an mDoc presentation on this
+     * transport can build the same OpenID4VP transcript the legacy
+     * transport's handleSignRequest builds.
+     */
+    @SerialName("response_uri") val responseUri: String? = null,
+    @SerialName("verifier_jwk_thumbprint") val verifierJwkThumbprint: String? = null,
+    /**
      * `sign_client_auth` parameters (go-wallet-backend#317), same names and
      * meaning as the legacy transport's `SignRequestParams`: [htm]/[htu] ask
      * for a DPoP proof (with [dpopNonce] and [ath] claims), [keyId] names the

@@ -19928,6 +19928,50 @@ class SirosWalletTest {
     }
 
     @Test
+    fun openid4vpStartParams_extractsTheLinksOwnQueryMembers() = runTest(dispatcher) {
+        // Found on-device: startPresentation wrapped the WHOLE deep link as
+        // the request_uri member, so the engine tried to FETCH its own
+        // openid4vp:// URI as the request object (the crash, then the
+        // reasoned refusal once the engine's fetch guard landed). The
+        // engine's params contract is "the query members" - this builds
+        // them from the link.
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "supervisorJob" to SupervisorJob(),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+            "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CircuitZkProver> { error("not initialised") },
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val fn = wallet::class.declaredMemberFunctions.first { it.name == "openid4vpStartParams" }
+        fn.isAccessible = true
+        fun paramsOf(link: String): kotlinx.serialization.json.JsonObject =
+            fn.call(wallet, link) as kotlinx.serialization.json.JsonObject
+        fun stringOf(o: kotlinx.serialization.json.JsonObject, member: String): String? =
+            (o[member] as? kotlinx.serialization.json.JsonPrimitive)?.content
+
+        // The host-less spec form: the members, percent-decoded.
+        val spec = paramsOf("openid4vp://?client_id=x509_hash%3Aabc&request_uri=https%3A%2F%2Fverifier.example%2Fr")
+        assertEquals("x509_hash:abc", stringOf(spec, "client_id"))
+        assertEquals("https://verifier.example/r", stringOf(spec, "request_uri"))
+
+        // The host'd form (a verifier's host before the query): the query
+        // is everything after the first `?` - the host is not a member.
+        val hosted = paramsOf("openid4vp://cb?request_uri=https%3A%2F%2Fv%2Fr")
+        assertEquals("https://v/r", stringOf(hosted, "request_uri"))
+
+        // By value: the inline request object rides as its own member.
+        val byValue = paramsOf("openid4vp://?request=eyJhbGciOiJFUzI1NiJ9.e30.AA")
+        assertEquals("eyJhbGciOiJFUzI1NiJ9.e30.AA", stringOf(byValue, "request"))
+
+        // A bare reference (no query): the request_uri itself.
+        val bare = paramsOf("https://verifier.example/request-object")
+        assertEquals("https://verifier.example/request-object", stringOf(bare, "request_uri"))
+    }
+
+    @Test
     fun engineProviders_failOverWhenALocalFactoryThrowsAnErrorNotAnException() = runTest(dispatcher) {
         // Found on the device: a LOCAL provider's factory can throw an
         // ERROR, not an Exception (the UnsatisfiedLinkError of an engine
