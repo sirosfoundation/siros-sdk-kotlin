@@ -38,12 +38,24 @@ class OkHttpEngineHttp(
     private val client: OkHttpClient = OkHttpClient.Builder().build(),
 ) : uniffi.engine_adapter_sdk.HttpClient {
 
+    private companion object {
+        /** The methods OkHttp requires a RequestBody for, even an empty one. */
+        private val BODY_METHODS = setOf("POST", "PUT", "PATCH")
+    }
+
+
     override suspend fun send(request: HttpRequest): HttpResponse = withContext(Dispatchers.IO) {
         val contentType = request.headers
             .firstOrNull { it.name.equals("content-type", ignoreCase = true) }
             ?.value
             ?.toMediaTypeOrNull()
+        // An EMPTY body on a body-method is not a missing one: OkHttp refuses
+        // POST/PUT/PATCH without a RequestBody ("method POST must have a
+        // request body") while the engine's own server-side port (reqwest)
+        // sends empty-bodied POSTs fine - found at the GDC token exchange,
+        // where the throw killed the flow (the adapter must never throw).
         val body = request.body.takeIf { it.isNotEmpty() }?.toRequestBody(contentType)
+            ?: if (request.method.uppercase() in BODY_METHODS) ByteArray(0).toRequestBody(contentType) else null
         val builder = Request.Builder()
             .url(request.url)
             .method(request.method, body)

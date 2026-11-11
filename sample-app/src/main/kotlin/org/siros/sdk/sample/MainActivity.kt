@@ -461,6 +461,9 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
         val zkCircuitUrlsState by viewModel.zkCircuitUrls.collectAsState()
         val preferLocalReaderTrustEvaluationState by viewModel.preferLocalReaderTrustEvaluation.collectAsState()
         val readerTrustRootCertificatePemState by viewModel.readerTrustRootCertificatePem.collectAsState()
+        val engineLocalEnabledState by viewModel.engineLocalEnabled.collectAsState()
+        val engineRemoteEnabledState by viewModel.engineRemoteEnabled.collectAsState()
+        val engineTenantTokensState by viewModel.engineTenantTokens.collectAsState()
         LoginScreen(
             cachedAccounts = cachedAccounts,
             backendUrl = backendUrlState,
@@ -473,6 +476,9 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             zkCircuitUrls = zkCircuitUrlsState,
             preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluationState,
             readerTrustRootCertificatePem = readerTrustRootCertificatePemState,
+            engineLocalEnabled = engineLocalEnabledState,
+            engineRemoteEnabled = engineRemoteEnabledState,
+            engineTenantTokens = engineTenantTokensState,
             showPreLoginSettings = BuildConfig.SHOW_PRE_LOGIN_SETTINGS,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
@@ -489,6 +495,9 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             onUpdateZkCircuitUrls = viewModel::updateZkCircuitUrls,
             onUpdatePreferLocalReaderTrustEvaluation = viewModel::updatePreferLocalReaderTrustEvaluation,
             onUpdateReaderTrustRootCertificatePem = viewModel::updateReaderTrustRootCertificatePem,
+            onUpdateEngineLocalEnabled = viewModel::updateEngineLocalEnabled,
+            onUpdateEngineRemoteEnabled = viewModel::updateEngineRemoteEnabled,
+            onUpdateEngineTenantTokens = viewModel::updateEngineTenantTokens,
         )
         return
     }
@@ -959,6 +968,9 @@ fun LoginScreen(
     zkCircuitUrls: List<String>,
     preferLocalReaderTrustEvaluation: Boolean = false,
     readerTrustRootCertificatePem: String = "",
+    engineLocalEnabled: Boolean = true,
+    engineRemoteEnabled: Boolean = true,
+    engineTenantTokens: Boolean = true,
     showPreLoginSettings: Boolean,
     isLoading: Boolean,
     snackbarHostState: SnackbarHostState,
@@ -975,6 +987,9 @@ fun LoginScreen(
     onUpdateZkCircuitUrls: (List<String>) -> Unit,
     onUpdatePreferLocalReaderTrustEvaluation: (Boolean) -> Unit = {},
     onUpdateReaderTrustRootCertificatePem: (String) -> Unit = {},
+    onUpdateEngineLocalEnabled: (Boolean) -> Unit = {},
+    onUpdateEngineRemoteEnabled: (Boolean) -> Unit = {},
+    onUpdateEngineTenantTokens: (Boolean) -> Unit = {},
 ) {
     var showRegister by remember { mutableStateOf(false) }
     var showOtherLogin by remember { mutableStateOf(false) }
@@ -994,6 +1009,9 @@ fun LoginScreen(
             zkCircuitUrls = zkCircuitUrls,
             preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation,
             readerTrustRootCertificatePem = readerTrustRootCertificatePem,
+            engineLocalEnabled = engineLocalEnabled,
+            engineRemoteEnabled = engineRemoteEnabled,
+            engineTenantTokens = engineTenantTokens,
             onUpdateBackendUrl = onUpdateBackendUrl,
             onUpdateTenantId = onUpdateTenantId,
             onUpdateEngineUrl = onUpdateEngineUrl,
@@ -1002,6 +1020,9 @@ fun LoginScreen(
             onUpdateZkCircuitUrls = onUpdateZkCircuitUrls,
             onUpdatePreferLocalReaderTrustEvaluation = onUpdatePreferLocalReaderTrustEvaluation,
             onUpdateReaderTrustRootCertificatePem = onUpdateReaderTrustRootCertificatePem,
+            onUpdateEngineLocalEnabled = onUpdateEngineLocalEnabled,
+            onUpdateEngineRemoteEnabled = onUpdateEngineRemoteEnabled,
+            onUpdateEngineTenantTokens = onUpdateEngineTenantTokens,
             onDismiss = { showSettingsSheet = false },
         )
     }
@@ -1195,6 +1216,9 @@ fun PreLoginSettingsSheet(
     zkCircuitUrls: List<String>,
     preferLocalReaderTrustEvaluation: Boolean = false,
     readerTrustRootCertificatePem: String = "",
+    engineLocalEnabled: Boolean = true,
+    engineRemoteEnabled: Boolean = true,
+    engineTenantTokens: Boolean = true,
     onUpdateBackendUrl: (String) -> Unit,
     onUpdateTenantId: (String) -> Unit,
     onUpdateEngineUrl: (String) -> Unit,
@@ -1203,6 +1227,9 @@ fun PreLoginSettingsSheet(
     onUpdateZkCircuitUrls: (List<String>) -> Unit,
     onUpdatePreferLocalReaderTrustEvaluation: (Boolean) -> Unit = {},
     onUpdateReaderTrustRootCertificatePem: (String) -> Unit = {},
+    onUpdateEngineLocalEnabled: (Boolean) -> Unit = {},
+    onUpdateEngineRemoteEnabled: (Boolean) -> Unit = {},
+    onUpdateEngineTenantTokens: (Boolean) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     var editBackendUrl by remember { mutableStateOf(backendUrl) }
@@ -1359,6 +1386,67 @@ fun PreLoginSettingsSheet(
                             "http://<host>:8780/wmp and /wmp/events.",
                         style = MaterialTheme.typography.bodySmall,
                         color = SirosDesign.secondaryText,
+                    )
+                }
+
+                // The prioritized engine providers: each connected in order
+                // (retries each) until one answers - the connected session is
+                // pinned to it. An empty enabled set keeps the single-mode
+                // shape above (the mode picker).
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Local engine first", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "The AAR's engine core on this device; trust via the backend PDP.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SirosDesign.secondaryText,
+                        )
+                    }
+                    Switch(
+                        checked = engineLocalEnabled,
+                        onCheckedChange = onUpdateEngineLocalEnabled,
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Remote engine (failover)", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "The HTTP+SSE binding; needs the URLs above.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SirosDesign.secondaryText,
+                        )
+                    }
+                    Switch(
+                        checked = engineRemoteEnabled,
+                        onCheckedChange = onUpdateEngineRemoteEnabled,
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Tenant engine tokens", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "The remote bearer kind: the AS's pseudonymous tenant token " +
+                                "(ENGINE_PRINCIPAL_MODE=tenant, the deployed shape) or your " +
+                                "own backend token (a user-mode engine).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SirosDesign.secondaryText,
+                        )
+                    }
+                    Switch(
+                        checked = engineTenantTokens,
+                        onCheckedChange = onUpdateEngineTenantTokens,
                     )
                 }
             }
