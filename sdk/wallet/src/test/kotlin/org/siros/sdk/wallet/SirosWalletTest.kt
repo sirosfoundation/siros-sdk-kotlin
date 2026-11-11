@@ -16351,6 +16351,93 @@ class SirosWalletTest {
     }
 
     @Test
+    fun wmpFlowComplete_storesEveryCredentialOfABatch_neverSuccessWithNothing() = runTest(dispatcher) {
+        // Issue #398: a `credentials[]` completion is the BATCH shape - the
+        // pre-fix handler metadata-checked the entries and discarded them,
+        // the UI reporting success over lost credentials. Every entry must
+        // be stored, one StoredCredential each; a failing entry is an
+        // onFlowError, never a silent loss.
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = org.siros.sdk.keystore.JweKeystore()
+        keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "d", credentials = emptyList())),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            // newWallet's default advertises the seed for every issuer - a
+            // plaintext batch is then the downgrade refusal. This test is
+            // about the PLAIN batch store: nothing advertised.
+            "secretSeedAdvertised" to advertisedSelections(false),
+        )
+        val errors = mutableListOf<String>()
+        wallet.setEventListener(object : WalletEventListener {
+            override fun onFlowComplete(flowId: String, redirectUri: String?) { errors.clear() } // unused
+            override fun onFlowError(flowId: String, errorMessage: String, redirectUri: String?) { errors.add(errorMessage) }
+            override suspend fun onCredentialSelectionRequired(request: org.siros.sdk.wallet.PresentationRequest): List<Long> = emptyList()
+        })
+        // ssc-empty: the default sdJwt carries ssc claims that demand the seed
+        // metadata the bare frame cannot carry (the deliveredScenario fixtures'
+        // identical rule) - this test is about the batch STORE, not the seed.
+        val sd1 = NymTestCredentials.sdJwt(sscValues = emptyList())
+        val sd2 = NymTestCredentials.sdJwt(sscValues = emptyList())
+        val batch = kotlinx.serialization.json.buildJsonObject {
+            put(
+                "credentials",
+                kotlinx.serialization.json.JsonArray(
+                    listOf(
+                        kotlinx.serialization.json.buildJsonObject {
+                            put("format", JsonPrimitive("dc+sd-jwt"))
+                            put("credential", JsonPrimitive(sd1))
+                            put("notification_id", JsonPrimitive("n1"))
+                        },
+                        kotlinx.serialization.json.buildJsonObject {
+                            put("format", JsonPrimitive("dc+sd-jwt"))
+                            put("credential", JsonPrimitive(sd2))
+                            put("notification_id", JsonPrimitive("n2"))
+                        },
+                    ),
+                ),
+            )
+            // A well-formed credential_metadata (the wellFormedDeliveredMetadata
+            // fixture's identical shape): a plain delivery the gate accepts.
+            put(
+                "credential_metadata",
+                Json.parseToJsonElement("""{"display":[{"name":"Nym"}],"claims":[{"path":["a"]}]}"""),
+            )
+        }
+        wallet.onWmpFlowCompleteForTest("flow-batch", batch)
+
+        assertEquals("a stored batch is a success, not an error: $errors", 0, errors.size)
+        val stored = store.getAll()
+        assertEquals("both entries of the batch are stored", 2, stored.size)
+        assertEquals(setOf(sd1, sd2), stored.map { it.raw }.toSet())
+    }
+
+    @Test
+    fun wmpFlowComplete_refusesAnEmptyBatchAsNoCredential() = runTest(dispatcher) {
+        val store = FakeCredentialStore(mutableListOf())
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "d", credentials = emptyList())),
+            "credentialStore" to store,
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "secretSeedAdvertised" to advertisedSelections(false),
+        )
+        var errored: String? = null
+        wallet.setEventListener(object : WalletEventListener {
+            override fun onFlowError(flowId: String, errorMessage: String, redirectUri: String?) { errored = errorMessage }
+            override suspend fun onCredentialSelectionRequired(request: org.siros.sdk.wallet.PresentationRequest): List<Long> = emptyList()
+        })
+        val emptyBatch = kotlinx.serialization.json.buildJsonObject {
+            put("credentials", kotlinx.serialization.json.JsonArray(emptyList()))
+        }
+        wallet.onWmpFlowCompleteForTest("flow-empty", emptyBatch)
+        assertTrue("an empty batch is the no-credential error, not success", errored != null)
+        assertEquals(0, store.getAll().size)
+    }
+
+    @Test
     fun wmpFlowComplete_refusesMalformedAndUnencryptedSeedMetadata_withItsNotificationIds() = runTest(dispatcher) {
         val flowId = "flow-wmp"
         val seedBody = deliveredAuxBody()
@@ -17250,13 +17337,17 @@ class SirosWalletTest {
         // ... and is an error, not a success: a key was offered.
         verify(exactly = 0) { listener.onFlowComplete("flow-b", any()) }
         verify(exactly = 1) { listener.onFlowError("flow-b", match { it.contains("answered in clear") }, any()) }
-        // flow-a: an encrypted completion is processed against the opened response, and only then released.
+        // flow-a: an encrypted completion is READ against the opened response (the key is
+        // consumed by the read, below) - and the garbage credential inside this fixture's
+        // response is then an ERROR, never a silent success-with-nothing-stored (the
+        // pre-#398 handler reported completion over it; issue #398's contract: a
+        // credential that cannot be stored refuses the completion loudly).
         val encrypted = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt"}],"credential_response_encrypted":true}""").jsonObject
         runBlocking { method.callSuspend(wallet, null, "flow-a", encrypted, 0) }
-        verify(exactly = 1) { listener.onFlowComplete("flow-a", any()) }
-        verify(exactly = 0) { listener.onFlowError("flow-a", any(), any()) }
+        verify(exactly = 0) { listener.onFlowComplete("flow-a", any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-a", any(), any()) }
         assertFalse(blind.holdsKey("flow-a"))
-        assertEquals(null, blind.take("flow-a"))
+        assertEquals("the response was read (the key consumed by the read)", null, blind.take("flow-a"))
     }
 
     @Test
@@ -17643,10 +17734,13 @@ class SirosWalletTest {
     @Test
     fun wmpSignPresentation_overDirectPostJwt_answersWithTheEncryptedResponse() = runTest(dispatcher) {
         val keystore = mockk<KeystoreManager>(relaxed = true)
-        coEvery { keystore.signPresentation(any(), any(), any()) } returns "secret vp token!"
+        coEvery { keystore.signVpToken(credential = any(), disclosedClaims = any(), nonce = any(), audience = any(), kid = any()) } returns "secret vp token!"
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
             "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(
+                mutableListOf(StoredCredential(id = 7L, format = "dc+sd-jwt", raw = "raw-7", batchId = 1L, instanceId = 0)),
+            ),
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
         )
         val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
@@ -19928,6 +20022,50 @@ class SirosWalletTest {
     }
 
     @Test
+    fun openid4vpStartParams_extractsTheLinksOwnQueryMembers() = runTest(dispatcher) {
+        // Found on-device: startPresentation wrapped the WHOLE deep link as
+        // the request_uri member, so the engine tried to FETCH its own
+        // openid4vp:// URI as the request object (the crash, then the
+        // reasoned refusal once the engine's fetch guard landed). The
+        // engine's params contract is "the query members" - this builds
+        // them from the link.
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "supervisorJob" to SupervisorJob(),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+            "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CircuitZkProver> { error("not initialised") },
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val fn = wallet::class.declaredMemberFunctions.first { it.name == "openid4vpStartParams" }
+        fn.isAccessible = true
+        fun paramsOf(link: String): kotlinx.serialization.json.JsonObject =
+            fn.call(wallet, link) as kotlinx.serialization.json.JsonObject
+        fun stringOf(o: kotlinx.serialization.json.JsonObject, member: String): String? =
+            (o[member] as? kotlinx.serialization.json.JsonPrimitive)?.content
+
+        // The host-less spec form: the members, percent-decoded.
+        val spec = paramsOf("openid4vp://?client_id=x509_hash%3Aabc&request_uri=https%3A%2F%2Fverifier.example%2Fr")
+        assertEquals("x509_hash:abc", stringOf(spec, "client_id"))
+        assertEquals("https://verifier.example/r", stringOf(spec, "request_uri"))
+
+        // The host'd form (a verifier's host before the query): the query
+        // is everything after the first `?` - the host is not a member.
+        val hosted = paramsOf("openid4vp://cb?request_uri=https%3A%2F%2Fv%2Fr")
+        assertEquals("https://v/r", stringOf(hosted, "request_uri"))
+
+        // By value: the inline request object rides as its own member.
+        val byValue = paramsOf("openid4vp://?request=eyJhbGciOiJFUzI1NiJ9.e30.AA")
+        assertEquals("eyJhbGciOiJFUzI1NiJ9.e30.AA", stringOf(byValue, "request"))
+
+        // A bare reference (no query): the request_uri itself.
+        val bare = paramsOf("https://verifier.example/request-object")
+        assertEquals("https://verifier.example/request-object", stringOf(bare, "request_uri"))
+    }
+
+    @Test
     fun engineProviders_failOverWhenALocalFactoryThrowsAnErrorNotAnException() = runTest(dispatcher) {
         // Found on the device: a LOCAL provider's factory can throw an
         // ERROR, not an Exception (the UnsatisfiedLinkError of an engine
@@ -20126,8 +20264,12 @@ class SirosWalletTest {
     fun aPresentationAsk_buildsAndSignsTheVpTokenForTheMatchedSelections() = runTest(dispatcher) {
         val keystore = mockk<KeystoreManager>(relaxed = true)
         every { keystore.isUnlocked } returns false
+        // The presentation ask now signs PER CREDENTIAL (issue #394's batch
+        // fix): the selected credential must be in the store, and the signer
+        // of record is signVpToken (the SD-JWT + KB-JWT branch) - not the
+        // pre-fix credential-less signPresentation.
         coEvery {
-            keystore.signPresentation(nonce = "n1", audience = "verifier", credentialIds = emptyList(), kid = null)
+            keystore.signVpToken(credential = any(), disclosedClaims = any(), nonce = "n1", audience = "verifier", kid = null)
         } returns "vp.jwt"
         val wallet = typedAskWallet(
             keystore = keystore,
@@ -20137,6 +20279,10 @@ class SirosWalletTest {
                     "p-8" to ConsentRecord(listOf(ConsentedSelection("q1", "7", setOf("given_name")))),
                 ),
                 "zkPreparationsByFlow" to java.util.concurrent.ConcurrentHashMap<String, Any>(),
+                // The store carries the selected credential (a dc+sd-jwt: the signVpToken branch).
+                "credentialStore" to FakeCredentialStore(
+                    mutableListOf(StoredCredential(id = 7L, format = "dc+sd-jwt", raw = "raw-7", batchId = 1L, instanceId = 0)),
+                ),
             ),
         )
 

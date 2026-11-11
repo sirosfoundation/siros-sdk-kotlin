@@ -4819,9 +4819,7 @@ class SirosWallet private constructor(
                 peer.startFlow(
                     flowType = org.siros.sdk.transport.wmp.openid4x.OID4FlowTypes.OID4VP,
                     flowId = wmpNewFlowId(),
-                    params = kotlinx.serialization.json.buildJsonObject {
-                        put("request_uri", kotlinx.serialization.json.JsonPrimitive(requestUri))
-                    },
+                    params = openid4vpStartParams(requestUri),
                 )
                 return true
             }
@@ -7082,27 +7080,42 @@ class SirosWallet private constructor(
     internal fun wmpDeliveredMetadataRefusal(
         flowId: String,
         result: kotlinx.serialization.json.JsonObject?,
-    ): Pair<DeliveredMetadataRefusal, List<String>>? {
+    ): Pair<DeliveredMetadataRefusal, List<String>>? = wmpDeliveredMetadataCheck(flowId, result).first
+
+    /**
+     * The delivered-metadata gate AND filler (issue #398's batch store): a
+     * refusal - or `null` beside the FILLed per-entry credentials, ready for
+     * [handleWmpIssuanceComplete] to store. The entries' `credential`
+     * members are the wallet's own decrypted response's (an encrypted batch:
+     * the engine relays envelopes, the wallet opens them), the flow-level
+     * `refresh_token`/`dpop_jwk`/`notification_id` members riding along -
+     * everything [handleWmpIssuanceComplete] reads, nothing invented.
+     */
+    internal fun wmpDeliveredMetadataCheck(
+        flowId: String,
+        result: kotlinx.serialization.json.JsonObject?,
+    ): Pair<Pair<DeliveredMetadataRefusal, List<String>>?, List<kotlinx.serialization.json.JsonObject>> {
         val decoded = try {
             org.siros.sdk.transport.wmp.openid4x.FlowCompleteResult.decode(result)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            return DeliveredMetadataRefusal.MALFORMED to emptyList()
-        } ?: return null
+            return (DeliveredMetadataRefusal.MALFORMED to emptyList<String>()) to emptyList()
+        } ?: return null to emptyList<kotlinx.serialization.json.JsonObject>()
         // An encrypted issuance's credentials and metadata are the wallet's own decrypted response, never the engine's.
         val opened = if (decoded.credentialResponseEncrypted) {
-            blindIssuance.take(flowId) ?: return DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to emptyList()
+            blindIssuance.take(flowId)
+                ?: return (DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to emptyList<String>()) to emptyList()
         } else {
             null
         }
         val engineCreds = decoded.credentials.orEmpty()
         // A key was offered for this flow: a plain completion carrying credentials is an error, never accepted (the caller drops the key after).
         if (opened == null && engineCreds.isNotEmpty() && blindIssuance.wasOffered(flowId)) {
-            return DeliveredMetadataRefusal.PLAIN_RESPONSE to engineCreds.mapNotNull { it.notificationId }
+            return (DeliveredMetadataRefusal.PLAIN_RESPONSE to engineCreds.mapNotNull { it.notificationId }) to emptyList()
         }
         if (opened != null && opened.credentials.size != engineCreds.size) {
-            return DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to listOfNotNull(opened.notificationId)
+            return (DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to listOfNotNull(opened.notificationId)) to emptyList()
         }
         val creds = if (opened == null) {
             engineCreds
@@ -7124,7 +7137,23 @@ class SirosWallet private constructor(
             holderCommitments = sentCommitments,
         )
         sentCommitments.forEach { it.commitment.fill(0) }
-        return (verdict as? DeliveredMetadataVerdict.Refuse)?.let { it.reason to creds.mapNotNull { c -> c.notificationId } }
+        val refusal = (verdict as? DeliveredMetadataVerdict.Refuse)
+            ?.let { it.reason to creds.mapNotNull { c -> c.notificationId } }
+        if (refusal != null) return refusal to emptyList()
+        // Clean: the entries, FILLED with the wallet's own decrypted
+        // response's credentials (plain deliveries are already filled), the
+        // flow-level members merged in - the storable batch.
+        val entries = creds.map { cred ->
+            kotlinx.serialization.json.buildJsonObject {
+                put("credential", kotlinx.serialization.json.JsonPrimitive(cred.credential))
+                cred.notificationId?.let { put("notification_id", kotlinx.serialization.json.JsonPrimitive(it)) }
+                (result?.get("refresh_token") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    ?.let { put("refresh_token", kotlinx.serialization.json.JsonPrimitive(it)) }
+                (result?.get("dpop_jwk") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    ?.let { put("dpop_jwk", kotlinx.serialization.json.JsonPrimitive(it)) }
+            }
+        }
+        return null to entries
     }
 
     /**
@@ -9228,6 +9257,13 @@ class SirosWallet private constructor(
         )
     }
 
+    /** Test seam for [onWmpFlowComplete] — the completion handler without the peer plumbing. */
+    internal suspend fun onWmpFlowCompleteForTest(
+        flowId: String,
+        result: kotlinx.serialization.json.JsonObject?,
+        lifetime: Int = 0,
+    ) = onWmpFlowComplete(null, flowId, result, lifetime)
+
     private suspend fun onWmpFlowComplete(
         peer: org.siros.sdk.transport.wmp.WmpPeer?,
         flowId: String,
@@ -9237,11 +9273,55 @@ class SirosWallet private constructor(
         try {
             // siros-wallet-core's oid4vci completion is a single `credential`
             // member beside the renewal relay and the notification members -
-            // the issuance shape, stored here. Everything else is the
-            // presentation completion set ({presented}, {declined}, …), which
-            // stores nothing.
+            // the issuance shape, stored here. A `credentials` ARRAY is the
+            // BATCH shape (issue #398): every entry is stored, one
+            // StoredCredential each - never "success with nothing stored"
+            // (the pre-fix handler metadata-checked the entries and discarded
+            // them, the UI reporting success over lost credentials).
+            // Everything else is the presentation completion set
+            // ({presented}, {declined}, …), which stores nothing.
+            //
+            // siros-wallet-core's single-`credential` completion is stored
+            // FIRST (the original order - the engine decrypted it; the
+            // metadata gate is the batch path's alone).
             if (result?.containsKey("credential") == true) {
                 handleWmpIssuanceComplete(flowId, result)
+                return
+            }
+            // A `credentials` ARRAY is the BATCH shape (issue #398): the gate
+            // runs first - a plaintext delivery after an offer is the
+            // downgrade refusal, an encrypted one is filled from the wallet's
+            // own decrypted response - and a CLEAN batch is then stored,
+            // entry by entry, never "success with nothing stored" (the
+            // pre-#398 handler validated the entries and discarded them).
+            if (result?.containsKey("credentials") == true) {
+                val (refusal, entries) = wmpDeliveredMetadataCheck(flowId, result)
+                if (refusal != null) {
+                    rejectDeliveredMetadata(
+                        flowId,
+                        refusal.second,
+                        refusal.first,
+                        sendFailure = { fid, nid ->
+                            peer?.sendCredentialNotification(
+                                flowId = fid,
+                                notificationId = nid,
+                                event = CredentialNotificationEvent.FAILURE,
+                                eventDescription = "credential_metadata_rejected",
+                            )
+                        },
+                    )
+                    return
+                }
+                if (entries.isEmpty()) {
+                    Timber.e("WMP issuance flow $flowId completed with an empty credentials batch")
+                    resetIssuanceGuards()
+                    eventListener?.onFlowError(flowId, "The issuance delivered no credential")
+                    returnToReadyState()
+                    return
+                }
+                for (entry in entries) {
+                    handleWmpIssuanceComplete(flowId, entry)
+                }
                 return
             }
             val refusal = wmpDeliveredMetadataRefusal(flowId, result)
@@ -9797,12 +9877,22 @@ class SirosWallet private constructor(
             audience = params.audience.orEmpty(),
             parentFlowId = parentFlowId,
             credentialsToInclude = params.selections.map {
+                // The disclosure chain's first link, verbatim: what the
+                // engine's DCQL match asked to disclose for this selection
+                // (found auditing an over-disclosure report - the verifier
+                // received more than the query asked for; each link now logs).
+                Timber.d(
+                    "vp ask: query=%s credential=%s disclosedClaims=%s",
+                    it.credentialQueryId, it.credentialId, it.disclosedClaims,
+                )
                 org.siros.sdk.transport.engine.CredentialRef(
                     credentialQueryId = it.credentialQueryId,
                     credentialId = it.credentialId,
                     disclosedClaims = it.disclosedClaims,
                 )
             },
+            responseUri = params.responseUri,
+            verifierJwkThumbprint = params.verifierJwkThumbprint,
             verifierSessionId = params.verifierSessionId,
             transactionData = params.transactionData.takeIf { it.isNotEmpty() }?.map {
                 // The raw base64url entry is the only trustworthy member - the
@@ -9883,6 +9973,42 @@ class SirosWallet private constructor(
 
     /** A fresh client-chosen flow id - the WMP protocol's flow ids are the wallet's own (the engine registers them). */
     private fun wmpNewFlowId(): String = "flow-${java.util.UUID.randomUUID()}"
+
+    /**
+     * The engine's OID4VP start params for a deep link: the link's own
+     * query members, verbatim and percent-decoded (the by-reference
+     * `request_uri` - an https URL the engine fetches - the `client_id`,
+     * the inline `request` of a by-value link). The engine's params
+     * contract is "the link string, or the query members" - never the
+     * whole link AS a request_uri: the engine treats that member as a
+     * URL to fetch, and handing it the `openid4vp://` URI made it try to
+     * fetch its own deep link (found on-device: the HTTP port's scheme
+     * refusal crashed the flow; the engine's fetch guard now refuses it
+     * with a reason instead).
+     *
+     * A link with no query is the bare-reference form (a request-object
+     * URL, a URN): the request_uri itself.
+     */
+    private fun openid4vpStartParams(link: String): kotlinx.serialization.json.JsonObject {
+        val query = link.substringAfter('?', "")
+        if (query.isEmpty()) {
+            return kotlinx.serialization.json.buildJsonObject {
+                put("request_uri", kotlinx.serialization.json.JsonPrimitive(link))
+            }
+        }
+        return kotlinx.serialization.json.buildJsonObject {
+            for (member in query.split('&')) {
+                val idx = member.indexOf('=')
+                if (idx <= 0) continue
+                put(
+                    java.net.URLDecoder.decode(member.substring(0, idx), "UTF-8"),
+                    kotlinx.serialization.json.JsonPrimitive(
+                        java.net.URLDecoder.decode(member.substring(idx + 1), "UTF-8"),
+                    ),
+                )
+            }
+        }
+    }
 
     /** [markIssuanceStartSent]'s WMP counterpart: the "session" a WMP start rides is the peer's connection generation. */
     private fun markIssuanceStartSentWmp() {
@@ -10131,18 +10257,84 @@ class SirosWallet private constructor(
                         throw e
                     }
                 }
-                // Defence in depth: see ConsentGuard's doc comment. This fallback path reads no per-ref claims, but the
-                // referenced credential/query must still be one the user actually consented to.
-                ConsentGuard.verify(consentRecordsByFlow[flowId], params.credentialsToInclude.orEmpty())
-                val vpToken = keystore.signPresentation(
-                    nonce = params.nonce,
-                    audience = params.audience,
-                    credentialIds = emptyList(),
-                )
-                // This transport answers with the one token above whatever was selected, so it can only be
-                // attributed to a query when exactly one credential was.
-                val queryId = params.credentialsToInclude?.singleOrNull()?.credentialQueryId
-                wmpPresentationResult(params, listOf(queryId to vpToken))
+                // Defence in depth: see ConsentGuard's doc comment. The per-ref
+                // claims below read only what the consent authorized.
+                val refs = params.credentialsToInclude.orEmpty()
+                val consentVerified = ConsentGuard.verify(consentRecordsByFlow[flowId], refs)
+                if (refs.isEmpty()) {
+                    // The empty-selection legacy shape: a bare VP JWT (the
+                    // historic no-credential presentation).
+                    val vpToken = keystore.signPresentation(
+                        nonce = params.nonce,
+                        audience = params.audience,
+                        credentialIds = emptyList(),
+                    )
+                    return wmpPresentationResult(params, listOf(null to vpToken))
+                }
+                // A MULTI-SELECTION IS A BATCH (found on-device: a verifier's
+                // diploma query matched two credentials of one vct, and this
+                // path answered with ONE bare JWT attributed via
+                // singleOrNull - the engine's token-count check refused the
+                // mismatch, "1 tokens but 2 credentials selected"). Every
+                // selected credential is presented, one token per
+                // credential, exactly as the legacy transport's
+                // handleSignRequest does; a credential that cannot be
+                // presented refuses the WHOLE presentation loudly - never a
+                // truncated batch.
+                val allCreds = credentialStore.getAll()
+                val presented = refs.map { ref ->
+                    val cred = allCreds.find { it.id == ref.credentialId.toLongOrNull() }
+                        ?: throw WalletException(
+                            "The presentation selected credential ${ref.credentialId} which is not in the store - refusing rather than presenting a partial batch",
+                        )
+                    // null = whole credential consented, no claim-level
+                    // restriction (ConsentedSelection's rule: never defaulted
+                    // to an empty list - see the identical legacy comment).
+                    val consentedClaims = consentVerified[ref.credentialQueryId to ref.credentialId]?.toList()
+                    // The disclosure chain's third link: the exact set handed
+                    // to the signer (null = DISCLOSE EVERYTHING - the audit
+                    // question was whether this matched the DCQL's ask).
+                    Timber.d(
+                        "vp sign: query=%s credential=%s consentedClaims=%s",
+                        ref.credentialQueryId, ref.credentialId, consentedClaims,
+                    )
+                    val token = if (cred.format == "mso_mdoc") {
+                        val credBytes = android.util.Base64.decode(
+                            cred.raw,
+                            android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+                        )
+                        val deviceResponse = keystore.signMdocPresentation(
+                            credentialBytes = credBytes,
+                            disclosedClaims = consentedClaims,
+                            nonce = params.nonce,
+                            audience = params.audience,
+                            responseUri = params.responseUri.orEmpty(),
+                            verifierJwkThumbprint = params.verifierJwkThumbprint.orEmpty(),
+                            kid = cred.kid,
+                        )
+                        android.util.Base64.encodeToString(
+                            deviceResponse,
+                            android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+                        )
+                    } else {
+                        // SD-JWT VP token with KB-JWT (the legacy branch's
+                        // identical call). NOTE: a zkp_req query's ZK-wrapped
+                        // mdoc presentation is NOT built on this transport
+                        // yet - the WMP match context (zkSystemTypes,
+                        // ppidContext) is not plumbed to this sign step; a
+                        // zkp_req query refuses here rather than presenting
+                        // an unwrapped DeviceResponse.
+                        keystore.signVpToken(
+                            credential = cred.raw,
+                            disclosedClaims = consentedClaims,
+                            nonce = params.nonce,
+                            audience = params.audience,
+                            kid = cred.kid,
+                        )
+                    }
+                    ref.credentialQueryId to token
+                }
+                wmpPresentationResult(params, presented)
             }
             // Client authentication, same semantics as the legacy transport's
             // handleRequestAttestation / handleSignClientAuth: the WMP sign
