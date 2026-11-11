@@ -68,6 +68,7 @@
     <string name="copy_to_clipboard">Kopiera till urklipp</string>
     <string name="copied_to_clipboard">Kopierat till urklipp</string>
     <string name="credential_renew">Förnya</string>
+    <string name="credential_put_back">Lägg tillbaka</string>
     <string name="credential_renew_not_possible">Förnyelse inte möjlig</string>
     <string name="issuance_already_in_progress">En utfärdande pågår redan - avsluta eller avbryt den först</string>
     <string name="credential_detail_delete">Ta bort intyg</string>

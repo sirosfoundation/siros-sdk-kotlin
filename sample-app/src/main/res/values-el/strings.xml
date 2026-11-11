@@ -68,6 +68,7 @@
     <string name="copy_to_clipboard">Αντιγραφή στο πρόχειρο</string>
     <string name="copied_to_clipboard">Αντιγράφηκε στο πρόχειρο</string>
     <string name="credential_renew">Ανανέωση</string>
+    <string name="credential_put_back">Επιστροφή στη στοίβα</string>
     <string name="credential_renew_not_possible">Δεν είναι δυνατή η ανανέωση</string>
     <string name="issuance_already_in_progress">Μια έκδοση είναι ήδη σε εξέλιξη - ολοκληρώστε ή ακυρώστε την πρώτα</string>
     <string name="credential_detail_delete">Διαγραφή Πιστοποιητικού</string>
