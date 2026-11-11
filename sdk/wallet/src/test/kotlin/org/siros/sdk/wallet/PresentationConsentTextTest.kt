@@ -171,7 +171,7 @@ class PresentationConsentTextTest {
     fun aLegacyDisclosure_isADisclosureScreen_notThePickersNoPersonalDataText() {
         val screen = textFor("values").render(request(ConsentItem.Claim("family_name"), ConsentItem.LegacyPseudonym("ctx")))
         assertEquals("Example RP is asking you to share:", screen.header)
-        assertEquals(listOf("The value of “family_name” from your credential is shared.", "A pseudonym is shared with Example RP."), screen.entries.single().lines)
+        assertEquals(listOf("the value of “family_name” from your credential", "A pseudonym is shared with Example RP."), screen.entries.single().lines)
         val picker = strings("values").getValue("siros_dcapi_zk_proof_detail")
         assertTrue(screen.entries.single().lines.none { it.contains("No personal data is shared") })
         assertFalse(picker == screen.footer)

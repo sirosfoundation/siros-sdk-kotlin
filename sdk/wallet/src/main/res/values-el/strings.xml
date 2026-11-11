@@ -27,7 +27,7 @@
     <string name="siros_consent_pseudonym_issuer">Κοινοποιείται ένα ψευδώνυμο για την υπηρεσία %1$s. Λαμβάνετε το ίδιο ψευδώνυμο κάθε φορά που επισκέπτεστε αυτή την υπηρεσία και διαφορετικό σε κάθε άλλη υπηρεσία. Ο φορέας που εξέδωσε το διαπιστευτήριό σας μπορεί να βρει σε ποιον ανήκει αυτό το ψευδώνυμο.</string>
     <string name="siros_consent_pseudonym">Κοινοποιείται ένα ψευδώνυμο για την υπηρεσία %1$s. Λαμβάνετε το ίδιο ψευδώνυμο κάθε φορά που επισκέπτεστε αυτή την υπηρεσία και διαφορετικό σε κάθε άλλη υπηρεσία.</string>
     <string name="siros_consent_footer">Δεν κοινοποιούνται άλλα προσωπικά δεδομένα.</string>
-    <string name="siros_consent_claim">Η τιμή «%1$s» από το διαπιστευτήριό σας κοινοποιείται.</string>
+    <string name="siros_consent_claim">η τιμή «%1$s» από το διαπιστευτήριό σας</string>
     <string name="siros_consent_legacy_pseudonym">Κοινοποιείται ένα ψευδώνυμο στην υπηρεσία %1$s.</string>
     <string name="siros_dcapi_refused_consent_unavailable">Το πορτοφόλι σας δεν μπορεί να ζητήσει την έγκρισή σας αυτή τη στιγμή, οπότε δεν κοινοποιήθηκε τίποτα.</string>
     <string name="siros_dcapi_refused_user_declined">Δεν εγκρίνατε το αίτημα, οπότε δεν κοινοποιήθηκε τίποτα.</string>

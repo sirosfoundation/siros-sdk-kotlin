@@ -618,15 +618,6 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             // multi-match BEFORE the engine consents/signs - wallet's first
             // pick or their own. Rendered above everything: the consent
             // dialog only follows once the match is decided.
-            pendingAmbiguity != null -> pendingAmbiguity!!.let { pending ->
-                AmbiguityDialog(
-                    pending = pending,
-                    onUserChooses = { viewModel.ambiguityUserChooses(pending, it) },
-                    onCancel = { viewModel.ambiguityDeclined(pending) },
-                )
-            }
-
-            // Presentation consent dialog — shown as a full-screen overlay
             pendingPresentation != null -> {
                 // Recomputed per new presentation request, not cached: a key
                 // lost since the last check must be reflected immediately -
@@ -642,6 +633,11 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                     presentationHistory = presentationHistory,
                     consumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
                     availableKeyIds = availableKeyIds,
+                    // The WMP bridge: SUMMARY when the consent ask's
+                    // selections are fixed (re-picking would answer a settled
+                    // question twice), SELECT when the ambiguity ask is still
+                    // choosing (the choice of credential is the point).
+                    startAt = viewModel.consentEntryPoint,
                 )
             }
 
@@ -653,12 +649,28 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             )
 
             // circuit_zk presentation (what the verifier will receive) - the SDK built the request and owns the wording
+            pendingAmbiguity != null -> pendingAmbiguity!!.let { pending ->
+                AmbiguityDialog(
+                    pending = pending,
+                    onUserChooses = { viewModel.ambiguityUserChooses(pending, it) },
+                    onCancel = { viewModel.ambiguityDeclined(pending) },
+                    // The full in-wallet flow at the SELECTION step: the
+                    // choice of credential is the point of this dialog.
+                    onDetails = { viewModel.showAmbiguityDetails(pending) },
+                )
+            }
+
+            // Presentation consent dialog — shown as a full-screen overlay
             pendingPresentationConsent != null -> pendingPresentationConsent!!.let { shown ->
                 // The answer names the request this dialog showed.
                 PresentationConsentDialog(
                     request = shown.request,
                     onAgree = { viewModel.answerPresentationConsent(shown, true) },
                     onDecline = { viewModel.answerPresentationConsent(shown, false) },
+                    // The pre-rework FULL in-wallet consent screen, carrying
+                    // this ask's verifier identity + selections; its
+                    // Share/Decline answer the same gate request.
+                    onDetails = { viewModel.showConsentDetails(shown) },
                 )
             }
 

@@ -27,7 +27,7 @@
     <string name="siros_consent_pseudonym_issuer">É partilhado um pseudónimo para %1$s. Obtém o mesmo pseudónimo sempre que visita este serviço e um diferente em cada outro serviço. O serviço que emitiu a sua credencial consegue apurar a quem pertence este pseudónimo.</string>
     <string name="siros_consent_pseudonym">É partilhado um pseudónimo para %1$s. Obtém o mesmo pseudónimo sempre que visita este serviço e um diferente em cada outro serviço.</string>
     <string name="siros_consent_footer">Não são partilhados outros dados pessoais.</string>
-    <string name="siros_consent_claim">O valor de «%1$s» da sua credencial é partilhado.</string>
+    <string name="siros_consent_claim">o valor de «%1$s» da sua credencial</string>
     <string name="siros_consent_legacy_pseudonym">É partilhado um pseudónimo com %1$s.</string>
     <string name="siros_dcapi_refused_consent_unavailable">A sua carteira não consegue pedir a sua aprovação neste momento, por isso nada foi partilhado.</string>
     <string name="siros_dcapi_refused_user_declined">Não aprovou o pedido, por isso nada foi partilhado.</string>

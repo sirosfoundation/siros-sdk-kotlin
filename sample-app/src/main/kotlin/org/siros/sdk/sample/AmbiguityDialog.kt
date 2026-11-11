@@ -3,6 +3,7 @@
 package org.siros.sdk.sample
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
@@ -39,6 +40,10 @@ fun AmbiguityDialog(
     pending: WalletViewModel.PendingAmbiguity,
     onUserChooses: (List<WalletEventListener.ConsentSelection>) -> Unit,
     onCancel: () -> Unit,
+    // Opens the full in-wallet consent flow at the SELECTION step (the
+    // choice of credential is what the user came here to make); its Share
+    // answers this ask with the picked credential.
+    onDetails: () -> Unit,
 ) {
     // Pre-selected: the wallet's first match (its default answer), so Choose
     // alone carries the default forward - but Cancel still REFUSES the
@@ -46,7 +51,12 @@ fun AmbiguityDialog(
     var picked by remember(pending) { mutableStateOf(pending.matches.firstOrNull()) }
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("More than one credential matches") },
+        title = {
+            Text(
+                "More than one credential matches",
+                style = MaterialTheme.typography.titleMedium,
+            )
+        },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
@@ -63,10 +73,15 @@ fun AmbiguityDialog(
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     ) {
                         RadioButton(selected = selected, onClick = { picked = match })
-                        // The credential's name alone: the matched CLAIM
-                        // (a bare path like 'nl') is machine text - it reads
-                        // as noise here and belongs in the consent dialog
-                        // that follows, which words it properly.
+                        // The credential's title alone in the summary tier
+                        // (the matched claim is machine text); in the details
+                        // tier its claims list under the title, plus the
+                        // credential id (the consent dialog that follows words
+                        // the claims fully - here they are the detail).
+                        // The credential's title alone: the matched claim
+                        // (a bare path like 'nl') is machine text - it belongs
+                        // in "Show me details", which opens the full in-wallet
+                        // consent flow.
                         Text(
                             match.credentialName ?: "Credential ${match.credentialId}",
                             style = MaterialTheme.typography.bodyMedium,
@@ -76,15 +91,16 @@ fun AmbiguityDialog(
             }
         },
         confirmButton = {
-            // Choose = the picked match (the wallet's first, unless changed).
-            // Cancel = the presentation refused (no fallback).
-            TextButton(
-                onClick = { onUserChooses(listOfNotNull(picked)) },
-                enabled = picked != null,
-            ) { Text("Choose") }
+            // Cancel left, the actions right (the consent dialogs' pattern):
+            // Details (the full match record) beside Choose.
+            Row {
+                TextButton(onClick = onDetails) { Text("Show me details") }
+                TextButton(
+                    onClick = { onUserChooses(listOfNotNull(picked)) },
+                    enabled = picked != null,
+                ) { Text("Choose") }
+            }
         },
-        dismissButton = {
-            TextButton(onClick = onCancel) { Text("Cancel") }
-        },
+        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
 }

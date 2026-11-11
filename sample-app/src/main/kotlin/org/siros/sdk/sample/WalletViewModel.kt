@@ -1175,6 +1175,127 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _pendingAmbiguity = MutableStateFlow<PendingAmbiguity?>(null)
     val pendingAmbiguity: StateFlow<PendingAmbiguity?> = _pendingAmbiguity
 
+    /** The detail context of the WMP consent ask being bridged to the full screen. */
+    private val _consentAskDetail = MutableStateFlow<ConsentAskDetail?>(null)
+
+    /**
+     * Which ask the full in-wallet consent screen ("Show me details")
+     * answers, and at which step it lands:
+     * - from the MINIMAL consent dialog: the selections are already fixed
+     *   (the match/ambiguity step settled them) → land on the summary step,
+     *   Share/Decline answer the consent ask itself.
+     * - from the AMBIGUITY dialog: the choice is NOT yet made → land on the
+     *   selection step, and Share answers the AMBIGUITY ask with the picked
+     *   credential (the SDK then consents with exactly it).
+     */
+    private var consentAskBridge: ConsentAskBridge? = null
+
+    /** Which WMP ask the full in-wallet consent screen answers. */
+    internal sealed class ConsentAskBridge {
+        /** Land on the full screen's summary step (the selections are fixed)? */
+        val startAtSummary: Boolean get() = this is FromConsentAsk
+    }
+
+    /** Bridged from the minimal consent dialog: Share/Cancel answer the consent ask. */
+    internal class FromConsentAsk(val shown: PendingPresentationConsent) : ConsentAskBridge()
+
+    /** Bridged from the ambiguity dialog: Share answers UserChoice(the picked), Cancel refuses. */
+    internal class FromAmbiguity(val pending: PendingAmbiguity) : ConsentAskBridge() {
+        /** The full screen's picked credential ids (set by acceptPresentation). */
+        var pickedBridgeIds: List<Long> = emptyList()
+    }
+
+    /** The WMP consent ask's detail context: what the full screen renders. */
+    class ConsentAskDetail(
+        val verifierName: String?,
+        val verifierId: String?,
+        val selections: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
+    )
+
+    /**
+     * "Show me details" on the minimal consent dialog: swap it for the
+     * pre-rework full in-wallet consent screen (PresentationConsentScreen),
+     * built from this ask's verifier identity + per-credential selections.
+     * Its Share/Decline answer the SAME gate request the dialog would have
+     * ([answerPresentationConsent]).
+     */
+    fun showConsentDetails(shown: PendingPresentationConsent) {
+        val detail = _consentAskDetail.value ?: return
+        val creds = (wallet.state.value as? WalletState.Ready)?.credentials.orEmpty()
+        val matchResults = detail.selections.mapNotNull { sel ->
+            val cred = creds.find { it.id == sel.credentialId } ?: return@mapNotNull null
+            org.siros.sdk.credentials.CredentialMatcher.MatchResult(
+                queryId = "",
+                format = cred.format,
+                candidates = listOf(cred),
+                requestedClaims = (sel.claims ?: emptyList()).map { listOf(it) },
+            )
+        }
+        consentAskBridge = FromConsentAsk(shown)
+        android.util.Log.i("ConsentBridge", "consent details: landing at SUMMARY")
+        _pendingPresentationRequest.value = PresentationRequest(
+            verifierName = detail.verifierName ?: detail.verifierId,
+            matchResults = matchResults,
+            candidates = matchResults.flatMap { it.candidates },
+        )
+    }
+
+    /**
+     * "Show me details" on the AMBIGUITY dialog: the same full in-wallet
+     * consent screen, but landing at the SELECTION step - the choice of
+     * credential is what the user came here to make. Share answers the
+     * ambiguity ask with the picked credential (the SDK then consents and
+     * signs exactly it); Cancel refuses the presentation outright.
+     */
+    fun showAmbiguityDetails(pending: PendingAmbiguity) {
+        val creds = (wallet.state.value as? WalletState.Ready)?.credentials.orEmpty()
+        val matchResults = pending.matches.mapNotNull { sel ->
+            val cred = creds.find { it.id == sel.credentialId } ?: return@mapNotNull null
+            org.siros.sdk.credentials.CredentialMatcher.MatchResult(
+                queryId = "",
+                format = cred.format,
+                candidates = listOf(cred),
+                requestedClaims = (sel.claims ?: emptyList()).map { listOf(it) },
+            )
+        }
+        consentAskBridge = FromAmbiguity(pending)
+        android.util.Log.i(
+            "ConsentBridge",
+            "ambiguity details: ${pending.matches.size} matches, landing at SELECT",
+        )
+        // The dialog goes away (its state cleared) so the full screen can
+        // render; Back restores it (hideConsentDetails).
+        _pendingAmbiguity.value = null
+        _pendingPresentationRequest.value = PresentationRequest(
+            verifierName = _consentAskDetail.value?.verifierName ?: _consentAskDetail.value?.verifierId,
+            matchResults = matchResults,
+            candidates = matchResults.flatMap { it.candidates },
+        )
+    }
+
+    /** Back from the full consent screen to the dialog it bridged from. */
+    fun hideConsentDetails() {
+        val bridge = consentAskBridge
+        consentAskBridge = null
+        _pendingPresentationRequest.value = null
+        // The ambiguity dialog returns when that is where we came from.
+        if (bridge is FromAmbiguity) _pendingAmbiguity.value = bridge.pending
+    }
+
+    /** Whether the full consent screen is bridged from a WMP ask (and lands on its summary step). */
+    val bridgedConsentAsk: Boolean get() = consentAskBridge?.startAtSummary == true
+
+    /**
+     * Where the full consent screen lands when bridged: the CLAIM-SELECTION
+     * step either way - that is where the actual information lives (the
+     * claims, their values, the sd constraints) - never the summary, whose
+     * "Ready to share" carries almost nothing until selections were made in
+     * it (found on-device: the details bridge landed there and read as the
+     * same popup with less information).
+     */
+    internal val consentEntryPoint
+        get() = if (consentAskBridge == null) ConsentEntryPoint.PREVIEW else ConsentEntryPoint.SELECT
+
     /** An ambiguity ask on screen: the matches and the answer channel. */
     class PendingAmbiguity(
         val matches: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
@@ -1267,6 +1388,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     requestSigned = true,
                     locale = java.util.Locale.getDefault().toLanguageTag(),
                 )
+                // The detail context for the full consent screen ("Show me
+                // details" from the minimal dialog): the verifier identity +
+                // per-credential selections the bridge builds its
+                // PresentationRequest from.
+                android.util.Log.i(
+                    "ConsentBridge",
+                    "consent ask: purpose=$purpose claims=$requestedClaims selections=${
+                        selections.map { it.credentialId.toString() + ":" + (it.claims?.joinToString(",") ?: "null") }
+                    }",
+                )
+                _consentAskDetail.value = ConsentAskDetail(verifierName, verifierId, selections)
                 return presentationConsentGate.handler.confirm(request)
             }
 
@@ -1441,6 +1573,23 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     /** User consented to share selected credentials. */
     fun acceptPresentation(selectedIds: List<Long>) {
+        // The full consent screen bridged from a WMP ask: its Share answers
+        // THAT ask (consent: the fixed selections; ambiguity: the picked
+        // credential becomes the UserChoice answer).
+        val bridge = consentAskBridge
+        if (bridge != null) {
+            consentAskBridge = null
+            _pendingPresentationRequest.value = null
+            when (bridge) {
+                is FromConsentAsk -> answerPresentationConsent(bridge.shown, true)
+                is FromAmbiguity -> bridge.pending.answer.complete(
+                    org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.UserChoice(
+                        bridge.pending.matches.filter { m -> bridge.pickedBridgeIds.contains(m.credentialId) },
+                    ),
+                )
+            }
+            return
+        }
         _pendingPresentationRequest.value = null
         presentationContinuation?.resume(selectedIds, null)
         presentationContinuation = null
@@ -1448,6 +1597,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     /** User declined the presentation request. */
     fun declinePresentation() {
+        // The bridge counterpart of acceptPresentation's: a decline answers
+        // the bridged ask - the consent ask declined, or the presentation
+        // refused outright (ambiguity).
+        val bridge = consentAskBridge
+        if (bridge != null) {
+            consentAskBridge = null
+            _pendingPresentationRequest.value = null
+            when (bridge) {
+                is FromConsentAsk -> answerPresentationConsent(bridge.shown, false)
+                is FromAmbiguity -> bridge.pending.answer.complete(
+                    org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.Declined,
+                )
+            }
+            return
+        }
         _pendingPresentationRequest.value = null
         presentationContinuation?.resume(emptyList(), null)
         presentationContinuation = null

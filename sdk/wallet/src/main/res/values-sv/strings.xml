@@ -27,7 +27,7 @@
     <string name="siros_consent_pseudonym_issuer">En pseudonym för %1$s delas. Du får samma pseudonym varje gång du besöker den här tjänsten och en annan pseudonym hos varje annan tjänst. Tjänsten som utfärdade ditt intyg kan ta reda på vem pseudonymen tillhör.</string>
     <string name="siros_consent_pseudonym">En pseudonym för %1$s delas. Du får samma pseudonym varje gång du besöker den här tjänsten och en annan pseudonym hos varje annan tjänst.</string>
     <string name="siros_consent_footer">Inga andra personuppgifter delas.</string>
-    <string name="siros_consent_claim">Värdet för ”%1$s” från ditt intyg delas.</string>
+    <string name="siros_consent_claim">värdet för ”%1$s” från ditt intyg</string>
     <string name="siros_consent_legacy_pseudonym">En pseudonym delas med %1$s.</string>
     <string name="siros_dcapi_refused_consent_unavailable">Din plånbok kan inte be om ditt godkännande just nu, så ingenting delades.</string>
     <string name="siros_dcapi_refused_user_declined">Du godkände inte begäran, så ingenting delades.</string>

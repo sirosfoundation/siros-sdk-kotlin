@@ -10842,6 +10842,12 @@ class SirosWallet private constructor(
         }
 
         val matchResults = CredentialMatcher.match(dcqlQuery, allCreds, zkSystemIds)
+        // Stash for the consent ask that follows on this transport: its
+        // selections (the per-credential record) read this map - without the
+        // stash the ask rendered an empty list (found on-device: the consent
+        // dialog showed no requested claims). The UI-event paths (the
+        // legacy collector and the DC API handler) each do their own.
+        synchronized(consentLock) { pendingMatchResultsByFlow[flowId] = matchResults }
         // The query each candidate is answered under - first match wins, the
         // same rule the other two transports apply.
         var matchResultByCredentialId = buildMap {
