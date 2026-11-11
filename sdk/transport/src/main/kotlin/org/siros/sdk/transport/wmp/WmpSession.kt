@@ -1,6 +1,7 @@
 package org.siros.sdk.transport.wmp
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -215,7 +216,19 @@ class WmpSession(
             // timed out, the UI hung on "Initializing", and the authorize action after
             // the browser was stranded. Each send is on its own; ordering was never
             // a wire requirement on this transport.
-            transport.send(message)
+            //
+            // And OFF the caller's thread (the main-dispatcher flavour of the same
+            // deadlock, found on-device with the LOCAL engine): the in-process
+            // transport's send is a synchronous FFI call that runs the engine's
+            // whole flow start - parse, fetch, trust, the MATCH and CONSENT asks -
+            // on the CALLING thread. Called from the UI's viewModelScope that is
+            // Main: a flow start whose consent ask waits for the user deadlocks
+            // against the very thread that must render the consent sheet (found:
+            // the GDC presentation - the flow hung at the match, the sheet never
+            // rendered, the app froze). The blocking send belongs on IO.
+            withContext(kotlinx.coroutines.Dispatchers.IO) {
+                transport.send(message)
+            }
             return withTimeout(timeoutMs) { deferred.await() }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             Timber.w("sendRequest: $method id=$id TIMED OUT after ${timeoutMs}ms")
@@ -229,7 +242,11 @@ class WmpSession(
         // No mutex - see sendRequest's drive-found note: a locked send serialized
         // answers behind slow POSTs and deadlocked the asks against the start.
         val message = codec.encodeNotification(method, stampSessionId(params))
-        transport.send(message)
+        // IO, sendRequest's own rule: the in-process transport's send blocks the
+        // calling thread in the engine.
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            transport.send(message)
+        }
     }
 
     /** [sendNotification] that checks [wanted] again once it holds the send lock; false when it was not sent. */
