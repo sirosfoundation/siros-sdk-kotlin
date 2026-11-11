@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -87,7 +88,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.wallet.WalletState
 import android.util.Log
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -153,7 +153,15 @@ class MainActivity : ComponentActivity() {
             androidx.compose.runtime.CompositionLocalProvider(LocalThemeSettings provides themeSettings) {
             SirosTheme(darkTheme = themeMode.isDark(androidx.compose.foundation.isSystemInDarkTheme())) {
                 Surface(
-                    modifier = Modifier.fillMaxSize().navigationBarsPadding(),
+                    // No inset padding on the root: the window is edge to
+                    // edge (forced since API 35), so padding the root away
+                    // from the navigation bar leaves the white window
+                    // background showing through as a strip under the app -
+                    // a narrow white band under the bottom bar, found
+                    // on-device. The root paints under the insets instead,
+                    // and every screen's own bottom furniture takes the
+                    // inset (see WalletChrome).
+                    modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     viewModel = viewModel(factory = vmFactory)
@@ -1557,6 +1565,12 @@ fun CredentialsTab(
     var actionMenuFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
     var pendingDeleteFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
 
+    // The credential pinned to the front of the deck (see CredentialStack) -
+    // held here rather than in the deck so that it outlives leaving the
+    // screen: the action menu below offers "Put back" for it, and a pin set
+    // before tapping into a credential's detail is still set on returning.
+    var pinnedBatchId by rememberSaveable { mutableStateOf<Long?>(null) }
+
     actionMenuFor?.let { credential ->
         ModalBottomSheet(onDismissRequest = { actionMenuFor = null }) {
             Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
@@ -1566,6 +1580,23 @@ fun CredentialsTab(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                 )
+                if (credential.batchId == pinnedBatchId) {
+                    TextButton(
+                        onClick = {
+                            actionMenuFor = null
+                            pinnedBatchId = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Outlined.Layers, contentDescription = null, modifier = Modifier.padding(end = 16.dp))
+                            Text(stringResource(R.string.credential_put_back))
+                        }
+                    }
+                }
                 TextButton(
                     onClick = {
                         actionMenuFor = null
@@ -1700,10 +1731,9 @@ fun CredentialsTab(
                     modifier = Modifier.padding(vertical = 24.dp),
                 )
                 // A partially-overlapping, interactive deck: CredentialStack
-                // owns its own scrolling (a card's drag and a plain vertical
-                // scroll are the same gesture, so it has to arbitrate between
-                // them itself) and its own reorder state, so there's nothing
-                // further to wrap it in here.
+                // owns its own scrolling and its own pile order; the pin rides
+                // on top of both and is held here so the action menu (and the
+                // rest of the app) can see and clear it.
                 else -> CredentialStack(
                     entries = shown,
                     onCredentialClick = onCredentialClick,
@@ -1716,6 +1746,8 @@ fun CredentialsTab(
                         Modifier.fillMaxSize().testTag(MANAGE_DECK_TAG)
                     },
                     credentialStatuses = credentialStatuses,
+                    pinnedBatchId = pinnedBatchId,
+                    onPinnedBatchIdChange = { pinnedBatchId = it },
                 )
             }
         }

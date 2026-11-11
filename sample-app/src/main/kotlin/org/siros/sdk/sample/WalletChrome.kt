@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -175,6 +176,11 @@ fun WalletBottomBar(selected: WalletNavItem?, onHome: () -> Unit, onScanQr: () -
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
+            // The root no longer pads the navigation bar away (see the root
+            // Surface in MainActivity), so every bar that sits at the bottom
+            // of a screen takes the inset itself - background first, so the
+            // paint still reaches edge to edge underneath it.
+            .navigationBarsPadding()
             .padding(top = 8.dp, bottom = 12.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.Bottom,
@@ -234,7 +240,14 @@ private fun BottomBarItem(
 /** The single full-width Back button that replaces the bottom bar on full-attention screens. */
 @Composable
 fun BackBar(onBack: () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            // See WalletBottomBar: with the root painting edge to edge, a
+            // bottom-of-screen bar takes the navigation-bar inset itself.
+            .navigationBarsPadding(),
+    ) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         OutlinedButton(
             onClick = onBack,
