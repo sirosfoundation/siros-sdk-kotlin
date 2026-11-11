@@ -585,6 +585,25 @@ data class WalletConfig(
      * owner key names it).
      */
     val wmpTenantTokens: Boolean = false,
+    /**
+     * The PRIORITIZED engine providers (first to try first): each is
+     * connected in order with [engineConnectRetries] attempts before
+     * failing over to the next; the first that connects carries the
+     * session. Empty (the default) keeps the single-mode shape -
+     * [wmpEngineMode] (and its endpoint fields) selects the one engine,
+     * failover none.
+     *
+     * Failover is a CONNECT-time behavior only: a connected session is
+     * pinned to its provider for its life - never mid-flow.
+     */
+    val engineProviders: List<WmpEngineProvider> = emptyList(),
+    /**
+     * Connect attempts per engine provider before failing over to the
+     * next ([engineProviders] in priority order). Default 2: one retry
+     * rides out a blip; a dead provider costs one extra attempt, not a
+     * hang.
+     */
+    val engineConnectRetries: Int = 2,
 ) {
     init {
         org.siros.sdk.keystore.CircuitZkProfile.validateAdditional(circuitZkProfiles, circuitZkPredicateFunctions)

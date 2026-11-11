@@ -19687,6 +19687,279 @@ class SirosWalletTest {
         coVerify(exactly = 1) { userAuthTokens.ensureBackendToken() }
     }
 
+    // ── The prioritized engine providers ────────────────────────────────────
+
+    /** A do-nothing Transport: the connect loop's fate is the peer's, not its. */
+    private class NullTransport : org.siros.sdk.transport.Transport {
+        override val state = kotlinx.coroutines.flow.MutableStateFlow(org.siros.sdk.transport.TransportState.DISCONNECTED)
+        override suspend fun connect() {}
+        override suspend fun send(message: ByteArray) {}
+        override fun incoming() = kotlinx.coroutines.flow.emptyFlow<ByteArray>()
+        override suspend fun disconnect() {}
+    }
+
+    /**
+     * A wallet over [org.siros.sdk.transport.wmp.WmpPeer]s the test scripts: the
+     * Nth transport the local factories build gets the Nth scripted peer.
+     * The wallet's connect runs the provider loop against them.
+     */
+    private fun providerWallet(
+        vararg peers: org.siros.sdk.transport.wmp.WmpPeer,
+        providers: List<WmpEngineProvider>,
+        retries: Int,
+    ): Pair<SirosWallet, MutableList<org.siros.sdk.transport.Transport>> {
+        val scripted = peers.toMutableList()
+        val transports = mutableListOf<org.siros.sdk.transport.Transport>()
+        val previous = SirosWallet.createWmpPeerFromTransport
+        var next = 0
+        SirosWallet.createWmpPeerFromTransport = { transport ->
+            transports.add(transport)
+            peers[next++]  // (removeFirst() needs a newer stdlib than the runtime's)
+        }
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "supervisorJob" to SupervisorJob(),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+            "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                useWmpProtocol = true,
+                engineProviders = providers,
+                engineConnectRetries = retries,
+            ),
+        )
+        walletCleanup.add { SirosWallet.createWmpPeerFromTransport = previous }
+        return Pair(wallet, transports)
+    }
+
+    /** Restores the [SirosWallet.createWmpPeerFromTransport] override after a test. */
+    private val walletCleanup = mutableListOf<() -> Unit>()
+
+    private suspend fun connectViaWmpReflectively(wallet: SirosWallet) {
+        val connectViaWmp = wallet::class.declaredMemberFunctions.first { it.name == "connectViaWmp" }
+        connectViaWmp.isAccessible = true
+        // kotlin-reflect wraps whatever the suspend fun throws - unwrapped so
+        // the assertions see the real exception (the ask tests' identical rule).
+        try {
+            runBlocking { connectViaWmp.callSuspend(wallet, "ignored-connect-token") }
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw e.cause ?: e
+        }
+    }
+
+    @Test
+    fun engineProviders_failOverToTheNextProviderWhenAConnectFails() = runTest(dispatcher) {
+        val failingPeer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        coEvery { failingPeer.connect(any<String>(), any(), any()) } throws WalletException("first provider down")
+        val connectingPeer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        coEvery { connectingPeer.connect(any<String>(), any(), any()) } just runs
+
+        val (wallet, transports) = providerWallet(
+            failingPeer, connectingPeer,
+            providers = listOf(
+                WmpEngineProvider.Local { NullTransport() },
+                WmpEngineProvider.Local { NullTransport() },
+            ),
+            retries = 1,
+        )
+        try {
+            connectViaWmpReflectively(wallet)
+        } finally {
+            walletCleanup.forEach { it() }
+        }
+
+        assertEquals(
+            "the failing provider was tried first and the next one carried the session",
+            2, transports.size,
+        )
+    }
+
+    @Test
+    fun engineProviders_retryTheSameProviderBeforeFailingOver() = runTest(dispatcher) {
+        val flakyPeer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        coEvery { flakyPeer.connect(any<String>(), any(), any()) } throws WalletException("down")
+
+        val connectingPeer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        coEvery { connectingPeer.connect(any<String>(), any(), any()) } just runs
+
+        val (wallet, transports) = providerWallet(
+            flakyPeer, flakyPeer, connectingPeer,
+            providers = listOf(
+                WmpEngineProvider.Local { NullTransport() },
+                WmpEngineProvider.Local { NullTransport() },
+            ),
+            retries = 2,
+        )
+        try {
+            connectViaWmpReflectively(wallet)
+        } finally {
+            walletCleanup.forEach { it() }
+        }
+
+        assertEquals(
+            "two attempts on the first provider (a fresh transport each), then failover",
+            3, transports.size,
+        )
+    }
+
+
+    @Test
+    fun engineProviders_allFailingRefusesWithEveryProviderTried() = runTest(dispatcher) {
+        val failingPeer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        coEvery { failingPeer.connect(any<String>(), any(), any()) } throws WalletException("all down")
+
+        val (wallet, _) = providerWallet(
+            failingPeer, failingPeer,
+            providers = listOf(
+                WmpEngineProvider.Local { NullTransport() },
+                WmpEngineProvider.Local { NullTransport() },
+            ),
+            retries = 1,
+        )
+        val thrown = runCatching {
+            try {
+                connectViaWmpReflectively(wallet)
+            } finally {
+                walletCleanup.forEach { it() }
+            }
+        }.exceptionOrNull()
+        assertTrue("every provider failing must refuse the connect", thrown is WalletException)
+        assertTrue(
+            "the refusal names every provider tried: ${thrown?.message}",
+            (thrown as WalletException).message?.contains("local") == true,
+        )
+    }
+
+    @Test
+    fun engineProviders_anEmptyListKeepsTheSingleModeShape() = runTest(dispatcher) {
+        // The legacy single-mode mapping: engineProviders empty means the
+        // wmpEngineMode selects the one engine - here LOCAL, which still
+        // routes through the same provider loop (a one-element list).
+        val connectingPeer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        coEvery { connectingPeer.connect(any<String>(), any(), any()) } just runs
+        val previous = SirosWallet.createWmpPeerFromTransport
+        SirosWallet.createWmpPeerFromTransport = { _ -> connectingPeer }
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "supervisorJob" to SupervisorJob(),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+            "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                useWmpProtocol = true,
+                wmpEngineMode = org.siros.sdk.wallet.WmpEngineMode.LOCAL,
+                wmpTransport = { _ -> NullTransport() },
+            ),
+        )
+        try {
+            connectViaWmpReflectively(wallet)
+        } finally {
+            SirosWallet.createWmpPeerFromTransport = previous
+        }
+        // Connected: the legacy single-mode LOCAL shape still reaches the loop.
+    }
+
+    @Test
+    fun engineProviders_remoteProviderMintsTheTokenOfItsDeploymentKind() = runTest(dispatcher) {
+        // The remote provider's bearer KIND follows its tenantTokens flag -
+        // the single-mode rule carried per provider now: a tenant-mode
+        // engine (the deployed shape, ENGINE_PRINCIPAL_MODE=tenant) takes
+        // the AS's pseudonymous kind; a user-mode engine the user's own
+        // backend token. The flag is the provider's, not the config's, so
+        // a list may mix deployments.
+        listOf(true, false).forEach { tenantKind ->
+            var captured: org.siros.sdk.transport.Transport? = null
+            val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+            coEvery { peer.connect(any<String>(), any(), any()) } just runs
+            val previous = SirosWallet.createWmpPeerFromTransport
+            SirosWallet.createWmpPeerFromTransport = { transport ->
+                captured = transport
+                peer
+            }
+            val authTokens = mockk<AuthTokens>()
+            coEvery { authTokens.ensureTenantToken() } returns mintedAccessToken("tenant-kind")
+            coEvery { authTokens.ensureBackendToken() } returns mintedAccessToken("backend-kind")
+            try {
+                val wallet = newWallet(
+                    "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                    "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                    "supervisorJob" to SupervisorJob(),
+                    "keystore" to mockk<KeystoreManager>(relaxed = true),
+                    "sessionStore" to mockk<SessionStore>(relaxed = true),
+                    "authTokens" to authTokens,
+                    "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                    "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CircuitZkProver> { error("not initialised") },
+                    "config" to WalletConfig(
+                        backendUrl = "https://wallet.example.com",
+                        useWmpProtocol = true,
+                        engineProviders = listOf(
+                            WmpEngineProvider.RemoteHttpSse(
+                                sendUrl = "http://engine/wmp",
+                                sseUrl = "http://engine/wmp/events",
+                                tenantTokens = tenantKind,
+                            ),
+                        ),
+                        engineConnectRetries = 1,
+                    ),
+                )
+                connectViaWmpReflectively(wallet)
+                assertEquals(
+                    "tenantTokens=$tenantKind: the provider's transport mints the matching kind",
+                    mintedAccessToken(if (tenantKind) "tenant-kind" else "backend-kind").raw,
+                    mintsOf(captured ?: throw AssertionError("the transport was not captured")),
+                )
+                if (tenantKind) {
+                    coVerify(exactly = 1) { authTokens.ensureTenantToken() }
+                    coVerify(exactly = 0) { authTokens.ensureBackendToken() }
+                } else {
+                    coVerify(exactly = 1) { authTokens.ensureBackendToken() }
+                    coVerify(exactly = 0) { authTokens.ensureTenantToken() }
+                }
+            } finally {
+                SirosWallet.createWmpPeerFromTransport = previous
+            }
+        }
+    }
+
+    @Test
+    fun engineProviders_failOverWhenALocalFactoryThrowsAnErrorNotAnException() = runTest(dispatcher) {
+        // Found on the device: a LOCAL provider's factory can throw an
+        // ERROR, not an Exception (the UnsatisfiedLinkError of an engine
+        // core whose .so is missing from the APK) - Exception-only
+        // catching let it escape the loop and crash the app at login. A
+        // broken provider is exactly what failover is for: the Error is
+        // one failed attempt, the next provider carries the session.
+        val connectingPeer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        coEvery { connectingPeer.connect(any<String>(), any(), any()) } just runs
+
+        val (wallet, transports) = providerWallet(
+            connectingPeer,
+            providers = listOf(
+                WmpEngineProvider.Local { _ ->
+                    throw AssertionError("dlopen failed: library \"libengine_adapter_sdk.so\" not found")
+                },
+                WmpEngineProvider.Local { NullTransport() },
+            ),
+            retries = 1,
+        )
+        try {
+            connectViaWmpReflectively(wallet)
+        } finally {
+            walletCleanup.forEach { it() }
+        }
+
+        assertEquals(
+            "the erroring provider built no transport; the failover target's is the only one",
+            1, transports.size,
+        )
+    }
+
     @Test
     fun aTxCodeAsk_reachesTheListenerAndItsAnswerBack() = runTest(dispatcher) {
         val listener = mockk<WalletEventListener>(relaxed = true)

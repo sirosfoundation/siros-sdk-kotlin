@@ -8101,79 +8101,164 @@ class SirosWallet private constructor(
         wmpPeer?.close()
         blindIssuance.clear()
 
-        // The transport, by the engine mode (WmpEngineMode):
-        //
-        // - LEGACY_WS (default): the Go engine's WebSocket - engineUrl >
-        //   discovery > backendUrl, the historic path, unchanged.
-        // - HTTP_SSE: the Rust engine's WMP HTTP+SSE binding - the
-        //   configured wmpSendUrl/wmpSseUrl (siros-wallet-core
-        //   engine-server; the reply rides the SSE stream).
-        // - LOCAL: the app's own transport factory (WmpUniFFITransport
-        //   over its ports - the AAR's engine core in-process).
-        //
-        // Every mode carries the SAME WmpPeer/WmpSession/profile stack -
-        // only the Transport under it changes, which is the point of the
-        // seam: the flows, the asks and the profile dispatch are
-        // transport-independent.
-        val peer = when (config.wmpEngineMode) {
-            org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS -> {
-                // Resolve engine URL: explicit config > discovery > same as backend
-                val engineBaseUrl = (config.engineUrl
-                    ?: WalletConfig.discoverEngineUrl(config.backendUrl)
-                    ?: config.backendUrl).trimEnd('/')
-                val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
-                    "/api/v2/wallet?tenant_id=${config.tenantId}"
-                createWmpPeer(wsUrl)
-            }
-            org.siros.sdk.wallet.WmpEngineMode.HTTP_SSE -> {
-                val sendUrl = config.wmpSendUrl
-                    ?: throw WalletException("WMP_ENGINE_MODE=HTTP_SSE needs wmpSendUrl (the engine's POST /wmp endpoint)")
-                val sseUrl = config.wmpSseUrl
-                    ?: throw WalletException("WMP_ENGINE_MODE=HTTP_SSE needs wmpSseUrl (the engine's GET /wmp/events endpoint)")
-                createWmpPeerFromTransport(
-                    org.siros.sdk.transport.wmp.WmpHttpSseTransport(
-                        sendUrl = sendUrl,
-                        sseUrl = sseUrl,
-                        // The bearer the engine's TAC gate validates, FRESH
-                        // PER REQUEST: the binding is stateless - every POST
-                        // is its own request - and the AS's tokens live ~2
-                        // minutes, so a token baked in at connect dies with
-                        // its expiry and every later flow start is answered
-                        // "Not authorized" (found driving an issuance 40
-                        // minutes after login). The provider is the wallet's
-                        // own ensure-shaped mint (cached until expired), the
-                        // same source the legacy engine session's
-                        // tokenProvider refreshes from on its reconnects; a
-                        // legacy-app-token deployment keeps its fixed token.
-                        //
-                        // The kind follows the DEPLOYMENT's engine
-                        // (engine-parity.md §8): a tenant-mode engine
-                        // (config.wmpTenantTokens) takes the AS's
-                        // pseudonymous kind - the wallet's traffic
-                        // attributes to the tenant, never to a person; the
-                        // default keeps the backend token (the user's own
-                        // subject), matching a user-mode engine.
-                        tokenProvider = {
-                            legacyAppToken ?: if (config.wmpTenantTokens) {
-                                authTokens.ensureTenantToken().raw
-                            } else {
-                                authTokens.ensureBackendToken().raw
-                            }
-                        },
-                    ),
-                )
-            }
-            org.siros.sdk.wallet.WmpEngineMode.LOCAL -> {
-                val transport = config.wmpTransport
-                    ?: throw WalletException("WMP_ENGINE_MODE=LOCAL needs wmpTransport (the app's WmpUniFFITransport factory - the AAR's engine core)")
-                // The asks of the in-process engine ride the Host port (the
-                // UniFFI callbacks), not the wire: hand the app's factory the
-                // wallet's OWN ask handler, so the same handlers answer the
-                // local engine as answer the remote one's child flows.
-                createWmpPeerFromTransport(transport(WalletEngineAskHandler(peerEpoch)))
-            }
+        val providers = wmpConnectProviders()
+        if (providers.isEmpty()) {
+            // The legacy Go engine's WebSocket - the historic path, unchanged,
+            // and never part of the provider list (it is not a siros-wallet-core
+            // engine; engineUrl > discovery > backendUrl).
+            val engineBaseUrl = (config.engineUrl
+                ?: WalletConfig.discoverEngineUrl(config.backendUrl)
+                ?: config.backendUrl).trimEnd('/')
+            val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
+                "/api/v2/wallet?tenant_id=${config.tenantId}"
+            val peer = createWmpPeer(wsUrl)
+            connectWmpPeer(peer, appToken, peerEpoch, thisConnectionScope, legacy = true)
+            Timber.i("Connected via WMP protocol (legacy Go engine)")
+            return
         }
+        connectFirstEngineProvider(providers, appToken, peerEpoch, thisConnectionScope)
+    }
 
+    /**
+     * The prioritized engine providers ([WalletConfig.engineProviders]), or
+     * the legacy single-mode mapping when none are configured. Each
+     * provider is connected in order ([WalletConfig.engineConnectRetries]
+     * attempts each) until one answers; a connected session is then PINNED
+     * to that provider - failover never happens mid-flow.
+     *
+     * The transport kinds:
+     *
+     * - [WmpEngineProvider.RemoteHttpSse] (and HTTP_SSE legacy): the Rust
+     *   engine's WMP HTTP+SSE binding - the configured send/sse URLs
+     *   (siros-wallet-core engine-server; the reply rides the SSE stream).
+     * - [WmpEngineProvider.Local]: the app's own transport factory
+     *   (WmpUniFFITransport over its ports - the AAR's engine core
+     *   in-process).
+     *
+     * Every kind carries the SAME WmpPeer/WmpSession/profile stack - only
+     * the Transport under it changes, which is the point of the seam: the
+     * flows, the asks and the profile dispatch are transport-independent.
+     */
+    private fun wmpConnectProviders(): List<WmpEngineProvider> {
+        if (config.engineProviders.isNotEmpty()) {
+            return config.engineProviders
+        }
+        return when (config.wmpEngineMode) {
+            org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS -> emptyList()
+            org.siros.sdk.wallet.WmpEngineMode.HTTP_SSE -> listOf(
+                WmpEngineProvider.RemoteHttpSse(
+                    sendUrl = config.wmpSendUrl
+                        ?: throw WalletException("WMP_ENGINE_MODE=HTTP_SSE needs wmpSendUrl (the engine's POST /wmp endpoint)"),
+                    sseUrl = config.wmpSseUrl
+                        ?: throw WalletException("WMP_ENGINE_MODE=HTTP_SSE needs wmpSseUrl (the engine's GET /wmp/events endpoint)"),
+                    tenantTokens = config.wmpTenantTokens,
+                )
+            )
+            org.siros.sdk.wallet.WmpEngineMode.LOCAL -> listOf(
+                WmpEngineProvider.Local { ctx ->
+                    // The asks of the in-process engine ride the Host port (the
+                    // UniFFI callbacks), not the wire: the factory gets the
+                    // wallet's OWN ask handler, so the same handlers answer the
+                    // local engine as answer the remote one's child flows.
+                    val factory = config.wmpTransport
+                        ?: throw WalletException("WMP_ENGINE_MODE=LOCAL needs wmpTransport (the app's WmpUniFFITransport factory - the AAR's engine core)")
+                    factory(ctx.asks)
+                }
+            )
+        }
+    }
+
+    /**
+     * The provider loop: each provider in priority order,
+     * [WalletConfig.engineConnectRetries] attempts each, every attempt
+     * building a fresh transport (the local factory may carry per-attempt
+     * state; the remote one is stateless anyway). The first provider that
+     * connects carries the session - pinned to it for its life. Every
+     * provider failing refuses naming each one tried.
+     */
+    private suspend fun connectFirstEngineProvider(
+        providers: List<WmpEngineProvider>,
+        appToken: String,
+        peerEpoch: Int,
+        thisConnectionScope: CoroutineScope,
+    ) {
+        var lastError: Throwable? = null
+        for (provider in providers) {
+            val attempts = maxOf(1, config.engineConnectRetries)
+            for (attempt in 1..attempts) {
+                try {
+                    val transport = when (provider) {
+                        is WmpEngineProvider.RemoteHttpSse -> org.siros.sdk.transport.wmp.WmpHttpSseTransport(
+                            sendUrl = provider.sendUrl,
+                            sseUrl = provider.sseUrl,
+                            // The bearer the engine's TAC gate validates, FRESH PER
+                            // REQUEST: the binding is stateless - every POST is its
+                            // own request - and the AS's tokens live ~2 minutes, so
+                            // a token baked in at connect dies with its expiry (found
+                            // driving an issuance 40 minutes after login). The kind
+                            // follows the DEPLOYMENT's engine (engine-parity.md §8):
+                            // a tenant-mode engine (provider.tenantTokens) takes the
+                            // AS's pseudonymous kind - the wallet's traffic attributes
+                            // to the tenant, never to a person.
+                            tokenProvider = {
+                                legacyAppToken ?: if (provider.tenantTokens) {
+                                    authTokens.ensureTenantToken().raw
+                                } else {
+                                    authTokens.ensureBackendToken().raw
+                                }
+                            },
+                        )
+                        is WmpEngineProvider.Local -> provider.transportFactory(
+                            WmpEngineAskContext(
+                                asks = WalletEngineAskHandler(peerEpoch),
+                                // A fresh wallet-backend bearer for the app's trust
+                                // stack (the backend proxy's TAC-gated /v1/evaluate
+                                // accepts exactly this).
+                                bearerProvider = {
+                                    legacyAppToken ?: authTokens.ensureBackendToken().raw
+                                },
+                            )
+                        )
+                    }
+                    val peer = createWmpPeerFromTransport(transport)
+                    connectWmpPeer(peer, appToken, peerEpoch, thisConnectionScope, legacy = false)
+                    Timber.i("Connected via WMP protocol (engine provider ${provider.label}, attempt $attempt)")
+                    return
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    // Throwable, not Exception: a LOCAL provider's factory can
+                    // throw an Error (found on the device: an
+                    // UnsatisfiedLinkError - the engine core's .so missing
+                    // from the APK - surfaced here and CRASHED the app
+                    // because Exception missed it). A broken provider is
+                    // exactly what failover is for: record it, fail over.
+                    lastError = e
+                    Timber.w(e, "Engine provider ${provider.label} connect attempt $attempt/$attempts failed")
+                    if (attempt < attempts) kotlinx.coroutines.delay(250L * attempt)
+                }
+            }
+            Timber.w("Engine provider ${provider.label} failed all $attempts attempts - failing over")
+        }
+        throw WalletException(
+            "No engine provider connected (tried ${providers.joinToString { it.label }}): ${lastError?.message ?: "unknown"}",
+        )
+    }
+
+    /**
+     * The common connect tail for one built peer: the profile, the
+     * capability negotiation, the connect, and the session bookkeeping.
+     * [legacy] selects the Go engine's capability shape (go-wmp knows no
+     * `flows`/`credential_notification`); the Rust engine's transports
+     * (remote and local) always offer both.
+     */
+    private suspend fun connectWmpPeer(
+        peer: org.siros.sdk.transport.wmp.WmpPeer,
+        appToken: String,
+        peerEpoch: Int,
+        thisConnectionScope: CoroutineScope,
+        legacy: Boolean,
+    ) {
         val profile = wmpProfile(peer, peerEpoch, thisConnectionScope)
         peer.use(profile)
         // Offered per session: a later change of transactionDataEnabled
@@ -8182,9 +8267,9 @@ class SirosWallet private constructor(
         // siros-wallet-core gates every OpenID4x flow start on the `flows`
         // capability being NEGOTIATED (core §10.3) and the credential
         // notification flow on `credential_notification` - offered on the
-        // Rust engine's transports only: go-wmp (LEGACY_WS) needs neither and
+        // Rust engine's transports only: go-wmp (legacy) needs neither and
         // its session create is not told about capabilities it does not know.
-        val capabilities = if (config.wmpEngineMode == org.siros.sdk.wallet.WmpEngineMode.LEGACY_WS) {
+        val capabilities = if (legacy) {
             TransactionDataSupport.capabilitiesOffered(declare)
         } else {
             kotlinx.serialization.json.buildJsonObject {
@@ -8216,8 +8301,6 @@ class SirosWallet private constructor(
         wmpConnectionGeneration = peerEpoch
         // WMP peer handles credential notifications via the profile
         credentialNotifier = null // Notifications go through WmpPeer.sendCredentialNotification()
-
-        Timber.i("Connected via WMP protocol (${config.wmpEngineMode})")
     }
 
     /** Transport-agnostic description of one generated OID4VCI proof. */
