@@ -371,6 +371,24 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun answerPresentationConsent(shown: PendingPresentationConsent, agreed: Boolean) =
         presentationConsentGate.answer(shown, agreed)
 
+    /** The user's ruling on a credential-match ambiguity: the wallet picks its first match. */
+    fun ambiguityWalletChooses(pending: PendingAmbiguity) {
+        pending.answer.complete(org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.walletChoice)
+    }
+
+    /** The user CANCELLED the ambiguity dialog: the presentation is refused outright. */
+    fun ambiguityDeclined(pending: PendingAmbiguity) {
+        pending.answer.complete(org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.Declined)
+    }
+
+    /** The user chose these matches from the ambiguity dialog. */
+    fun ambiguityUserChooses(
+        pending: PendingAmbiguity,
+        picks: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
+    ) {
+        pending.answer.complete(org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.UserChoice(picks))
+    }
+
     /** Applies the persisted setting and the consent hook to [target]. */
     private fun configureTransactionData(target: SirosWallet) {
         target.transactionDataEnabled = _transactionDataEnabled.value
@@ -1148,6 +1166,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _pendingPresentationRequest = MutableStateFlow<PresentationRequest?>(null)
     val pendingPresentationRequest: StateFlow<PresentationRequest?> = _pendingPresentationRequest
 
+    /** The presentation deep links this session started (the spinner-clearing
+     * and no-match message key: a local-WMP completion lands Ready → Ready,
+     * which a conflated StateFlow never re-emits). */
+    private val startedPresentationLinks = mutableSetOf<String>()
+
+    /** A WMP credential-match ambiguity waiting for the user's ruling. */
+    private val _pendingAmbiguity = MutableStateFlow<PendingAmbiguity?>(null)
+    val pendingAmbiguity: StateFlow<PendingAmbiguity?> = _pendingAmbiguity
+
+    /** An ambiguity ask on screen: the matches and the answer channel. */
+    class PendingAmbiguity(
+        val matches: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
+        internal val answer: kotlinx.coroutines.CompletableDeferred<org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity>,
+    )
+
     private var presentationContinuation: kotlinx.coroutines.CancellableContinuation<List<Long>>? = null
 
     init {
@@ -1178,6 +1211,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 flowId: String,
                 purpose: String?,
                 requestedClaims: List<String>,
+                verifierName: String?,
+                verifierId: String?,
+                selections: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
             ): Boolean {
                 // The WMP OID4VP consent: the same on-screen YES/NO the
                 // circuit_zk presentation consent rides, over the engine's
@@ -1185,21 +1221,46 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 // The listener's default DECLINES (fail closed) - found
                 // on-device: without this override every WMP presentation's
                 // consent was declined in 0.3s and no dialog was ever shown.
-                val request = org.siros.sdk.credentials.PresentationConsentRequest(
-                    verifier = org.siros.sdk.credentials.ConsentVerifier(
-                        label = purpose ?: "the verifier",
-                    ),
-                    entries = listOf(
+                // One entry PER SELECTION (the match step's per-credential
+                // record), the claims grouped under their credential - not
+                // the engine's flat list under a name-less entry (found
+                // on-device: "the value 'nl'" twice). Falls back to the flat
+                // list, de-duplicated, when no match record exists.
+                val entries = if (selections.isNotEmpty()) {
+                    selections.map { sel ->
+                        org.siros.sdk.credentials.ConsentEntry(
+                            credential = org.siros.sdk.credentials.CredentialRef(
+                                name = sel.credentialName,
+                                issuer = null,
+                            ),
+                            items = (sel.claims ?: emptyList()).map {
+                                org.siros.sdk.credentials.ConsentItem.Claim(it)
+                            },
+                        )
+                    }
+                } else {
+                    listOf(
                         org.siros.sdk.credentials.ConsentEntry(
                             credential = org.siros.sdk.credentials.CredentialRef(
                                 name = null,
                                 issuer = null,
                             ),
-                            items = requestedClaims.map {
+                            items = requestedClaims.distinct().map {
                                 org.siros.sdk.credentials.ConsentItem.Claim(it)
                             },
                         ),
+                    )
+                }
+                val request = org.siros.sdk.credentials.PresentationConsentRequest(
+                    verifier = org.siros.sdk.credentials.ConsentVerifier(
+                        // The label: the metadata's client_name, else the DOMAIN
+                        // the engine extracted (the SDK's chain) - never the raw
+                        // scheme-prefixed identifier in the title sentence. The
+                        // raw client_id rides verifierId into the details view.
+                        label = verifierName ?: purpose ?: "the verifier",
+                        verifierId = verifierId,
                     ),
+                    entries = entries,
                     // The engine verified the request object's x5c signature
                     // before this ask (S1's own parser check) - stated, not
                     // assumed.
@@ -1207,6 +1268,29 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     locale = java.util.Locale.getDefault().toLanguageTag(),
                 )
                 return presentationConsentGate.handler.confirm(request)
+            }
+
+            override suspend fun onCredentialAmbiguity(
+                flowId: String,
+                matches: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
+            ): org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity {
+                // The user's ruling on a multi-match (issue #399): Choose the
+                // picked match, or Cancel - which REFUSES the presentation
+                // outright (never a silent fallback to the wallet's match).
+                matches.forEach { m ->
+                    android.util.Log.i(
+                        "AmbiguityMatch",
+                        "credentialId=${m.credentialId} name=${m.credentialName} claims=${m.claims}",
+                    )
+                }
+                val deferred = kotlinx.coroutines.CompletableDeferred<org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity>()
+                val pending = PendingAmbiguity(matches, deferred)
+                _pendingAmbiguity.value = pending
+                try {
+                    return deferred.await()
+                } finally {
+                    if (_pendingAmbiguity.value === pending) _pendingAmbiguity.value = null
+                }
             }
 
             override fun onAuthorizationRequired(
@@ -1248,6 +1332,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
             override fun onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {
                 Log.e(TAG, "Flow $flowId failed: $errorMessage")
+                // The same conflation hazard as onFlowComplete's fix.
+                _flowStarting.value = null
                 // A refused or declined payment confirmation is worded here, in the app's own
                 // language; the SDK only reports the reason. A decline needs no error dialog.
                 val refusal = lastTransactionRefusal?.takeIf { it.first == flowId }?.second
@@ -1291,7 +1377,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 receivedCredentialCount++
             }
 
-            override fun onFlowComplete(flowId: String, redirectUri: String?) {
+            override fun onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Boolean) {
+                // The spinner clears HERE too (not only via observeWalletState):
+                // a completion that changes nothing the state-flow carries -
+                // the no-match refusal lands Ready → Ready, and a conflated
+                // StateFlow re-emits nothing for an equal value - so the
+                // "contacting verifier" indicator would otherwise stay up
+                // forever (found on-device: a presentation matching nothing
+                // spun until the app was killed).
+                _flowStarting.value = null
+                // Read BEFORE the clear below - the branch order matters:
+                // was a presentation started this session at all?
+                val wasPresentation = startedPresentationLinks.isNotEmpty()
+                startedPresentationLinks.clear()
                 if (receivedCredentialCount > 0) {
                     _infoMessage.value = activity.getString(
                         R.string.flow_credentials_received,
@@ -1305,6 +1403,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     // above; presentation has no analogous per-item count, so a plain
                     // confirmation is the equivalent "something happened" signal for a
                     // flow whose whole point is watching this screen after a QR scan.
+                    _infoMessage.value = activity.getString(R.string.flow_presentation_sent)
+                } else if (matchedNothing) {
+                    // The engine's explicit no-match refusal (the completion
+                    // payload's refused=true): the verifier sees "wallet
+                    // declined the request"; the wallet must say what
+                    // actually happened (found on-device: a SUCCESSFUL
+                    // cross-device presentation showed "no match" - the
+                    // pre-fix heuristic could not tell the two apart).
+                    _infoMessage.value = activity.getString(R.string.flow_no_matching_credential)
+                } else if (wasPresentation) {
+                    // A presentation this session started, completing with
+                    // nothing received and no refusal: it was SENT (the
+                    // local-WMP path never enters FlowActive, so the old
+                    // flowType check missed it entirely).
                     _infoMessage.value = activity.getString(R.string.flow_presentation_sent)
                 }
 
@@ -2816,13 +2928,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         Log.i(TAG, "Routing to presentation")
                         // false: the SDK ignored a redelivered duplicate of a request already started; nothing will come through
                         // the wallet state for this attempt, so its "contacting the verifier" indicator must not stay up.
-                        if (!wallet.startPresentation(link.uri)) _flowStarting.value = null
+                        if (wallet.startPresentation(link.uri)) startedPresentationLinks.add(link.uri) else _flowStarting.value = null
                     }
                     else -> {
                         // Fallback: treat unclassified URIs as presentation requests
                         // (covers plain https://...?request_uri= patterns from QR codes)
                         Log.i(TAG, "Routing to presentation (unclassified)")
-                        if (!wallet.startPresentation(uri)) _flowStarting.value = null
+                        if (wallet.startPresentation(uri)) startedPresentationLinks.add(uri) else _flowStarting.value = null
                     }
                 }
             } catch (e: Exception) {

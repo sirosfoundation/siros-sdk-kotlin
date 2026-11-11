@@ -155,6 +155,7 @@
     <string name="flow_diagnostic_label">Διαγνωστικό: %1$s</string>
     <string name="flow_credentials_received">Ελήφθησαν %1$d πιστοποιητικά</string>
     <string name="flow_presentation_sent">Η παρουσίαση στάλθηκε με επιτυχία</string>
+    <string name="flow_no_matching_credential">Δεν υπάρχει διαπιστευτήριο σε αυτό το πορτοφόλι που να αντιστοιχεί σε αυτό που ζήτησε ο επαληθευτής</string>
     <string name="flow_step_waiting_for_reader">Αναμονή σύνδεσης αναγνώστη…</string>
     <string name="flow_step_reader_connected">Ο αναγνώστης συνδέθηκε, έλεγχος αιτήματος…</string>
     <string name="proximity_presentation_failed">Η παρουσίαση δεν ολοκληρώθηκε</string>

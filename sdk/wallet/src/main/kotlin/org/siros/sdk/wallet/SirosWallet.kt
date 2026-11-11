@@ -9238,7 +9238,7 @@ class SirosWallet private constructor(
             eventListener?.onFlowError(flowId, reason)
         } else {
             Timber.i("WMP flow $flowId complete")
-            eventListener?.onFlowComplete(flowId)
+            eventListener?.onFlowComplete(flowId, redirectUriOf(result))
         }
         returnToReadyState()
     }
@@ -9257,12 +9257,17 @@ class SirosWallet private constructor(
         )
     }
 
-    /** Test seam for [onWmpFlowComplete] — the completion handler without the peer plumbing. */
+    /** Test seam for [onWmpFlowComplete] - the completion handler without the peer plumbing. */
     internal suspend fun onWmpFlowCompleteForTest(
         flowId: String,
         result: kotlinx.serialization.json.JsonObject?,
         lifetime: Int = 0,
     ) = onWmpFlowComplete(null, flowId, result, lifetime)
+
+    /** The completion payload's redirect_uri (the back-to-verifier link), when it carried one. */
+    private fun redirectUriOf(result: kotlinx.serialization.json.JsonObject?): String? =
+        (result?.get("redirect_uri") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+            ?.takeIf { it.isNotBlank() }
 
     private suspend fun onWmpFlowComplete(
         peer: org.siros.sdk.transport.wmp.WmpPeer?,
@@ -9341,7 +9346,14 @@ class SirosWallet private constructor(
                 )
             } else {
                 Timber.i("WMP flow $flowId complete")
-                eventListener?.onFlowComplete(flowId)
+                // The no-match refusal marker (the engine's completion payload
+                // carries refused=true when the request matched nothing): a
+                // presentation completing WITHOUT it was sent, and a UI must
+                // not confuse the two (found on-device: a successful
+                // cross-device presentation showed "no match").
+                val matchedNothing =
+                    (result?.get("refused") as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull == true
+                eventListener?.onFlowComplete(flowId, redirectUriOf(result), matchedNothing)
             }
         } finally {
             blindIssuance.drop(flowId)
@@ -9836,10 +9848,47 @@ class SirosWallet private constructor(
         parentFlowId: String,
         params: org.siros.sdk.transport.wmp.openid4x.EngineConsentParams,
     ): Boolean {
+        // The verifier's own display name (the trust evaluation's entityName -
+        // the same source the other consent surfaces render), so the consent
+        // sentence has a subject ("<verifier> is asking you to share…"): the
+        // engine's ask carries the purpose alone (found on-device: the dialog
+        // read "is asking you to share…" with no subject at all).
+        val trust = lastTrustResults[parentFlowId]
+        val verifierName = trust?.entityName
+        val verifierId = trust?.identifier
+        // The per-credential selections this ask covers (the match step's
+        // record): the consent UI can group the claims under their
+        // credentials instead of rendering the engine's flat
+        // across-selections list (found on-device: two matched credentials
+        // both carrying 'nl' read as "the value 'nl'" twice with no grouping).
+        val allCreds = credentialStore.getAll()
+        val selections = synchronized(consentLock) { pendingMatchResultsByFlow[parentFlowId] }
+            ?.flatMap { r -> r.candidates.map { c -> c.id.toString() to r } }
+            ?.mapNotNull { (cid, r) ->
+                val id = cid.toLongOrNull() ?: return@mapNotNull null
+                // THIS credential's own claims (the entry groups them under
+                // its name, so the same claim across two credentials reads
+                // as two rows rather than a duplicated bare list).
+                val claims = r.requestedClaims.mapNotNull { it.lastOrNull() }.distinct()
+                    .ifEmpty { null }
+                org.siros.sdk.wallet.WalletEventListener.ConsentSelection(
+                    credentialId = id,
+                    // The verifier's own query id ("diploma", "mDL") is the
+                    // semantic type name - the title's type label.
+                    credentialName = allCreds.find { it.id == id }?.let { cred ->
+                        CredentialUtils.credentialTitle(cred, r.queryId)
+                    },
+                    claims = claims,
+                )
+            }
+            .orEmpty()
         val consented = eventListener?.onConsentRequested(
             flowId = parentFlowId,
             purpose = params.purpose,
+            verifierName = verifierName,
+            verifierId = verifierId,
             requestedClaims = params.requestedClaims,
+            selections = selections,
         ) ?: false
         if (!consented) Timber.i("The user declined the consent ask for flow $parentFlowId")
         return consented
@@ -10724,6 +10773,44 @@ class SirosWallet private constructor(
         ticket: ConsentTicket = issueConsentTicket(flowId),
     ): org.siros.sdk.transport.wmp.openid4x.MatchResult {
         val allCreds = credentialStore.getAll()
+        // The verifier the request named, as the engine resolved it (the
+        // match ask's `verifier` object - name, client_id, trusted,
+        // framework): recorded as THIS flow's trust result, so the consent
+        // ask's subject ("<verifier> is asking you to share…") is the
+        // verifier's own name. The local engine's trust stays engine-side
+        // (its Pdp port), so this ask is the only wallet-side record of it
+        // - found on-device: the consent dialog read subject-less
+        // ("is asking you to share…") because nothing populated it.
+        payload?.get("verifier")?.let { v ->
+            (v as? JsonObject)?.let { verifier ->
+                val name = (verifier["name"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                val clientId = (verifier["client_id"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                val domain = (verifier["domain"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                // The consent-facing LABEL: the metadata's client_name when
+                // the request carried one (name != client_id), else the DOMAIN
+                // the engine extracted from the client_id - never the raw
+                // scheme-prefixed identifier (x509_hash:… / did:…), which
+                // reads as machine noise in the title sentence and belongs in
+                // the details view instead (the verifierId the dialog's
+                // verifierDetail expands).
+                val label = when {
+                    !name.isNullOrBlank() && name != clientId -> name
+                    !domain.isNullOrBlank() -> domain
+                    else -> clientId
+                }
+                if (!label.isNullOrBlank()) {
+                    synchronized(consentLock) {
+                        lastTrustResults[flowId] = TrustResult(
+                            trusted = (verifier["trusted"] as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull ?: false,
+                            framework = (verifier["framework"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull,
+                            entityName = label,
+                            identifier = clientId,
+                            domain = domain,
+                        )
+                    }
+                }
+            }
+        }
         // `as? JsonObject`, not `.jsonObject`: a non-DCQL request shape has
         // this key relayed as JSON `null` rather than omitted, and
         // `.jsonObject` throws on that - the same crash #150 fixed in the
@@ -10757,7 +10844,7 @@ class SirosWallet private constructor(
         val matchResults = CredentialMatcher.match(dcqlQuery, allCreds, zkSystemIds)
         // The query each candidate is answered under - first match wins, the
         // same rule the other two transports apply.
-        val matchResultByCredentialId = buildMap {
+        var matchResultByCredentialId = buildMap {
             for (r in matchResults) for (c in r.candidates) putIfAbsent(c.id, r)
         }
         // Each requestedClaims entry is a full DCQL claim path; only its last segment is the disclosable element id (see
@@ -10766,12 +10853,65 @@ class SirosWallet private constructor(
         val claimsByCredentialId = matchResultByCredentialId.mapValues { (_, result) ->
             result.requestedClaims.mapNotNull { it.lastOrNull() }.distinct().toSet().ifEmpty { null }
         }
-        val matches = matchResultByCredentialId.map { (credentialId, result) ->
+        var matches = matchResultByCredentialId.map { (credentialId, result) ->
             org.siros.sdk.transport.wmp.openid4x.CredentialMatch(
                 credentialId = credentialId.toString(),
                 credentialQueryId = result.queryId,
                 disclosedClaims = claimsByCredentialId[credentialId]?.toList(),
             )
+        }
+        // MORE THAN ONE match for one query is a genuine ambiguity (issue
+        // #399's selection follow-up): the wallet may proceed with its own
+        // first pick (the default - the pre-#399 behaviour), or hand the
+        // choice to the user, whose picks become the answer's entirety -
+        // the engine then consents and signs exactly what the user chose.
+        // Found on-device: two diplomas against one query auto-presented
+        // BOTH with no way for the user to say which.
+        if (matches.size > 1) {
+            val ambiguityMatches = matchResultByCredentialId.map { (credentialId, result) ->
+                allCreds.find { it.id == credentialId }?.let { cred ->
+                    org.siros.sdk.wallet.WalletEventListener.ConsentSelection(
+                        credentialId = credentialId,
+                        // The verifier's own query id ("diploma", "mDL") is the
+                        // semantic type name - the title's type label.
+                        credentialName = CredentialUtils.credentialTitle(cred, result.queryId),
+                        claims = claimsByCredentialId[credentialId]?.toList(),
+                    )
+                }
+            }.mapNotNull { it }
+            when (val answer = eventListener?.onCredentialAmbiguity(flowId, ambiguityMatches)) {
+                org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.Declined -> {
+                    // Cancel REFUSES the presentation (issue #399's wording
+                    // correction): no silent fallback to the wallet's match.
+                    Timber.i("WMP match for flow $flowId is ambiguous and the user cancelled: refusing the presentation")
+                    return org.siros.sdk.transport.wmp.openid4x.MatchResult(
+                        matches = emptyList(),
+                        noMatchReason = "the user declined the ambiguous credential match",
+                    )
+                }
+                null, is org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.walletChoice -> {
+                    Timber.i("WMP match for flow $flowId is ambiguous (${matches.size} candidates); the wallet keeps its first match")
+                }
+                is org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.UserChoice -> {
+                    if (answer.selections.isEmpty()) {
+                        Timber.i("WMP match for flow $flowId is ambiguous and the user chose nothing: refusing")
+                        return org.siros.sdk.transport.wmp.openid4x.MatchResult(
+                            matches = emptyList(),
+                            noMatchReason = "the user selected none of the ${matches.size} matching credentials",
+                        )
+                    }
+                    Timber.i("WMP match for flow $flowId is ambiguous; the user chose ${answer.selections.size} of ${matches.size}")
+                    val chosen = answer.selections.map { it.credentialId.toString() }.toSet()
+                    matchResultByCredentialId = matchResultByCredentialId.filterKeys { it.toString() in chosen }
+                    matches = matchResultByCredentialId.map { (credentialId, result) ->
+                        org.siros.sdk.transport.wmp.openid4x.CredentialMatch(
+                            credentialId = credentialId.toString(),
+                            credentialQueryId = result.queryId,
+                            disclosedClaims = claimsByCredentialId[credentialId]?.toList(),
+                        )
+                    }
+                }
+            }
         }
         if (matches.isNotEmpty()) {
             // This IS WMP's consent for this flow - see the no-dcql_query branch's identical comment above (including why

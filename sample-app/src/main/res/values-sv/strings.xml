@@ -155,6 +155,7 @@
     <string name="flow_diagnostic_label">Diagnostik: %1$s</string>
     <string name="flow_credentials_received">Mottog %1$d intyg</string>
     <string name="flow_presentation_sent">Presentationen skickades</string>
+    <string name="flow_no_matching_credential">Ingen legitimation i denna plånbok matchar vad verifieraren bad om</string>
     <string name="flow_step_waiting_for_reader">Väntar på att en läsare ska ansluta…</string>
     <string name="flow_step_reader_connected">Läsare ansluten, verifierar begäran…</string>
     <string name="proximity_presentation_failed">Presentationen slutfördes inte</string>

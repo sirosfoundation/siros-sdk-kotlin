@@ -155,6 +155,7 @@
     <string name="flow_diagnostic_label">Diagnóstico: %1$s</string>
     <string name="flow_credentials_received">Recebida(s) %1$d credencial(is)</string>
     <string name="flow_presentation_sent">Apresentação enviada com sucesso</string>
+    <string name="flow_no_matching_credential">Nenhuma credencial nesta carteira corresponde ao que o verificador pediu</string>
     <string name="flow_step_waiting_for_reader">Aguardando a conexão de um leitor…</string>
     <string name="flow_step_reader_connected">Leitor conectado, verificando a solicitação…</string>
     <string name="proximity_presentation_failed">A apresentação não foi concluída</string>

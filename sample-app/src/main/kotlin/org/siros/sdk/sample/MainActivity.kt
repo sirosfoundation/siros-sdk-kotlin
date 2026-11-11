@@ -333,6 +333,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val showCredentialDetails by viewModel.showCredentialDetails.collectAsState()
     val pendingTransactionConsent by viewModel.pendingTransactionConsent.collectAsState()
     val pendingPresentationConsent by viewModel.pendingPresentationConsent.collectAsState()
+    val pendingAmbiguity by viewModel.pendingAmbiguity.collectAsState()
     val showTransactionLog by viewModel.showTransactionLog.collectAsState()
 
     LaunchedEffect(errorMessage) {
@@ -593,7 +594,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     // System Back steps out of the stacked screens one at a time, then from
     // any destination to Home. The full-screen states above the chrome
     // (consent, credential detail, settings sub-screens) keep their own Back.
-    val chromeVisible = pendingPresentation == null && pendingTransactionConsent == null &&
+    val chromeVisible = pendingAmbiguity == null && pendingPresentation == null && pendingTransactionConsent == null &&
         pendingPresentationConsent == null && !showTransactionLog && selectedCredential == null &&
         !showDevices && !showWscaDeveloper && flowStarting == null
     androidx.activity.compose.BackHandler(
@@ -613,6 +614,18 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         when {
+            // A credential-match ambiguity (issue #399): the user rules on a
+            // multi-match BEFORE the engine consents/signs - wallet's first
+            // pick or their own. Rendered above everything: the consent
+            // dialog only follows once the match is decided.
+            pendingAmbiguity != null -> pendingAmbiguity!!.let { pending ->
+                AmbiguityDialog(
+                    pending = pending,
+                    onUserChooses = { viewModel.ambiguityUserChooses(pending, it) },
+                    onCancel = { viewModel.ambiguityDeclined(pending) },
+                )
+            }
+
             // Presentation consent dialog — shown as a full-screen overlay
             pendingPresentation != null -> {
                 // Recomputed per new presentation request, not cached: a key

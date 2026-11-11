@@ -16372,7 +16372,7 @@ class SirosWalletTest {
         )
         val errors = mutableListOf<String>()
         wallet.setEventListener(object : WalletEventListener {
-            override fun onFlowComplete(flowId: String, redirectUri: String?) { errors.clear() } // unused
+            override fun onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Boolean) { errors.clear() } // unused
             override fun onFlowError(flowId: String, errorMessage: String, redirectUri: String?) { errors.add(errorMessage) }
             override suspend fun onCredentialSelectionRequired(request: org.siros.sdk.wallet.PresentationRequest): List<Long> = emptyList()
         })

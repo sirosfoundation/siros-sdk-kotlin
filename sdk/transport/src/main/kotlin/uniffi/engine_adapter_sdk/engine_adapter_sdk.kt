@@ -2694,7 +2694,15 @@ data class EvaluationResponse (
     /**
      * The decision text, when there is one.
      */
-    var `decision`: kotlin.String?
+    var `decision`: kotlin.String?, 
+    /**
+     * The PDP's response context, verbatim JSON text when it carried one
+     * (go-trust's `EvaluationResponseContext` - `display_name`, …). The
+     * recognised member today is `display_name` (a registry's own
+     * human-facing name for the subject), consumed by the wallet's consent
+     * surfaces; uninterpreted elsewhere.
+     */
+    var `context`: kotlin.String?
 ) {
     
     companion object
@@ -2708,17 +2716,20 @@ public object FfiConverterTypeEvaluationResponse: FfiConverterRustBuffer<Evaluat
         return EvaluationResponse(
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
     override fun allocationSize(value: EvaluationResponse) = (
             FfiConverterBoolean.allocationSize(value.`trusted`) +
-            FfiConverterOptionalString.allocationSize(value.`decision`)
+            FfiConverterOptionalString.allocationSize(value.`decision`) +
+            FfiConverterOptionalString.allocationSize(value.`context`)
     )
 
     override fun write(value: EvaluationResponse, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`trusted`, buf)
             FfiConverterOptionalString.write(value.`decision`, buf)
+            FfiConverterOptionalString.write(value.`context`, buf)
     }
 }
 
