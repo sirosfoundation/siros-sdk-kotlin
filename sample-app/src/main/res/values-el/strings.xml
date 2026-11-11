@@ -69,6 +69,7 @@
     <string name="copied_to_clipboard">Αντιγράφηκε στο πρόχειρο</string>
     <string name="credential_renew">Ανανέωση</string>
     <string name="credential_renew_not_possible">Δεν είναι δυνατή η ανανέωση</string>
+    <string name="issuance_already_in_progress">Μια έκδοση είναι ήδη σε εξέλιξη - ολοκληρώστε ή ακυρώστε την πρώτα</string>
     <string name="credential_detail_delete">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_title">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_message">Σίγουρα θέλετε να διαγράψετε το \"%1$s\"; Αυτή η ενέργεια δεν μπορεί να αναιρεθεί.</string>

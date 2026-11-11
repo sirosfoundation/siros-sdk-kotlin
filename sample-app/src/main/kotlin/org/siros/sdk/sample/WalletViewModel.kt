@@ -2037,6 +2037,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 // timeout (awaitConnected's withTimeout) is also a
                 // CancellationException and is one.
                 if (isSilentCancellation(e)) throw e
+                if (e.message?.contains("already in progress") == true) {
+                    // Not an error: an issuance is already running (this
+                    // renewal's own fallback, typically - or one started
+                    // elsewhere) and this second start was correctly
+                    // refused. Surfacing it as a scary error dialog
+                    // alongside the delivered credential is the confusion
+                    // (found on-device: renew → invalid_grant → fallback
+                    // issuance → browser auth → credential received, while
+                    // a second Renew tap mid-flight raised exactly this).
+                    Log.i(TAG, "Issuance already in progress; ignoring the second start", e)
+                    _infoMessage.value = activity.getString(R.string.issuance_already_in_progress)
+                    return@launch
+                }
                 Log.e(TAG, "Failed to start issuance for ${offer.credentialConfigurationId}", e)
                 _errorMessage.value = e.message ?: "Failed to start issuance"
             }
