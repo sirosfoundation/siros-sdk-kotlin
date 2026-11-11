@@ -147,7 +147,16 @@ class WmpPeer(
             if (reason == "flow_id in use") {
                 Timber.i("flow.start for $flowId answered 'flow_id in use' - a retried start of this wallet's own flow id; the flow is running")
             } else {
-                throw WmpSessionException("flow.start failed: ${response.error.message}")
+                // The engine's data.reason carries the WHY (the family's
+                // own refusal text - an unparseable offer, an unreachable
+                // issuer, a trust refusal); the bare message is the code.
+                // Both belong in the exception: a "Flow error" alone sent
+                // us logcat-diving with nothing to find (found driving the
+                // GDC diploma issuance on the local engine).
+                throw WmpSessionException(
+                    "flow.start failed: ${response.error.message}" +
+                        (reason?.let { " ($it)" } ?: ""),
+                )
             }
         }
         val result = codec.json.decodeFromJsonElement(
