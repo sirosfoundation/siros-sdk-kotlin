@@ -7080,27 +7080,42 @@ class SirosWallet private constructor(
     internal fun wmpDeliveredMetadataRefusal(
         flowId: String,
         result: kotlinx.serialization.json.JsonObject?,
-    ): Pair<DeliveredMetadataRefusal, List<String>>? {
+    ): Pair<DeliveredMetadataRefusal, List<String>>? = wmpDeliveredMetadataCheck(flowId, result).first
+
+    /**
+     * The delivered-metadata gate AND filler (issue #398's batch store): a
+     * refusal - or `null` beside the FILLed per-entry credentials, ready for
+     * [handleWmpIssuanceComplete] to store. The entries' `credential`
+     * members are the wallet's own decrypted response's (an encrypted batch:
+     * the engine relays envelopes, the wallet opens them), the flow-level
+     * `refresh_token`/`dpop_jwk`/`notification_id` members riding along -
+     * everything [handleWmpIssuanceComplete] reads, nothing invented.
+     */
+    internal fun wmpDeliveredMetadataCheck(
+        flowId: String,
+        result: kotlinx.serialization.json.JsonObject?,
+    ): Pair<Pair<DeliveredMetadataRefusal, List<String>>?, List<kotlinx.serialization.json.JsonObject>> {
         val decoded = try {
             org.siros.sdk.transport.wmp.openid4x.FlowCompleteResult.decode(result)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            return DeliveredMetadataRefusal.MALFORMED to emptyList()
-        } ?: return null
+            return (DeliveredMetadataRefusal.MALFORMED to emptyList<String>()) to emptyList()
+        } ?: return null to emptyList<kotlinx.serialization.json.JsonObject>()
         // An encrypted issuance's credentials and metadata are the wallet's own decrypted response, never the engine's.
         val opened = if (decoded.credentialResponseEncrypted) {
-            blindIssuance.take(flowId) ?: return DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to emptyList()
+            blindIssuance.take(flowId)
+                ?: return (DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to emptyList<String>()) to emptyList()
         } else {
             null
         }
         val engineCreds = decoded.credentials.orEmpty()
         // A key was offered for this flow: a plain completion carrying credentials is an error, never accepted (the caller drops the key after).
         if (opened == null && engineCreds.isNotEmpty() && blindIssuance.wasOffered(flowId)) {
-            return DeliveredMetadataRefusal.PLAIN_RESPONSE to engineCreds.mapNotNull { it.notificationId }
+            return (DeliveredMetadataRefusal.PLAIN_RESPONSE to engineCreds.mapNotNull { it.notificationId }) to emptyList()
         }
         if (opened != null && opened.credentials.size != engineCreds.size) {
-            return DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to listOfNotNull(opened.notificationId)
+            return (DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to listOfNotNull(opened.notificationId)) to emptyList()
         }
         val creds = if (opened == null) {
             engineCreds
@@ -7122,7 +7137,23 @@ class SirosWallet private constructor(
             holderCommitments = sentCommitments,
         )
         sentCommitments.forEach { it.commitment.fill(0) }
-        return (verdict as? DeliveredMetadataVerdict.Refuse)?.let { it.reason to creds.mapNotNull { c -> c.notificationId } }
+        val refusal = (verdict as? DeliveredMetadataVerdict.Refuse)
+            ?.let { it.reason to creds.mapNotNull { c -> c.notificationId } }
+        if (refusal != null) return refusal to emptyList()
+        // Clean: the entries, FILLED with the wallet's own decrypted
+        // response's credentials (plain deliveries are already filled), the
+        // flow-level members merged in - the storable batch.
+        val entries = creds.map { cred ->
+            kotlinx.serialization.json.buildJsonObject {
+                put("credential", kotlinx.serialization.json.JsonPrimitive(cred.credential))
+                cred.notificationId?.let { put("notification_id", kotlinx.serialization.json.JsonPrimitive(it)) }
+                (result?.get("refresh_token") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    ?.let { put("refresh_token", kotlinx.serialization.json.JsonPrimitive(it)) }
+                (result?.get("dpop_jwk") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    ?.let { put("dpop_jwk", kotlinx.serialization.json.JsonPrimitive(it)) }
+            }
+        }
+        return null to entries
     }
 
     /**
@@ -9226,6 +9257,13 @@ class SirosWallet private constructor(
         )
     }
 
+    /** Test seam for [onWmpFlowComplete] — the completion handler without the peer plumbing. */
+    internal suspend fun onWmpFlowCompleteForTest(
+        flowId: String,
+        result: kotlinx.serialization.json.JsonObject?,
+        lifetime: Int = 0,
+    ) = onWmpFlowComplete(null, flowId, result, lifetime)
+
     private suspend fun onWmpFlowComplete(
         peer: org.siros.sdk.transport.wmp.WmpPeer?,
         flowId: String,
@@ -9235,11 +9273,55 @@ class SirosWallet private constructor(
         try {
             // siros-wallet-core's oid4vci completion is a single `credential`
             // member beside the renewal relay and the notification members -
-            // the issuance shape, stored here. Everything else is the
-            // presentation completion set ({presented}, {declined}, …), which
-            // stores nothing.
+            // the issuance shape, stored here. A `credentials` ARRAY is the
+            // BATCH shape (issue #398): every entry is stored, one
+            // StoredCredential each - never "success with nothing stored"
+            // (the pre-fix handler metadata-checked the entries and discarded
+            // them, the UI reporting success over lost credentials).
+            // Everything else is the presentation completion set
+            // ({presented}, {declined}, …), which stores nothing.
+            //
+            // siros-wallet-core's single-`credential` completion is stored
+            // FIRST (the original order - the engine decrypted it; the
+            // metadata gate is the batch path's alone).
             if (result?.containsKey("credential") == true) {
                 handleWmpIssuanceComplete(flowId, result)
+                return
+            }
+            // A `credentials` ARRAY is the BATCH shape (issue #398): the gate
+            // runs first - a plaintext delivery after an offer is the
+            // downgrade refusal, an encrypted one is filled from the wallet's
+            // own decrypted response - and a CLEAN batch is then stored,
+            // entry by entry, never "success with nothing stored" (the
+            // pre-#398 handler validated the entries and discarded them).
+            if (result?.containsKey("credentials") == true) {
+                val (refusal, entries) = wmpDeliveredMetadataCheck(flowId, result)
+                if (refusal != null) {
+                    rejectDeliveredMetadata(
+                        flowId,
+                        refusal.second,
+                        refusal.first,
+                        sendFailure = { fid, nid ->
+                            peer?.sendCredentialNotification(
+                                flowId = fid,
+                                notificationId = nid,
+                                event = CredentialNotificationEvent.FAILURE,
+                                eventDescription = "credential_metadata_rejected",
+                            )
+                        },
+                    )
+                    return
+                }
+                if (entries.isEmpty()) {
+                    Timber.e("WMP issuance flow $flowId completed with an empty credentials batch")
+                    resetIssuanceGuards()
+                    eventListener?.onFlowError(flowId, "The issuance delivered no credential")
+                    returnToReadyState()
+                    return
+                }
+                for (entry in entries) {
+                    handleWmpIssuanceComplete(flowId, entry)
+                }
                 return
             }
             val refusal = wmpDeliveredMetadataRefusal(flowId, result)
