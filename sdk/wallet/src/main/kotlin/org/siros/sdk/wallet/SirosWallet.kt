@@ -8226,7 +8226,13 @@ class SirosWallet private constructor(
                     return
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
+                    // Throwable, not Exception: a LOCAL provider's factory can
+                    // throw an Error (found on the device: an
+                    // UnsatisfiedLinkError - the engine core's .so missing
+                    // from the APK - surfaced here and CRASHED the app
+                    // because Exception missed it). A broken provider is
+                    // exactly what failover is for: record it, fail over.
                     lastError = e
                     Timber.w(e, "Engine provider ${provider.label} connect attempt $attempt/$attempts failed")
                     if (attempt < attempts) kotlinx.coroutines.delay(250L * attempt)

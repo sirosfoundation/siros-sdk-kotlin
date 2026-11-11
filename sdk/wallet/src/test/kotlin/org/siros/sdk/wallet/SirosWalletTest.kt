@@ -19928,6 +19928,39 @@ class SirosWalletTest {
     }
 
     @Test
+    fun engineProviders_failOverWhenALocalFactoryThrowsAnErrorNotAnException() = runTest(dispatcher) {
+        // Found on the device: a LOCAL provider's factory can throw an
+        // ERROR, not an Exception (the UnsatisfiedLinkError of an engine
+        // core whose .so is missing from the APK) - Exception-only
+        // catching let it escape the loop and crash the app at login. A
+        // broken provider is exactly what failover is for: the Error is
+        // one failed attempt, the next provider carries the session.
+        val connectingPeer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        coEvery { connectingPeer.connect(any<String>(), any(), any()) } just runs
+
+        val (wallet, transports) = providerWallet(
+            connectingPeer,
+            providers = listOf(
+                WmpEngineProvider.Local { _ ->
+                    throw AssertionError("dlopen failed: library \"libengine_adapter_sdk.so\" not found")
+                },
+                WmpEngineProvider.Local { NullTransport() },
+            ),
+            retries = 1,
+        )
+        try {
+            connectViaWmpReflectively(wallet)
+        } finally {
+            walletCleanup.forEach { it() }
+        }
+
+        assertEquals(
+            "the erroring provider built no transport; the failover target's is the only one",
+            1, transports.size,
+        )
+    }
+
+    @Test
     fun aTxCodeAsk_reachesTheListenerAndItsAnswerBack() = runTest(dispatcher) {
         val listener = mockk<WalletEventListener>(relaxed = true)
         every { listener.onTxCodeRequired(flowId = "p-1", description = null) } returns "4321"
