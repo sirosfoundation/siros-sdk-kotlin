@@ -4176,15 +4176,18 @@ public final class uniffi/engine_adapter_sdk/EvaluationRequest$Companion {
 
 public final class uniffi/engine_adapter_sdk/EvaluationResponse {
 	public static final field Companion Luniffi/engine_adapter_sdk/EvaluationResponse$Companion;
-	public fun <init> (ZLjava/lang/String;)V
+	public fun <init> (ZLjava/lang/String;Ljava/lang/String;)V
 	public final fun component1 ()Z
 	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (ZLjava/lang/String;)Luniffi/engine_adapter_sdk/EvaluationResponse;
-	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/EvaluationResponse;ZLjava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/EvaluationResponse;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (ZLjava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/EvaluationResponse;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/EvaluationResponse;ZLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/EvaluationResponse;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getContext ()Ljava/lang/String;
 	public final fun getDecision ()Ljava/lang/String;
 	public final fun getTrusted ()Z
 	public fun hashCode ()I
+	public final fun setContext (Ljava/lang/String;)V
 	public final fun setDecision (Ljava/lang/String;)V
 	public final fun setTrusted (Z)V
 	public fun toString ()Ljava/lang/String;
