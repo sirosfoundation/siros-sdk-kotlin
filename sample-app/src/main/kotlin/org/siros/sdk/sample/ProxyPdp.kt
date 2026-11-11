@@ -2,6 +2,14 @@
 
 package org.siros.sdk.sample
 
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -44,6 +52,14 @@ class ProxyPdp(
                 trusted = false,
                 decision = "no bearer for the PDP routes",
             )
+            // The ask, verbatim: found driving the GDC diploma issuance, where
+            // the only visible failure was the engine's refusal code and the
+            // actual binding under question had to be reconstructed by hand.
+            timber.log.Timber.d(
+                "ProxyPdp evaluate: subject=%s resourceType=%s material=%dB materialHead=%.60s",
+                request.subject, request.resourceType, request.keyMaterial.size,
+                String(request.keyMaterial, Charsets.UTF_8).replace('\n', ' '),
+            )
             val body = kotlinx.serialization.json.buildJsonObject {
                 put("subject", kotlinx.serialization.json.buildJsonObject {
                     put("type", kotlinx.serialization.json.JsonPrimitive("key"))
@@ -82,7 +98,9 @@ class ProxyPdp(
             ).execute()
             val answer = runCatching {
                 response.use { resp ->
-                    check(resp.isSuccessful) { "evaluate answered ${resp.code}" }
+                    check(resp.isSuccessful) { "evaluate answered ${resp.code}" }.also {
+                        timber.log.Timber.d("ProxyPdp evaluate: the proxy answered ${resp.code}")
+                    }
                     resp.body?.string()
                 }
             }.getOrNull() ?: return@withContext EvaluationResponse(
@@ -92,11 +110,24 @@ class ProxyPdp(
             val parsed = runCatching {
                 kotlinx.serialization.json.Json.parseToJsonElement(answer).jsonObject
             }.getOrNull() ?: return@withContext EvaluationResponse(trusted = false, decision = "an unparseable PDP answer")
+            // TOTAL parse, no throwing casts: a callback that throws kills the
+            // whole evaluate (the engine surfaces it as InternalException and
+            // the flow refuses) - the decision bool is what the engine
+            // consumes, and a shape surprise in the reason text must never
+            // take it down (found: go-trust's context.reason is an OBJECT
+            // {user, admin}, and the throwing jsonArray cast died on it).
+            val decisionText = when (val reason = (parsed as? JsonObject)?.get("context")?.let { it as? JsonObject }?.get("reason")) {
+                is JsonObject ->
+                    (reason["user"] as? JsonPrimitive)?.contentOrNull
+                        ?: (reason["admin"] as? JsonPrimitive)?.contentOrNull
+                        ?: (reason["message"] as? JsonPrimitive)?.contentOrNull
+                is JsonArray ->
+                    ((reason.firstOrNull() as? JsonObject)?.get("message") as? JsonPrimitive)?.contentOrNull
+                else -> null
+            }
             EvaluationResponse(
-                trusted = parsed["decision"]?.jsonPrimitive?.booleanOrNull ?: false,
-                decision = parsed["context"]?.jsonObject?.get("reason")?.jsonArray?.firstOrNull()
-                    ?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
-                    ?: parsed["context"]?.jsonObject?.get("reason")?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull,
+                trusted = (parsed as? JsonObject)?.get("decision")?.let { it as? JsonPrimitive }?.booleanOrNull ?: false,
+                decision = decisionText,
             )
         }
 
@@ -130,8 +161,13 @@ class ProxyPdp(
             val parsed = runCatching {
                 kotlinx.serialization.json.Json.parseToJsonElement(answer).jsonObject
             }.getOrNull() ?: return@withContext ResolveResponse(ByteArray(0), null)
-            val metadata = parsed["context"]?.jsonObject?.get("trust_metadata")
-                ?: parsed["metadata"]
+            // TOTAL parse, the evaluate block's own rule: a throwing cast in
+            // this callback kills the resolve (InternalException, the flow
+            // refuses) - an answer shape surprise answers empty metadata,
+            // which the engine treats as "nothing resolved" (fail closed).
+            val metadata = (parsed as? JsonObject)?.get("context")?.let { it as? JsonObject }
+                ?.get("trust_metadata")
+                ?: (parsed as? JsonObject)?.get("metadata")
             ResolveResponse(
                 metadata = metadata?.toString()?.toByteArray() ?: ByteArray(0),
                 trustInfo = null,
@@ -168,29 +204,37 @@ class ProxyPdp(
         }
     }
 
-    /** The resource key: the parsed JSON as-is (a JWK), or the raw material. */
+    /**
+     * The resource key: the profile's shape is an ARRAY (go-trust's golden
+     * testdata: `key: [ {...the JWK...} ]`, `key: ["<x5c cert>", ...]`) -
+     * the bind is `[]interface{}` and a bare object fails it with a 400
+     * (found driving the GDC diploma issuance: every evaluate fail-closed
+     * "untrusted issuer" because the route never even answered).
+     *
+     * - EMPTY material rides as NULL: go-trust treats a null/empty key as a
+     *   RESOLUTION-ONLY request (the registry question - "is this subject
+     *   trusted", the PDP resolving its own material), which is exactly the
+     *   reference adapter's shape (ports.rs answers Null for unparseable
+     *   material). A fabricated `[""]` turns it into a key-binding
+     *   evaluation against an empty key, which the PDP correctly denies -
+     *   found on the mdoc diploma issuer (no inline JWKs; its material
+     *   lives at mdoc_iacas_uri, which the engine's resolve carries
+     *   server-side).
+     * - a parsed ARRAY (the x5c chain) rides as-is;
+     * - a parsed OBJECT (a JWK) rides one-element-wrapped;
+     * - anything else (raw material, a did: kid) rides as a one-element
+     *   string array.
+     */
     private fun keyMaterialValue(keyMaterial: ByteArray): kotlinx.serialization.json.JsonElement {
+        if (keyMaterial.isEmpty()) return kotlinx.serialization.json.JsonNull
         val raw = String(keyMaterial)
-        return runCatching { kotlinx.serialization.json.Json.parseToJsonElement(raw) }.getOrElse {
-            kotlinx.serialization.json.JsonPrimitive(raw)
+        val parsed = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(raw) }.getOrNull()
+        return when {
+            parsed is kotlinx.serialization.json.JsonArray -> parsed
+            parsed != null -> kotlinx.serialization.json.JsonArray(listOf(parsed))
+            else -> kotlinx.serialization.json.JsonArray(
+                listOf(kotlinx.serialization.json.JsonPrimitive(raw)),
+            )
         }
     }
-
-    private val kotlinx.serialization.json.JsonElement.jsonObject: kotlinx.serialization.json.JsonObject
-        get() = this as? kotlinx.serialization.json.JsonObject
-            ?: throw IllegalArgumentException("expected an object")
-
-    private val kotlinx.serialization.json.JsonElement.jsonPrimitive: kotlinx.serialization.json.JsonPrimitive
-        get() = this as? kotlinx.serialization.json.JsonPrimitive
-            ?: throw IllegalArgumentException("expected a primitive")
-
-    private val kotlinx.serialization.json.JsonElement.jsonArray: kotlinx.serialization.json.JsonArray
-        get() = this as? kotlinx.serialization.json.JsonArray
-            ?: throw IllegalArgumentException("expected an array")
-
-    private val kotlinx.serialization.json.JsonElement.booleanOrNull: Boolean?
-        get() = (this as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull
-
-    private val kotlinx.serialization.json.JsonElement.contentOrNull: String?
-        get() = (this as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
 }
