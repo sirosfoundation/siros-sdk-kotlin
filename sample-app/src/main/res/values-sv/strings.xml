@@ -69,6 +69,7 @@
     <string name="copied_to_clipboard">Kopierat till urklipp</string>
     <string name="credential_renew">Förnya</string>
     <string name="credential_renew_not_possible">Förnyelse inte möjlig</string>
+    <string name="issuance_already_in_progress">En utfärdande pågår redan - avsluta eller avbryt den först</string>
     <string name="credential_detail_delete">Ta bort intyg</string>
     <string name="credential_detail_delete_confirm_title">Ta bort intyg</string>
     <string name="credential_detail_delete_confirm_message">Är du säker på att du vill ta bort \"%1$s\"? Denna åtgärd kan inte ångras.</string>
@@ -155,6 +156,7 @@
     <string name="flow_diagnostic_label">Diagnostik: %1$s</string>
     <string name="flow_credentials_received">Mottog %1$d intyg</string>
     <string name="flow_presentation_sent">Presentationen skickades</string>
+    <string name="flow_no_matching_credential">Ingen legitimation i denna plånbok matchar vad verifieraren bad om</string>
     <string name="flow_step_waiting_for_reader">Väntar på att en läsare ska ansluta…</string>
     <string name="flow_step_reader_connected">Läsare ansluten, verifierar begäran…</string>
     <string name="proximity_presentation_failed">Presentationen slutfördes inte</string>

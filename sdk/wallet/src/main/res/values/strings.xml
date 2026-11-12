@@ -31,7 +31,7 @@
     <string name="siros_consent_pseudonym_issuer">A pseudonym for %1$s is shared. You get the same pseudonym every time you visit this service, and a different one at every other service. The service that issued your credential can work out who this pseudonym belongs to.</string>
     <string name="siros_consent_pseudonym">A pseudonym for %1$s is shared. You get the same pseudonym every time you visit this service, and a different one at every other service.</string>
     <string name="siros_consent_footer">No other personal data is shared.</string>
-    <string name="siros_consent_claim">The value of “%1$s” from your credential is shared.</string>
+    <string name="siros_consent_claim">the value of “%1$s” from your credential</string>
     <string name="siros_consent_legacy_pseudonym">A pseudonym is shared with %1$s.</string>
     <string name="siros_dcapi_refused_consent_unavailable">Your wallet cannot ask for your approval right now, so nothing was shared.</string>
     <string name="siros_dcapi_refused_user_declined">You did not approve this request, so nothing was shared.</string>

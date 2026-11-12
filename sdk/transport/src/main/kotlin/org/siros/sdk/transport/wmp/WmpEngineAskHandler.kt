@@ -125,6 +125,15 @@ class UniFfiEngineAskHost(
                     put("name", kotlinx.serialization.json.JsonPrimitive(params.verifier.name))
                     put("client_id", kotlinx.serialization.json.JsonPrimitive(params.verifier.clientId))
                     put("trusted", kotlinx.serialization.json.JsonPrimitive(params.verifier.trusted))
+                    // The DOMAIN extracted from the client_id (the engine's
+                    // VerifierInfo.domain): a consent UI's human-facing label
+                    // when the metadata carried no client_name - the raw
+                    // x509_hash/did identifier belongs in a details view, not
+                    // the title sentence (found on-device: the dialog read
+                    // "x509_hash:… is asking you to share").
+                    if (params.verifier.domain.isNotBlank()) {
+                        put("domain", kotlinx.serialization.json.JsonPrimitive(params.verifier.domain))
+                    }
                     params.verifier.framework.takeIf { it.isNotBlank() }
                         ?.let { put("framework", kotlinx.serialization.json.JsonPrimitive(it)) }
                     params.verifier.reason.takeIf { it.isNotBlank() }

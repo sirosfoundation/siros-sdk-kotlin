@@ -84,6 +84,12 @@ fun PresentationConsentScreen(
     request: PresentationRequest,
     onAccept: (List<Long>) -> Unit,
     onDecline: () -> Unit,
+    // Where a bridged entry lands: SELECT (the claim-selection step - where
+    // the actual information lives). Default: the screen's own start (the
+    // preview). Both WMP bridges ("Show me details" on either the ambiguity
+    // or the consent dialog) land here; the user walks to the summary
+    // themselves.
+    startAt: ConsentEntryPoint = ConsentEntryPoint.PREVIEW,
     presentationHistory: List<PresentationRecord> = emptyList(),
     consumptionPolicy: CredentialConsumptionPolicy = CredentialConsumptionPolicy.NEVER_CONSUME,
     // Which kids the keystore can currently sign with - see
@@ -146,7 +152,17 @@ fun PresentationConsentScreen(
     // exclusiveGroups.size into account AT ALL - deliberately: a choice no
     // longer gets its own step (see presentationTotalSteps's doc comment).
     val totalSteps = presentationTotalSteps(request.disclosesNoClaims, activeResults.size)
-    var currentStep by remember { mutableStateOf(0) }
+    var currentStep by remember {
+        mutableStateOf(
+            when (startAt) {
+                ConsentEntryPoint.PREVIEW -> 0
+                // The claim-selection step: the first one after the preview
+                // (one per active result) - where the claims and their
+                // values render, the step "Show me details" lands on.
+                ConsentEntryPoint.SELECT -> 1
+            }
+        )
+    }
     // Whether every ambiguous credential_sets entry has been resolved -
     // gates the preview step's Next/Share button so the user can never
     // advance past step 0 (or share) with an ExclusiveChoiceGroup still
@@ -302,6 +318,9 @@ fun PresentationConsentScreen(
  * parameter here (not just not using it) is what makes it impossible for a future change to
  * reintroduce an extra step for a choice that no longer has one.
  */
+/** Where a bridged [PresentationConsentScreen] entry lands. */
+enum class ConsentEntryPoint { PREVIEW, SELECT }
+
 internal fun presentationTotalSteps(disclosesNoClaims: Boolean, activeResultsCount: Int): Int =
     1 + if (disclosesNoClaims) 0 else activeResultsCount + 1
 

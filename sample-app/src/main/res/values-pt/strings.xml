@@ -69,6 +69,7 @@
     <string name="copied_to_clipboard">Copiado para a área de transferência</string>
     <string name="credential_renew">Renovar</string>
     <string name="credential_renew_not_possible">Não é possível renovar</string>
+    <string name="issuance_already_in_progress">Já existe uma emissão em curso - conclua ou cancele-a primeiro</string>
     <string name="credential_detail_delete">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_title">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_message">Tem certeza de que deseja excluir \"%1$s\"? Esta ação não pode ser desfeita.</string>
@@ -155,6 +156,7 @@
     <string name="flow_diagnostic_label">Diagnóstico: %1$s</string>
     <string name="flow_credentials_received">Recebida(s) %1$d credencial(is)</string>
     <string name="flow_presentation_sent">Apresentação enviada com sucesso</string>
+    <string name="flow_no_matching_credential">Nenhuma credencial nesta carteira corresponde ao que o verificador pediu</string>
     <string name="flow_step_waiting_for_reader">Aguardando a conexão de um leitor…</string>
     <string name="flow_step_reader_connected">Leitor conectado, verificando a solicitação…</string>
     <string name="proximity_presentation_failed">A apresentação não foi concluída</string>

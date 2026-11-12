@@ -371,6 +371,24 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun answerPresentationConsent(shown: PendingPresentationConsent, agreed: Boolean) =
         presentationConsentGate.answer(shown, agreed)
 
+    /** The user's ruling on a credential-match ambiguity: the wallet picks its first match. */
+    fun ambiguityWalletChooses(pending: PendingAmbiguity) {
+        pending.answer.complete(org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.walletChoice)
+    }
+
+    /** The user CANCELLED the ambiguity dialog: the presentation is refused outright. */
+    fun ambiguityDeclined(pending: PendingAmbiguity) {
+        pending.answer.complete(org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.Declined)
+    }
+
+    /** The user chose these matches from the ambiguity dialog. */
+    fun ambiguityUserChooses(
+        pending: PendingAmbiguity,
+        picks: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
+    ) {
+        pending.answer.complete(org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.UserChoice(picks))
+    }
+
     /** Applies the persisted setting and the consent hook to [target]. */
     private fun configureTransactionData(target: SirosWallet) {
         target.transactionDataEnabled = _transactionDataEnabled.value
@@ -1148,6 +1166,142 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _pendingPresentationRequest = MutableStateFlow<PresentationRequest?>(null)
     val pendingPresentationRequest: StateFlow<PresentationRequest?> = _pendingPresentationRequest
 
+    /** The presentation deep links this session started (the spinner-clearing
+     * and no-match message key: a local-WMP completion lands Ready → Ready,
+     * which a conflated StateFlow never re-emits). */
+    private val startedPresentationLinks = mutableSetOf<String>()
+
+    /** A WMP credential-match ambiguity waiting for the user's ruling. */
+    private val _pendingAmbiguity = MutableStateFlow<PendingAmbiguity?>(null)
+    val pendingAmbiguity: StateFlow<PendingAmbiguity?> = _pendingAmbiguity
+
+    /** The detail context of the WMP consent ask being bridged to the full screen. */
+    private val _consentAskDetail = MutableStateFlow<ConsentAskDetail?>(null)
+
+    /**
+     * Which ask the full in-wallet consent screen ("Show me details")
+     * answers, and at which step it lands:
+     * - from the MINIMAL consent dialog: the selections are already fixed
+     *   (the match/ambiguity step settled them) → land on the summary step,
+     *   Share/Decline answer the consent ask itself.
+     * - from the AMBIGUITY dialog: the choice is NOT yet made → land on the
+     *   selection step, and Share answers the AMBIGUITY ask with the picked
+     *   credential (the SDK then consents with exactly it).
+     */
+    private var consentAskBridge: ConsentAskBridge? = null
+
+    /** Which WMP ask the full in-wallet consent screen answers. */
+    internal sealed class ConsentAskBridge {
+        /** Land on the full screen's summary step (the selections are fixed)? */
+        val startAtSummary: Boolean get() = this is FromConsentAsk
+    }
+
+    /** Bridged from the minimal consent dialog: Share/Cancel answer the consent ask. */
+    internal class FromConsentAsk(val shown: PendingPresentationConsent) : ConsentAskBridge()
+
+    /** Bridged from the ambiguity dialog: Share answers UserChoice(the picked), Cancel refuses. */
+    internal class FromAmbiguity(val pending: PendingAmbiguity) : ConsentAskBridge() {
+        /** The full screen's picked credential ids (set by acceptPresentation). */
+        var pickedBridgeIds: List<Long> = emptyList()
+    }
+
+    /** The WMP consent ask's detail context: what the full screen renders. */
+    class ConsentAskDetail(
+        val verifierName: String?,
+        val verifierId: String?,
+        val selections: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
+    )
+
+    /**
+     * "Show me details" on the minimal consent dialog: swap it for the
+     * pre-rework full in-wallet consent screen (PresentationConsentScreen),
+     * built from this ask's verifier identity + per-credential selections.
+     * Its Share/Decline answer the SAME gate request the dialog would have
+     * ([answerPresentationConsent]).
+     */
+    fun showConsentDetails(shown: PendingPresentationConsent) {
+        val detail = _consentAskDetail.value ?: return
+        val creds = (wallet.state.value as? WalletState.Ready)?.credentials.orEmpty()
+        val matchResults = detail.selections.mapNotNull { sel ->
+            val cred = creds.find { it.id == sel.credentialId } ?: return@mapNotNull null
+            org.siros.sdk.credentials.CredentialMatcher.MatchResult(
+                queryId = "",
+                format = cred.format,
+                candidates = listOf(cred),
+                requestedClaims = (sel.claims ?: emptyList()).map { listOf(it) },
+            )
+        }
+        consentAskBridge = FromConsentAsk(shown)
+        android.util.Log.i("ConsentBridge", "consent details: landing at SUMMARY")
+        _pendingPresentationRequest.value = PresentationRequest(
+            verifierName = detail.verifierName ?: detail.verifierId,
+            matchResults = matchResults,
+            candidates = matchResults.flatMap { it.candidates },
+        )
+    }
+
+    /**
+     * "Show me details" on the AMBIGUITY dialog: the same full in-wallet
+     * consent screen, but landing at the SELECTION step - the choice of
+     * credential is what the user came here to make. Share answers the
+     * ambiguity ask with the picked credential (the SDK then consents and
+     * signs exactly it); Cancel refuses the presentation outright.
+     */
+    fun showAmbiguityDetails(pending: PendingAmbiguity) {
+        val creds = (wallet.state.value as? WalletState.Ready)?.credentials.orEmpty()
+        val matchResults = pending.matches.mapNotNull { sel ->
+            val cred = creds.find { it.id == sel.credentialId } ?: return@mapNotNull null
+            org.siros.sdk.credentials.CredentialMatcher.MatchResult(
+                queryId = "",
+                format = cred.format,
+                candidates = listOf(cred),
+                requestedClaims = (sel.claims ?: emptyList()).map { listOf(it) },
+            )
+        }
+        consentAskBridge = FromAmbiguity(pending)
+        android.util.Log.i(
+            "ConsentBridge",
+            "ambiguity details: ${pending.matches.size} matches, landing at SELECT",
+        )
+        // The dialog goes away (its state cleared) so the full screen can
+        // render; Back restores it (hideConsentDetails).
+        _pendingAmbiguity.value = null
+        _pendingPresentationRequest.value = PresentationRequest(
+            verifierName = _consentAskDetail.value?.verifierName ?: _consentAskDetail.value?.verifierId,
+            matchResults = matchResults,
+            candidates = matchResults.flatMap { it.candidates },
+        )
+    }
+
+    /** Back from the full consent screen to the dialog it bridged from. */
+    fun hideConsentDetails() {
+        val bridge = consentAskBridge
+        consentAskBridge = null
+        _pendingPresentationRequest.value = null
+        // The ambiguity dialog returns when that is where we came from.
+        if (bridge is FromAmbiguity) _pendingAmbiguity.value = bridge.pending
+    }
+
+    /** Whether the full consent screen is bridged from a WMP ask (and lands on its summary step). */
+    val bridgedConsentAsk: Boolean get() = consentAskBridge?.startAtSummary == true
+
+    /**
+     * Where the full consent screen lands when bridged: the CLAIM-SELECTION
+     * step either way - that is where the actual information lives (the
+     * claims, their values, the sd constraints) - never the summary, whose
+     * "Ready to share" carries almost nothing until selections were made in
+     * it (found on-device: the details bridge landed there and read as the
+     * same popup with less information).
+     */
+    internal val consentEntryPoint
+        get() = if (consentAskBridge == null) ConsentEntryPoint.PREVIEW else ConsentEntryPoint.SELECT
+
+    /** An ambiguity ask on screen: the matches and the answer channel. */
+    class PendingAmbiguity(
+        val matches: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
+        internal val answer: kotlinx.coroutines.CompletableDeferred<org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity>,
+    )
+
     private var presentationContinuation: kotlinx.coroutines.CancellableContinuation<List<Long>>? = null
 
     init {
@@ -1178,6 +1332,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 flowId: String,
                 purpose: String?,
                 requestedClaims: List<String>,
+                verifierName: String?,
+                verifierId: String?,
+                selections: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
             ): Boolean {
                 // The WMP OID4VP consent: the same on-screen YES/NO the
                 // circuit_zk presentation consent rides, over the engine's
@@ -1185,28 +1342,87 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 // The listener's default DECLINES (fail closed) - found
                 // on-device: without this override every WMP presentation's
                 // consent was declined in 0.3s and no dialog was ever shown.
-                val request = org.siros.sdk.credentials.PresentationConsentRequest(
-                    verifier = org.siros.sdk.credentials.ConsentVerifier(
-                        label = purpose ?: "the verifier",
-                    ),
-                    entries = listOf(
+                // One entry PER SELECTION (the match step's per-credential
+                // record), the claims grouped under their credential - not
+                // the engine's flat list under a name-less entry (found
+                // on-device: "the value 'nl'" twice). Falls back to the flat
+                // list, de-duplicated, when no match record exists.
+                val entries = if (selections.isNotEmpty()) {
+                    selections.map { sel ->
+                        org.siros.sdk.credentials.ConsentEntry(
+                            credential = org.siros.sdk.credentials.CredentialRef(
+                                name = sel.credentialName,
+                                issuer = null,
+                            ),
+                            items = (sel.claims ?: emptyList()).map {
+                                org.siros.sdk.credentials.ConsentItem.Claim(it)
+                            },
+                        )
+                    }
+                } else {
+                    listOf(
                         org.siros.sdk.credentials.ConsentEntry(
                             credential = org.siros.sdk.credentials.CredentialRef(
                                 name = null,
                                 issuer = null,
                             ),
-                            items = requestedClaims.map {
+                            items = requestedClaims.distinct().map {
                                 org.siros.sdk.credentials.ConsentItem.Claim(it)
                             },
                         ),
+                    )
+                }
+                val request = org.siros.sdk.credentials.PresentationConsentRequest(
+                    verifier = org.siros.sdk.credentials.ConsentVerifier(
+                        // The label: the metadata's client_name, else the DOMAIN
+                        // the engine extracted (the SDK's chain) - never the raw
+                        // scheme-prefixed identifier in the title sentence. The
+                        // raw client_id rides verifierId into the details view.
+                        label = verifierName ?: purpose ?: "the verifier",
+                        verifierId = verifierId,
                     ),
+                    entries = entries,
                     // The engine verified the request object's x5c signature
                     // before this ask (S1's own parser check) - stated, not
                     // assumed.
                     requestSigned = true,
                     locale = java.util.Locale.getDefault().toLanguageTag(),
                 )
+                // The detail context for the full consent screen ("Show me
+                // details" from the minimal dialog): the verifier identity +
+                // per-credential selections the bridge builds its
+                // PresentationRequest from.
+                android.util.Log.i(
+                    "ConsentBridge",
+                    "consent ask: purpose=$purpose claims=$requestedClaims selections=${
+                        selections.map { it.credentialId.toString() + ":" + (it.claims?.joinToString(",") ?: "null") }
+                    }",
+                )
+                _consentAskDetail.value = ConsentAskDetail(verifierName, verifierId, selections)
                 return presentationConsentGate.handler.confirm(request)
+            }
+
+            override suspend fun onCredentialAmbiguity(
+                flowId: String,
+                matches: List<org.siros.sdk.wallet.WalletEventListener.ConsentSelection>,
+            ): org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity {
+                // The user's ruling on a multi-match (issue #399): Choose the
+                // picked match, or Cancel - which REFUSES the presentation
+                // outright (never a silent fallback to the wallet's match).
+                matches.forEach { m ->
+                    android.util.Log.i(
+                        "AmbiguityMatch",
+                        "credentialId=${m.credentialId} name=${m.credentialName} claims=${m.claims}",
+                    )
+                }
+                val deferred = kotlinx.coroutines.CompletableDeferred<org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity>()
+                val pending = PendingAmbiguity(matches, deferred)
+                _pendingAmbiguity.value = pending
+                try {
+                    return deferred.await()
+                } finally {
+                    if (_pendingAmbiguity.value === pending) _pendingAmbiguity.value = null
+                }
             }
 
             override fun onAuthorizationRequired(
@@ -1248,6 +1464,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
             override fun onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {
                 Log.e(TAG, "Flow $flowId failed: $errorMessage")
+                // The same conflation hazard as onFlowComplete's fix.
+                _flowStarting.value = null
                 // A refused or declined payment confirmation is worded here, in the app's own
                 // language; the SDK only reports the reason. A decline needs no error dialog.
                 val refusal = lastTransactionRefusal?.takeIf { it.first == flowId }?.second
@@ -1291,7 +1509,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 receivedCredentialCount++
             }
 
-            override fun onFlowComplete(flowId: String, redirectUri: String?) {
+            override fun onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Boolean) {
+                // The spinner clears HERE too (not only via observeWalletState):
+                // a completion that changes nothing the state-flow carries -
+                // the no-match refusal lands Ready → Ready, and a conflated
+                // StateFlow re-emits nothing for an equal value - so the
+                // "contacting verifier" indicator would otherwise stay up
+                // forever (found on-device: a presentation matching nothing
+                // spun until the app was killed).
+                _flowStarting.value = null
+                // Read BEFORE the clear below - the branch order matters:
+                // was a presentation started this session at all?
+                val wasPresentation = startedPresentationLinks.isNotEmpty()
+                startedPresentationLinks.clear()
                 if (receivedCredentialCount > 0) {
                     _infoMessage.value = activity.getString(
                         R.string.flow_credentials_received,
@@ -1305,6 +1535,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     // above; presentation has no analogous per-item count, so a plain
                     // confirmation is the equivalent "something happened" signal for a
                     // flow whose whole point is watching this screen after a QR scan.
+                    _infoMessage.value = activity.getString(R.string.flow_presentation_sent)
+                } else if (matchedNothing) {
+                    // The engine's explicit no-match refusal (the completion
+                    // payload's refused=true): the verifier sees "wallet
+                    // declined the request"; the wallet must say what
+                    // actually happened (found on-device: a SUCCESSFUL
+                    // cross-device presentation showed "no match" - the
+                    // pre-fix heuristic could not tell the two apart).
+                    _infoMessage.value = activity.getString(R.string.flow_no_matching_credential)
+                } else if (wasPresentation) {
+                    // A presentation this session started, completing with
+                    // nothing received and no refusal: it was SENT (the
+                    // local-WMP path never enters FlowActive, so the old
+                    // flowType check missed it entirely).
                     _infoMessage.value = activity.getString(R.string.flow_presentation_sent)
                 }
 
@@ -1329,6 +1573,23 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     /** User consented to share selected credentials. */
     fun acceptPresentation(selectedIds: List<Long>) {
+        // The full consent screen bridged from a WMP ask: its Share answers
+        // THAT ask (consent: the fixed selections; ambiguity: the picked
+        // credential becomes the UserChoice answer).
+        val bridge = consentAskBridge
+        if (bridge != null) {
+            consentAskBridge = null
+            _pendingPresentationRequest.value = null
+            when (bridge) {
+                is FromConsentAsk -> answerPresentationConsent(bridge.shown, true)
+                is FromAmbiguity -> bridge.pending.answer.complete(
+                    org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.UserChoice(
+                        bridge.pending.matches.filter { m -> bridge.pickedBridgeIds.contains(m.credentialId) },
+                    ),
+                )
+            }
+            return
+        }
         _pendingPresentationRequest.value = null
         presentationContinuation?.resume(selectedIds, null)
         presentationContinuation = null
@@ -1336,6 +1597,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     /** User declined the presentation request. */
     fun declinePresentation() {
+        // The bridge counterpart of acceptPresentation's: a decline answers
+        // the bridged ask - the consent ask declined, or the presentation
+        // refused outright (ambiguity).
+        val bridge = consentAskBridge
+        if (bridge != null) {
+            consentAskBridge = null
+            _pendingPresentationRequest.value = null
+            when (bridge) {
+                is FromConsentAsk -> answerPresentationConsent(bridge.shown, false)
+                is FromAmbiguity -> bridge.pending.answer.complete(
+                    org.siros.sdk.wallet.WalletEventListener.CredentialAmbiguity.Declined,
+                )
+            }
+            return
+        }
         _pendingPresentationRequest.value = null
         presentationContinuation?.resume(emptyList(), null)
         presentationContinuation = null
@@ -1761,6 +2037,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 // timeout (awaitConnected's withTimeout) is also a
                 // CancellationException and is one.
                 if (isSilentCancellation(e)) throw e
+                if (e.message?.contains("already in progress") == true) {
+                    // Not an error: an issuance is already running (this
+                    // renewal's own fallback, typically - or one started
+                    // elsewhere) and this second start was correctly
+                    // refused. Surfacing it as a scary error dialog
+                    // alongside the delivered credential is the confusion
+                    // (found on-device: renew → invalid_grant → fallback
+                    // issuance → browser auth → credential received, while
+                    // a second Renew tap mid-flight raised exactly this).
+                    Log.i(TAG, "Issuance already in progress; ignoring the second start", e)
+                    _infoMessage.value = activity.getString(R.string.issuance_already_in_progress)
+                    return@launch
+                }
                 Log.e(TAG, "Failed to start issuance for ${offer.credentialConfigurationId}", e)
                 _errorMessage.value = e.message ?: "Failed to start issuance"
             }
@@ -2816,13 +3105,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         Log.i(TAG, "Routing to presentation")
                         // false: the SDK ignored a redelivered duplicate of a request already started; nothing will come through
                         // the wallet state for this attempt, so its "contacting the verifier" indicator must not stay up.
-                        if (!wallet.startPresentation(link.uri)) _flowStarting.value = null
+                        if (wallet.startPresentation(link.uri)) startedPresentationLinks.add(link.uri) else _flowStarting.value = null
                     }
                     else -> {
                         // Fallback: treat unclassified URIs as presentation requests
                         // (covers plain https://...?request_uri= patterns from QR codes)
                         Log.i(TAG, "Routing to presentation (unclassified)")
-                        if (!wallet.startPresentation(uri)) _flowStarting.value = null
+                        if (wallet.startPresentation(uri)) startedPresentationLinks.add(uri) else _flowStarting.value = null
                     }
                 }
             } catch (e: Exception) {

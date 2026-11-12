@@ -114,8 +114,17 @@ object CredentialValidity {
         } catch (e: DateTimeParseException) {
             // An XMLSchema dateTime with an offset rather than 'Z'.
             runCatching { java.time.OffsetDateTime.parse(text).toInstant() }.getOrElse {
-                Timber.d(e, "Ignoring unparseable validity timestamp")
-                null
+                // An offset-LESS local dateTime (found on-device: GDC
+                // credentials carry '2025-03-25T07:52:38' - no zone, no
+                // offset). VCDM 2.0's dateTime is XMLSchema, where a missing
+                // offset means an *unspecified* zone; the only sane
+                // interpretation for a validity boundary is UTC, and the
+                // alternative (dropping the timestamp) hid every expired
+                // credential from the wallet's attention list.
+                runCatching { java.time.LocalDateTime.parse(text).toInstant(java.time.ZoneOffset.UTC) }.getOrElse {
+                    Timber.d(e, "Ignoring unparseable validity timestamp")
+                    null
+                }
             }
         }
     }

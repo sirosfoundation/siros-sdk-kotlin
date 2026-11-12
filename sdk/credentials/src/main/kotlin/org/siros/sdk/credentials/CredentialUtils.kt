@@ -713,6 +713,61 @@ object CredentialUtils {
     }
 
     /**
+     * The credential's TITLE for pickers and consent UIs: "Type — holder",
+     * the type label always present and the closest thing to a personal
+     * title supplementing it - the metadata's name, else the holder's own
+     * name (given + family, the personal-credential convention). The type
+     * alone reads like a category; the holder alone reads like a stranger;
+     * together they read like a credential. Never the bare raw id, and
+     * never the raw FORMAT string title-cased ("Dc Sd Jwt" - found
+     * on-device): [typeHint] is the verifier's own query id for the type
+     * ("diploma", "mDL"), which outranks everything; the doctype/vct tail
+     * follows; a known format label ("SD-JWT VC", "mDoc") is the last
+     * resort.
+     */
+    fun credentialTitle(credential: StoredCredential, typeHint: String? = null): String {
+        // The hint (the verifier's query id) is the semantic type name but
+        // arrives RAW ("diploma") - label it like the doctype/vct tail, and
+        // never let it stack on the metadata's own name when that name IS
+        // the type ("diploma - Diploma Credential" twice over, found
+        // on-device): equal ignoring case/spacing = the same type.
+        val hintLabel = typeHint?.takeIf { it.isNotBlank() }?.let(::typeLabelOf)
+        val metadataName = credential.metadata?.name?.takeIf { it.isNotBlank() }
+        val nameIsTheType = hintLabel != null && metadataName != null &&
+            hintLabel.equals(metadataName.replace(" ", ""), ignoreCase = true)
+        val typeLabel = hintLabel
+            ?: credential.metadata?.doctype?.takeIf { it.isNotBlank() }?.let(::typeLabelOf)
+            ?: credential.metadata?.vct?.takeIf { it.isNotBlank() }?.let(::typeLabelOf)
+            ?: FORMAT_LABELS[credential.format]
+            ?: formatClaimKey(credential.format)
+        if (metadataName != null && !nameIsTheType) return "$typeLabel — $metadataName"
+        val claims = extractClaims(credential)
+        fun valueOf(key: String): String? = claims
+            .find { it.key == key || it.label.equals(key.replace('_', ' '), ignoreCase = true) }
+            ?.value?.takeIf { it.isNotBlank() }
+        val holder = listOfNotNull(valueOf("given_name"), valueOf("family_name"))
+            .ifEmpty { listOfNotNull(valueOf("givenName"), valueOf("familyName")) }
+            .joinToString(" ")
+        return if (holder.isNotBlank()) "$typeLabel — $holder" else typeLabel
+    }
+
+    /** The type label of a doctype/vct identifier: the semantic tail, the version digit trimmed. */
+    private fun typeLabelOf(identifier: String): String {
+        // urn:eudi:diploma:1 -> "Diploma"; org.iso.18013.5.1.mDL -> "mDL"
+        // (the dot-form's last segment, not the whole dotted path).
+        val tail = identifier.substringAfterLast(':').substringAfterLast('.')
+        val versionTrimmed = tail.trimEnd { it.isDigit() }.trim('_', '-', '.')
+        return formatClaimKey(versionTrimmed.ifEmpty { tail })
+    }
+
+    /** Human labels for the wire formats (the raw strings title-case into noise). */
+    private val FORMAT_LABELS = mapOf(
+        "dc+sd-jwt" to "SD-JWT VC",
+        "mso_mdoc" to "mDoc",
+        "vc+sd-jwt" to "SD-JWT VC",
+    )
+
+    /**
      * Format a JSON value for display. Internal (not private): also used by
      * [SharedDcqlMatcher] to render a value pulled from [flattenClaimPaths]
      * for the shared DCQL engine.

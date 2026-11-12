@@ -89,6 +89,7 @@
     <string name="credential_status_suspended_detail">This credential has been suspended by its issuer</string>
     <string name="credential_renew">Renew</string>
     <string name="credential_renew_not_possible">No refresh possible</string>
+    <string name="issuance_already_in_progress">An issuance is already in progress - finish or cancel it first</string>
     <string name="credential_detail_delete">Delete Credential</string>
     <string name="credential_detail_delete_confirm_title">Delete Credential</string>
     <string name="credential_detail_delete_confirm_message">Are you sure you want to delete \"%1$s\"? This action cannot be undone.</string>
@@ -181,6 +182,7 @@
     <string name="flow_diagnostic_label">Diagnostic: %1$s</string>
     <string name="flow_credentials_received">Received %1$d credential(s)</string>
     <string name="flow_presentation_sent">Presentation sent successfully</string>
+    <string name="flow_no_matching_credential">No credential in this wallet matches what the verifier asked for</string>
 
     <!-- Proximity (ISO 18013-5 BLE) presentation-specific step labels - the
          remaining steps (parsing_request/match_credentials/awaiting_consent/

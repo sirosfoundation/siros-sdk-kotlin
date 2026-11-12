@@ -205,6 +205,9 @@ interface WalletEventListener {
      *
      * @param flowId The presentation flow asking.
      * @param purpose The scope the verifier asked for.
+     * @param verifierName The verifier's own display name, when the trust
+     *   evaluation resolved one (the same [TrustResult.entityName] the other
+     *   consent surfaces render); null when none was resolved.
      * @param requestedClaims The claim names the query would disclose.
      * @return Whether the user consents to the presentation.
      */
@@ -212,7 +215,60 @@ interface WalletEventListener {
         flowId: String,
         purpose: String?,
         requestedClaims: List<String>,
+        verifierName: String? = null,
+        /** The verifier's raw client_id (the details view's subject - the
+         * scheme-prefixed identifier a consent UI expands behind an
+         * info-button, never the title's label). */
+        verifierId: String? = null,
+        /** The per-credential selections the consent covers (id + display
+         * name + THIS credential's claims) when the match step recorded
+         * them; empty when it did not. Lets a consent UI group the claims
+         * under their credentials and de-duplicate the flat list. */
+        selections: List<ConsentSelection> = emptyList(),
     ): Boolean = false
+
+    /** One matched credential a WMP consent ask covers. */
+    data class ConsentSelection(
+        /** The wallet's own credential id (the store's). */
+        val credentialId: Long,
+        /** The credential's display name, when known. */
+        val credentialName: String?,
+        /** THIS credential's claim names; null = the whole credential. */
+        val claims: List<String>?,
+    )
+
+    /**
+     * A WMP credential match produced more than one candidate: the wallet
+     * may pick one itself, or hand the choice to the user.
+     *
+     * - Return [CredentialAmbiguity.UserChoice] to let the user choose:
+     *   the `UserChoice` answer's `selections` is the wallet's full
+     *   credential-selection surface (the same one the legacy/DC-API path
+presents
+     *   via [onCredentialSelectionRequired] behind this facade).
+     * - Return [CredentialAmbiguity.walletChoice] (the DEFAULT, matching
+     *   the pre-#399 behavior) to let the wallet use its own first match
+     *   and proceed straight to consent.
+     *
+     * Only called when a match is genuinely ambiguous (more than one
+     * candidate for a query); a single match never asks.
+     */
+    suspend fun onCredentialAmbiguity(
+        flowId: String,
+        matches: List<ConsentSelection>,
+    ): CredentialAmbiguity = CredentialAmbiguity.walletChoice
+
+    /** The [onCredentialAmbiguity] answer: who picks among several matches. */
+    sealed interface CredentialAmbiguity {
+        /** The wallet proceeds with its own first match. The default. */
+        data object walletChoice : CredentialAmbiguity
+
+        /** The user chose these matches (from [matches]); the wallet proceeds with exactly them. */
+        data class UserChoice(val selections: List<ConsentSelection>) : CredentialAmbiguity
+
+        /** The user refused the presentation outright: no credential, the flow ends refused. */
+        data object Declined : CredentialAmbiguity
+    }
 
     /**
      * A new credential has been received from an issuer.
@@ -259,7 +315,7 @@ interface WalletEventListener {
      *   pattern. Null when the verifier didn't return one (also true for
      *   every OID4VCI issuance completion).
      */
-    fun onFlowComplete(flowId: String, redirectUri: String? = null) {}
+    fun onFlowComplete(flowId: String, redirectUri: String? = null, matchedNothing: Boolean = false) {}
 
     /**
      * Called when a flow fails.

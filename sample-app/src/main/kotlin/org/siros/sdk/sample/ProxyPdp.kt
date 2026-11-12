@@ -51,6 +51,7 @@ class ProxyPdp(
             val bearer = bearerProvider() ?: return@withContext EvaluationResponse(
                 trusted = false,
                 decision = "no bearer for the PDP routes",
+                context = null,
             )
             // The ask, verbatim: found driving the GDC diploma issuance, where
             // the only visible failure was the engine's refusal code and the
@@ -106,10 +107,11 @@ class ProxyPdp(
             }.getOrNull() ?: return@withContext EvaluationResponse(
                 trusted = false,
                 decision = "the PDP route did not answer",
+                context = null,
             )
             val parsed = runCatching {
                 kotlinx.serialization.json.Json.parseToJsonElement(answer).jsonObject
-            }.getOrNull() ?: return@withContext EvaluationResponse(trusted = false, decision = "an unparseable PDP answer")
+            }.getOrNull() ?: return@withContext EvaluationResponse(trusted = false, decision = "an unparseable PDP answer", context = null)
             // TOTAL parse, no throwing casts: a callback that throws kills the
             // whole evaluate (the engine surfaces it as InternalException and
             // the flow refuses) - the decision bool is what the engine
@@ -128,6 +130,12 @@ class ProxyPdp(
             EvaluationResponse(
                 trusted = (parsed as? JsonObject)?.get("decision")?.let { it as? JsonPrimitive }?.booleanOrNull ?: false,
                 decision = decisionText,
+                // The PDP's context, verbatim JSON text - go-trust's registry
+                // display_name (a registry's own human-facing name for the
+                // subject) rides it to the verifier info and overrides the
+                // consent UI's label (go-trust#<pending>: most registries do
+                // not carry one - absent then, no change).
+                context = (parsed as? JsonObject)?.get("context")?.let { it.toString() },
             )
         }
 

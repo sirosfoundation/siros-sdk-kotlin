@@ -27,7 +27,7 @@
     <string name="siros_consent_pseudonym_issuer">Palvelulle %1$s jaetaan pseudonyymi. Saat saman pseudonyymin aina, kun käytät tätä palvelua, ja eri pseudonyymin jokaisessa muussa palvelussa. Todistuksesi myöntänyt palvelu voi selvittää, kenelle pseudonyymi kuuluu.</string>
     <string name="siros_consent_pseudonym">Palvelulle %1$s jaetaan pseudonyymi. Saat saman pseudonyymin aina, kun käytät tätä palvelua, ja eri pseudonyymin jokaisessa muussa palvelussa.</string>
     <string name="siros_consent_footer">Muita henkilötietoja ei jaeta.</string>
-    <string name="siros_consent_claim">Todistuksesi tieto ”%1$s” jaetaan.</string>
+    <string name="siros_consent_claim">todistuksesi tieto ”%1$s”</string>
     <string name="siros_consent_legacy_pseudonym">Pseudonyymi jaetaan palvelulle %1$s.</string>
     <string name="siros_dcapi_refused_consent_unavailable">Lompakkosi ei voi tällä hetkellä pyytää hyväksyntääsi, joten mitään ei jaettu.</string>
     <string name="siros_dcapi_refused_user_declined">Et hyväksynyt pyyntöä, joten mitään ei jaettu.</string>

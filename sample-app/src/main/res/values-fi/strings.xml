@@ -69,6 +69,7 @@
     <string name="copied_to_clipboard">Kopioitu leikepöydälle</string>
     <string name="credential_renew">Uusi</string>
     <string name="credential_renew_not_possible">Uusiminen ei ole mahdollista</string>
+    <string name="issuance_already_in_progress">Myöntö on jo käynnissä - viimeistele tai keskeytä se ensin</string>
     <string name="credential_detail_delete">Poista todistus</string>
     <string name="credential_detail_delete_confirm_title">Poista todistus</string>
     <string name="credential_detail_delete_confirm_message">Haluatko varmasti poistaa \"%1$s\"? Tätä toimintoa ei voi peruuttaa.</string>
@@ -155,6 +156,7 @@
     <string name="flow_diagnostic_label">Diagnostiikka: %1$s</string>
     <string name="flow_credentials_received">Vastaanotettu %1$d todistusta</string>
     <string name="flow_presentation_sent">Esitys lähetetty onnistuneesti</string>
+    <string name="flow_no_matching_credential">Mikään tämän lompakon tunnistetieto ei vastaa verifioijan pyyntöä</string>
     <string name="flow_step_waiting_for_reader">Odotetaan lukijan yhdistämistä…</string>
     <string name="flow_step_reader_connected">Lukija yhdistetty, tarkistetaan pyyntöä…</string>
     <string name="proximity_presentation_failed">Esitys ei valmistunut</string>

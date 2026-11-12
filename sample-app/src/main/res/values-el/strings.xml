@@ -69,6 +69,7 @@
     <string name="copied_to_clipboard">Αντιγράφηκε στο πρόχειρο</string>
     <string name="credential_renew">Ανανέωση</string>
     <string name="credential_renew_not_possible">Δεν είναι δυνατή η ανανέωση</string>
+    <string name="issuance_already_in_progress">Μια έκδοση είναι ήδη σε εξέλιξη - ολοκληρώστε ή ακυρώστε την πρώτα</string>
     <string name="credential_detail_delete">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_title">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_message">Σίγουρα θέλετε να διαγράψετε το \"%1$s\"; Αυτή η ενέργεια δεν μπορεί να αναιρεθεί.</string>
@@ -155,6 +156,7 @@
     <string name="flow_diagnostic_label">Διαγνωστικό: %1$s</string>
     <string name="flow_credentials_received">Ελήφθησαν %1$d πιστοποιητικά</string>
     <string name="flow_presentation_sent">Η παρουσίαση στάλθηκε με επιτυχία</string>
+    <string name="flow_no_matching_credential">Δεν υπάρχει διαπιστευτήριο σε αυτό το πορτοφόλι που να αντιστοιχεί σε αυτό που ζήτησε ο επαληθευτής</string>
     <string name="flow_step_waiting_for_reader">Αναμονή σύνδεσης αναγνώστη…</string>
     <string name="flow_step_reader_connected">Ο αναγνώστης συνδέθηκε, έλεγχος αιτήματος…</string>
     <string name="proximity_presentation_failed">Η παρουσίαση δεν ολοκληρώθηκε</string>
