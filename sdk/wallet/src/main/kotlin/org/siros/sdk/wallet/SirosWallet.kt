@@ -8230,10 +8230,23 @@ class SirosWallet private constructor(
                             // AS's pseudonymous kind - the wallet's traffic attributes
                             // to the tenant, never to a person.
                             tokenProvider = {
-                                legacyAppToken ?: if (provider.tenantTokens) {
+                                // A TENANT-mode engine always takes the AS's
+                                // pseudonymous engine kind - NEVER the legacy
+                                // app token, whatever the login handed back.
+                                // The legacy token is HMAC-signed, and the
+                                // engine's asymmetric TAC gate (ES256/ES384/
+                                // EdDSA) refuses it as an unsupported
+                                // algorithm before it even fetches the JWKS -
+                                // the session create then dies "Not authorized"
+                                // with no key lookup to debug (found on-device
+                                // against the GDC released engine: the passkey
+                                // login lands a legacy appToken, it won the
+                                // ?: here, and both connect attempts reused
+                                // it while the tenant mint never ran).
+                                if (provider.tenantTokens) {
                                     authTokens.ensureTenantToken().raw
                                 } else {
-                                    authTokens.ensureBackendToken().raw
+                                    legacyAppToken ?: authTokens.ensureBackendToken().raw
                                 }
                             },
                         )
