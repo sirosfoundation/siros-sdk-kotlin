@@ -270,4 +270,57 @@ class WmpSessionTest {
         assertEquals(true, session.sendNotificationIf("test.third", null) { true })
         assertEquals(3, transport.sent.size)
     }
+
+    @Test
+    fun expiredSessionFallsBackToFreshCreate() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(
+            transport = transport,
+            config = WmpSessionConfig(
+                requestTimeoutMs = 1_000,
+                maxReconnectAttempts = 2,
+                reconnectBaseMs = 1,
+                reconnectMaxMs = 5,
+            ),
+        )
+
+        // Create: the first session.
+        val createJob = launch { session.create("token", sender = "wallet", capabilitiesOffered = null) }
+        waitForSentCount(transport, 1)
+        val createReq = codec.decodeRequest(transport.sentMessages[0])
+        transport.receiveFromServer(createSuccessResponse(createReq.id!!).toByteArray())
+        createJob.join()
+        assertEquals(WmpSessionState.ACTIVE, session.state.value)
+
+        // The SSE drops; the resume loop starts.
+        transport.simulateFailure()
+
+        // Both resume attempts fail with "Session not found" (the session
+        // expired server-side, the engine's in-memory store dropped it).
+        repeat(2) {
+            waitForSentCount(transport, transport.sentMessages.size + 1)
+            val resumeReq = codec.decodeRequest(transport.sentMessages.last())
+            assertTrue(resumeReq.method == "wmp.session.resume")
+            transport.receiveFromServer(
+                """{"jsonrpc":"2.0","id":"${resumeReq.id}","error":{"code":-31000,"message":"Session not found"}}"""
+                    .toByteArray()
+            )
+        }
+
+        // After the resume exhaustion, the fresh-create fallback fires:
+        // a NEW wmp.session.create (not another resume), with the same
+        // auth token.
+        waitForSentCount(transport, transport.sentMessages.size + 1)
+        val freshReq = codec.decodeRequest(transport.sentMessages.last())
+        assertTrue("the fallback is a fresh create, not another resume",
+            freshReq.method == "wmp.session.create")
+        transport.receiveFromServer(createSuccessResponse(freshReq.id!!).toByteArray())
+
+        withTimeout(3_000) {
+            while (session.state.value != WmpSessionState.ACTIVE) {
+                delay(10)
+            }
+        }
+        assertEquals(WmpSessionState.ACTIVE, session.state.value)
+    }
 }
