@@ -59,6 +59,8 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.mutableFloatStateOf
 import coil.compose.AsyncImage
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.CredentialDisclosureGuard
@@ -459,9 +461,16 @@ private fun DetailRow(label: String, value: String) {
  * Swipe down to close: the leftover of a downward drag - what the content's
  * own scrollables could not take because they are already at their top -
  * drags the whole view down with the finger. Releasing past [threshold]
- * fires [onDismiss]; releasing short of it springs the view back. A drag
- * the content CAN still take scrolls it normally, so the gesture never
- * fights the Claims/Raw tabs - it only ever engages from the top.
+ * fires [onDismiss]; releasing short of it settles back with a short
+ * ease-out. A drag the content CAN still take scrolls it normally, so the
+ * gesture never fights the Claims/Raw tabs - it only ever engages from the
+ * top.
+ *
+ * The drag writes the offset DIRECTLY from the nested-scroll callbacks
+ * rather than through a launched `snapTo` per pointer delta: launching put
+ * every delta a frame behind the finger and the pull read as sluggish
+ * (found on-device). Only the settle-back is a coroutine - one shot, on
+ * the frame clock, cancelled the moment a finger takes over again.
  */
 private fun Modifier.pullDownToDismiss(
     threshold: androidx.compose.ui.unit.Dp = 100.dp,
@@ -469,17 +478,21 @@ private fun Modifier.pullDownToDismiss(
 ): Modifier = composed {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val thresholdPx = with(density) { threshold.toPx() }
-    val offset = remember { androidx.compose.animation.core.Animatable(0f) }
+    var pullY by remember { mutableFloatStateOf(0f) }
+    var settleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
-    val fired = remember { androidx.compose.runtime.mutableStateOf(false) }
+    val fired = remember { mutableStateOf(false) }
     val connection = remember {
         object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
             override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
-                // Dragging back up while pulled down: the pull-back comes
-                // off the offset before the content scrolls.
-                if (available.y < 0f && offset.value > 0f) {
-                    val take = (-available.y).coerceAtLeast(0f).coerceAtMost(offset.value)
-                    scope.launch { offset.snapTo((offset.value - take).coerceAtLeast(0f)) }
+                // A new finger movement cancels the settle-back and owns the
+                // offset again.
+                settleJob?.let { if (it.isActive) it.cancel(); settleJob = null }
+                // Dragging back up while pulled down: the pull-back comes off
+                // the offset before the content scrolls.
+                if (available.y < 0f && pullY > 0f) {
+                    val take = (-available.y).coerceAtMost(pullY)
+                    pullY -= take
                     return androidx.compose.ui.geometry.Offset(0f, -take)
                 }
                 return androidx.compose.ui.geometry.Offset.Zero
@@ -491,27 +504,32 @@ private fun Modifier.pullDownToDismiss(
                 source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
             ): androidx.compose.ui.geometry.Offset {
                 if (available.y > 0f) {
-                    scope.launch {
-                        offset.snapTo((offset.value + available.y).coerceAtMost(thresholdPx * 2f))
-                    }
+                    pullY = (pullY + available.y).coerceAtMost(thresholdPx * 2f)
                     return available
                 }
                 return androidx.compose.ui.geometry.Offset.Zero
             }
 
             override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
-                if (offset.value > thresholdPx && !fired.value) {
+                if (pullY > thresholdPx && !fired.value) {
                     fired.value = true
                     onDismiss()
+                    return available
                 }
-                scope.launch {
-                    offset.animateTo(
-                        0f,
-                        androidx.compose.animation.core.spring(
-                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                            stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
-                        ),
-                    )
+                val start = pullY
+                if (start > 0f) {
+                    settleJob = scope.launch {
+                        val startNanos = androidx.compose.runtime.withFrameNanos { it }
+                        val durationNanos = 180_000_000L
+                        while (true) {
+                            val now = androidx.compose.runtime.withFrameNanos { it }
+                            val t = ((now - startNanos).toFloat() / durationNanos).coerceIn(0f, 1f)
+                            // ease-out cubic: quick off the mark, gentle at home.
+                            pullY = start * (1f - (1f - (1f - t) * (1f - t) * (1f - t)))
+                            if (t >= 1f) break
+                        }
+                        pullY = 0f
+                    }
                 }
                 return androidx.compose.ui.unit.Velocity.Zero
             }
@@ -519,5 +537,5 @@ private fun Modifier.pullDownToDismiss(
     }
     this
         .nestedScroll(connection)
-        .graphicsLayer { translationY = offset.value }
+        .graphicsLayer { translationY = pullY }
 }
