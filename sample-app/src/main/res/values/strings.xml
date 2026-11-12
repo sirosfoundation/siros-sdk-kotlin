@@ -88,7 +88,6 @@
     <string name="credential_status_revoked_detail">This credential has been revoked by its issuer</string>
     <string name="credential_status_suspended_detail">This credential has been suspended by its issuer</string>
     <string name="credential_renew">Renew</string>
-    <string name="credential_put_back">Put back</string>
     <string name="credential_renew_not_possible">No refresh possible</string>
     <string name="issuance_already_in_progress">An issuance is already in progress - finish or cancel it first</string>
     <string name="credential_detail_delete">Delete Credential</string>

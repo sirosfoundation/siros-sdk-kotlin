@@ -26,12 +26,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +79,7 @@ import coil.decode.SvgDecoder
 import coil.request.ImageRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -1258,49 +1265,50 @@ fun credentialStackCardTestTag(batchId: Long): String = "credential-stack-card-$
  * time, and a plain scrolling list of full cards asks for exactly that much
  * scrolling to see what else is there.
  *
- * The stack is a real deck, not a static illustration of one. Tapping a
- * card that isn't already at the front brings it to the front and *pins* it
- * there: the card that was at the front settles back into the pile, and
- * the pinned card rides on top until the user puts it back - the "Put back"
- * chip on the pinned card, or the same action in the long-press menu.
- * Because a pin never edits the pile's own order, "put it back" restores
- * exactly the position the card came from. Tapping the card that is
- * already at the front (pinned or not) opens the credential's detail
- * screen: at that point there is nothing left for "bring it forward" to do.
+ * The gestures, per the deck's design review (found on-device, the hard
+ * way, that a card drag and the deck's scroll are the same gesture on the
+ * same axis - so the deck owns vertical drags and cards never claim them):
  *
- * Every card in even a very long pile stays reachable: a plain vertical
- * drag anywhere on the deck scrolls it (the cards' taps don't claim drags,
- * so the deck's own scroll sees them), until the wanted card's sliver is in
- * view - then one tap brings it up. With the drag-based bring-forward this
- * screen used to have, that drag and the deck's scroll were the same
- * gesture on the same axis, and the card always won - so a pile taller than
- * the viewport could not be scrolled at all, and its buried cards were
- * unreachable no matter how long the user swiped.
+ *  - a plain tap on a card in the pile opens that credential's detail;
+ *  - a long-press on a card in the pile *lifts* it: the card rises out of
+ *    the pile and hovers at the centre of the display, above everything,
+ *    where it stays until the user puts it back;
+ *  - a swipe right on the lifted card opens the detail view;
+ *  - a swipe left on the lifted card puts it back into the pile - and
+ *    because lifting never edits the pile's own order, it settles into
+ *    exactly the slot it came from;
+ *  - a vertical drag anywhere scrolls the deck, so every card in even a
+ *    very long pile stays reachable.
+ *
+ * The lifted card hovers over the *viewport's* centre, not a slot in the
+ * content: while it is lifted it tracks the deck's scroll (its position is
+ * the scroll offset plus the centre), so panning the pile behind it never
+ * strands the card half off screen. There is deliberately no long-press
+ * menu any more - Renew/Delete live on the detail screen, and the actions
+ * this deck itself owns are the gestures above.
  *
  * Every card still fully exists in the layout; only the *drawing* overlaps,
  * so what ends up hidden behind the front of the stack is precisely what
- * the frontmost card paints over - nothing here is cropped, faded, or
- * otherwise altered to fake the effect. Pile order is kept as this
- * composable's own state, saved across process death and keyed on each
- * credential's stable batch id so a card's position (and any settle animation
- * in flight) survives recomposition from something unrelated changing, like
- * SVG hydration finishing - and so a credential added or removed while the
- * stack is on screen updates the deck without resetting anyone else's
- * position in it. The *pin* is the caller's state, not the deck's: the
- * action menu (owned by the caller) offers "Put back" for the pinned card,
- * so it has to see the pin too.
+ * the frontmost card paints over. Pile order is kept as this composable's
+ * own state, saved across process death and keyed on each credential's
+ * stable batch id so a card's position survives recomposition from
+ * something unrelated changing - and so a credential added or removed while
+ * the stack is on screen updates the deck without resetting anyone else's
+ * position in it. The *lift* is the caller's state, not the deck's: it
+ * outlives the screen (and the deck) the way the pin did before it.
  *
- * [CredentialCard] itself is given no click/long-click handlers here - each
- * stacked card is wrapped in its own `combinedClickable`, whose built-in
- * arbitration with the deck's scroll container is what makes tap, long-press
- * and scroll resolve correctly against each other.
+ * Pile cards are wrapped in their own `combinedClickable` (tap + the lift
+ * long-press); the lifted card wraps in [detectFocusedCardGestures],
+ * which resolves tap against the horizontal swipes and lets vertical
+ * drags fall through to the deck's scroll.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CredentialStack(
     entries: List<CredentialWithInstances>,
     onCredentialClick: (StoredCredential) -> Unit,
-    onCredentialLongClick: (StoredCredential) -> Unit,
+    /** Long-press on a card in the pile: lift it to the centre of the display. */
+    onLiftCredential: (StoredCredential) -> Unit,
     onRenewCredential: (StoredCredential) -> Unit,
     onDeleteCredential: (StoredCredential) -> Unit,
     modifier: Modifier = Modifier,
@@ -1312,18 +1320,15 @@ fun CredentialStack(
      */
     credentialStatuses: Map<Long, CredentialStatus> = emptyMap(),
     /**
-     * The batch id ([StoredCredential.batchId]) pinned to the front of the
-     * deck, held by the caller rather than here so that the pin outlives the
-     * deck - the caller's action menu offers "Put back" for the pinned card,
-     * and a pin the user set before navigating into a detail screen is still
-     * set when they come back to the deck. Null - the default - is no pin:
-     * the pile's own front card is what shows. A pin naming a credential not
+     * The batch id ([StoredCredential.batchId]) lifted out of the pile, held
+     * by the caller rather than here so that the lift outlives the deck.
+     * Null - the default - is no lifted card. A lift naming a credential not
      * in [entries] (deleted, or filtered out by "Needs attention") is
      * ignored.
      */
-    pinnedBatchId: Long? = null,
-    /** Sets or clears [pinnedBatchId]; see its doc comment for who owns it. */
-    onPinnedBatchIdChange: (Long?) -> Unit = {},
+    liftedBatchId: Long? = null,
+    /** Sets/clears [liftedBatchId]; see its doc comment for who owns it. */
+    onLiftedBatchIdChange: (Long?) -> Unit = {},
 ) {
     if (entries.isEmpty()) return
     val entryIds = entries.map { it.credential.batchId }
@@ -1332,10 +1337,9 @@ fun CredentialStack(
     // Front-to-back order of batch ids; the LAST id is frontmost (fully
     // visible, nothing placed after it to cover it). Reconciled - not
     // replaced - whenever the actual set of credentials changes: survivors
-    // keep their relative order (and so keep whatever position the user put
-    // them in), a newly-added credential joins at the front. Saved across
-    // process death: a pile the user spent time arranging shouldn't reshuffle
-    // because Android reclaimed the process.
+    // keep their relative order, a newly-added credential joins at the
+    // front. Saved across process death: a pile the user spent time
+    // arranging shouldn't reshuffle because Android reclaimed the process.
     var order by rememberSaveable(stateSaver = listSaver<List<Long>, Long>({ it }, { it })) {
         mutableStateOf(entryIds)
     }
@@ -1348,20 +1352,9 @@ fun CredentialStack(
         }
     }
 
-    // The pin rides ON TOP of the pile rather than reordering it: the pinned
-    // card is drawn at the front slot, the cards between it and the front
-    // shift down one slot, and putting it back drops it into the slot it
-    // never actually left.
-    val pinned = pinnedBatchId?.takeIf { it in order }
-    val displayOrder = if (pinned == null) order else order.filter { it != pinned } + listOf(pinned)
-
+    val lifted = liftedBatchId?.takeIf { it in order }
     val scrollState = rememberScrollState()
-    // Bringing a card to the front lands it at the top of the deck - scroll
-    // with it, or a pin made from deep in a long pile would settle into a
-    // slot the user can't see.
-    LaunchedEffect(pinned) {
-        if (pinned != null) scrollState.animateScrollTo(0)
-    }
+    val scope = rememberCoroutineScope()
 
     BoxWithConstraints(
         modifier = modifier
@@ -1372,24 +1365,55 @@ fun CredentialStack(
         val cardHeight = maxWidth / 1.6f
         val peek = cardHeight * CREDENTIAL_PEEK_FRACTION
         val peekPx = with(density) { peek.toPx() }
-        val totalHeight = cardHeight + peek * (displayOrder.size - 1).coerceAtLeast(0)
+        val cardWidthPx = with(density) { maxWidth.toPx() }
+        // Where a lifted card hovers: the centre of the *viewport* (the
+        // deck's own visible area), in content coordinates - i.e. wherever
+        // the scroll is at the moment.
+        val hoverCentrePx = with(density) { (maxHeight - cardHeight).toPx() } / 2f
+        val totalHeight = cardHeight + peek * (order.size - 1).coerceAtLeast(0)
 
         Box(modifier = Modifier.fillMaxWidth().height(totalHeight)) {
-            displayOrder.forEachIndexed { index, id ->
+            order.forEachIndexed { index, id ->
                 val entry = byId[id] ?: return@forEachIndexed
                 key(id) {
-                    val isFrontmost = index == displayOrder.lastIndex
-                    val targetY = index * peekPx
-                    val settledY = remember { Animatable(targetY) }
-                    // Settles into this card's stack slot whenever the slot
-                    // changes - the cards shifting down to make room for a
-                    // pin, and closing the gap again when it's put back, all
-                    // animate through here.
-                    LaunchedEffect(targetY) {
-                        settledY.animateTo(
-                            targetY,
-                            spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
-                        )
+                    val isLifted = lifted == id
+                    val slotY = index * peekPx
+                    val settledY = remember { Animatable(slotY) }
+                    val hDrag = remember { Animatable(0f) }
+                    // The scroll offset at the moment this card was lifted;
+                    // the difference between it and the live scroll is the
+                    // hover-follow correction in the graphicsLayer below.
+                    var anchorScroll by remember { mutableStateOf(0f) }
+                    var hasLiftedBefore by remember { mutableStateOf(false) }
+                    val liftScale by animateFloatAsState(
+                        targetValue = if (isLifted) 1.05f else 1f,
+                        label = "credentialStackLiftScale",
+                    )
+
+                    // Settles into this card's slot when it sits in the pile,
+                    // and to the hover position when it is lifted. While the
+                    // card hovers, the live scroll-tracking correction in the
+                    // graphicsLayer keeps it at the viewport's centre; when
+                    // the lift ends, that correction is folded into the
+                    // settle first so the ride home starts from where the
+                    // card is actually drawn.
+                    LaunchedEffect(isLifted, slotY) {
+                        if (isLifted) {
+                            anchorScroll = scrollState.value.toFloat()
+                            hasLiftedBefore = true
+                            settledY.animateTo(
+                                scrollState.value + hoverCentrePx,
+                                spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+                            )
+                        } else {
+                            if (hasLiftedBefore) {
+                                settledY.snapTo(settledY.value + (scrollState.value - anchorScroll))
+                            }
+                            settledY.animateTo(
+                                slotY,
+                                spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+                            )
+                        }
                     }
 
                     Box(
@@ -1397,22 +1421,44 @@ fun CredentialStack(
                             .fillMaxWidth()
                             .height(cardHeight)
                             .testTag(credentialStackCardTestTag(id))
-                            .graphicsLayer { translationY = settledY.value }
-                            .zIndex(index.toFloat())
-                            .combinedClickable(
-                                onClick = {
-                                    if (isFrontmost) {
-                                        onCredentialClick(entry.credential)
-                                    } else {
-                                        onPinnedBatchIdChange(id)
+                            .graphicsLayer {
+                                translationY = settledY.value + if (isLifted) scrollState.value - anchorScroll else 0f
+                                translationX = hDrag.value
+                                scaleX = liftScale
+                                scaleY = liftScale
+                            }
+                            .zIndex(if (isLifted) order.size + 1f else index.toFloat())
+                            .then(
+                                if (isLifted) {
+                                    Modifier.pointerInput(id) {
+                                        detectFocusedCardGestures(
+                                            swipeThresholdPx = cardWidthPx * 0.25f,
+                                            onTap = { onCredentialClick(entry.credential) },
+                                            onSwipeLeft = { onLiftedBatchIdChange(null) },
+                                            onSwipeRight = { onCredentialClick(entry.credential) },
+                                            onDragX = { delta -> scope.launch { hDrag.snapTo(hDrag.value + delta) } },
+                                            onDragXEnd = {
+                                                scope.launch {
+                                                    hDrag.animateTo(
+                                                        0f,
+                                                        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+                                                    )
+                                                }
+                                            },
+                                        )
                                     }
+                                } else {
+                                    Modifier.combinedClickable(
+                                        onClick = { onCredentialClick(entry.credential) },
+                                        onLongClick = { onLiftCredential(entry.credential) },
+                                        // The deck is the scroll container: a
+                                        // ripple that only a drag-cancelled
+                                        // press ever shows would read as noise
+                                        // on top of it.
+                                        interactionSource = null,
+                                        indication = null,
+                                    )
                                 },
-                                onLongClick = { onCredentialLongClick(entry.credential) },
-                                // The deck is the scroll container: a ripple
-                                // that only a drag-cancelled press ever gets
-                                // to show would read as noise on top of it.
-                                interactionSource = null,
-                                indication = null,
                             ),
                     ) {
                         CredentialCard(
@@ -1424,25 +1470,65 @@ fun CredentialStack(
                             onDeleteClick = { onDeleteCredential(entry.credential) },
                             credentialStatus = credentialStatuses[entry.credential.id],
                         )
-                        if (pinned == id && isFrontmost) {
-                            AssistChip(
-                                onClick = { onPinnedBatchIdChange(null) },
-                                label = { Text(stringResource(R.string.credential_put_back)) },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Outlined.Layers,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                                modifier = Modifier
-                                    .align(Alignment.BottomCenter)
-                                    .padding(bottom = 10.dp),
-                            )
-                        }
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Tap and horizontal swipes on the *lifted* card - the one hovering over the
+ * pile - with vertical drags deliberately left unconsumed so the deck's own
+ * scroll receives them. A swipe past [swipeThresholdPx] left puts the card
+ * back into the pile and right opens the detail view; either way the card
+ * settles back under [onDragXEnd] (the horizontal drag offset animates to
+ * zero), including behind a detail view that a swipe right just opened.
+ *
+ * No long-press here: the pile's long-press is the lift, and once lifted
+ * there is nothing for a second one to do - the pull-up menu it used to
+ * open was retired with the gestures this detector serves.
+ */
+private suspend fun PointerInputScope.detectFocusedCardGestures(
+    swipeThresholdPx: Float,
+    onTap: () -> Unit,
+    onSwipeLeft: () -> Unit,
+    onSwipeRight: () -> Unit,
+    onDragX: (Float) -> Unit,
+    onDragXEnd: () -> Unit,
+) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        val touchSlop = viewConfiguration.touchSlop
+        // 0 = undecided, 1 = ours (horizontal), 2 = the deck scroll's (vertical).
+        var mode = 0
+        var totalX = 0f
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull()
+            if (change == null || change.changedToUpIgnoreConsumed()) {
+                if (mode == 1) {
+                    if (totalX < -swipeThresholdPx) onSwipeLeft()
+                    else if (totalX > swipeThresholdPx) onSwipeRight()
+                    onDragXEnd()
+                } else if (mode == 0 && change != null && !change.isConsumed) {
+                    // A child (an exhausted card's Renew/Delete buttons)
+                    // consumed the tap; it isn't the deck's.
+                    onTap()
+                }
+                break
+            }
+            val dx = change.positionChange().x
+            val dy = change.positionChange().y
+            if (mode == 1) {
+                totalX += dx
+                onDragX(dx)
+                change.consume()
+            } else if (mode == 0 && (kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop)) {
+                mode = if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) 1 else 2
+                if (mode == 1) change.consume()
+            }
+            // mode 2: vertical - leave the event unconsumed for the scroll.
         }
     }
 }

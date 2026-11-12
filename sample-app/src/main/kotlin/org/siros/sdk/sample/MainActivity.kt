@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -1559,82 +1558,13 @@ fun CredentialsTab(
         org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory, availableKeyIds)
     }
 
-    // Long-press action menu (Renew/Delete) - a quicker path to the same two
-    // actions already reachable via the detail screen's icons/the exhausted-
-    // credential overlay, for a credential the user hasn't tapped into yet.
-    var actionMenuFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
     var pendingDeleteFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
 
-    // The credential pinned to the front of the deck (see CredentialStack) -
-    // held here rather than in the deck so that it outlives leaving the
-    // screen: the action menu below offers "Put back" for it, and a pin set
-    // before tapping into a credential's detail is still set on returning.
-    var pinnedBatchId by rememberSaveable { mutableStateOf<Long?>(null) }
-
-    actionMenuFor?.let { credential ->
-        ModalBottomSheet(onDismissRequest = { actionMenuFor = null }) {
-            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-                Text(
-                    credential.metadata?.name ?: credential.format,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                )
-                if (credential.batchId == pinnedBatchId) {
-                    TextButton(
-                        onClick = {
-                            actionMenuFor = null
-                            pinnedBatchId = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.Outlined.Layers, contentDescription = null, modifier = Modifier.padding(end = 16.dp))
-                            Text(stringResource(R.string.credential_put_back))
-                        }
-                    }
-                }
-                TextButton(
-                    onClick = {
-                        actionMenuFor = null
-                        onRenewCredential(credential)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.padding(end = 16.dp))
-                        Text(stringResource(R.string.credential_renew))
-                    }
-                }
-                TextButton(
-                    onClick = {
-                        actionMenuFor = null
-                        pendingDeleteFor = credential
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Filled.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(end = 16.dp),
-                        )
-                        Text(stringResource(R.string.credential_detail_delete), color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        }
-    }
+    // The credential lifted out of the deck (see CredentialStack) - held
+    // here rather than in the deck so that it outlives leaving the screen:
+    // a card lifted before tapping into a credential's detail is still
+    // lifted on returning.
+    var liftedBatchId by rememberSaveable { mutableStateOf<Long?>(null) }
 
     pendingDeleteFor?.let { credential ->
         AlertDialog(
@@ -1731,13 +1661,13 @@ fun CredentialsTab(
                     modifier = Modifier.padding(vertical = 24.dp),
                 )
                 // A partially-overlapping, interactive deck: CredentialStack
-                // owns its own scrolling and its own pile order; the pin rides
-                // on top of both and is held here so the action menu (and the
-                // rest of the app) can see and clear it.
+                // owns its own scrolling and its own pile order; the lift is
+                // held here so it outlives the deck (a card lifted before
+                // entering a detail is still lifted on coming back).
                 else -> CredentialStack(
                     entries = shown,
                     onCredentialClick = onCredentialClick,
-                    onCredentialLongClick = { actionMenuFor = it },
+                    onLiftCredential = { liftedBatchId = it.batchId },
                     onRenewCredential = onRenewCredential,
                     onDeleteCredential = { pendingDeleteFor = it },
                     modifier = if (compact) {
@@ -1746,8 +1676,8 @@ fun CredentialsTab(
                         Modifier.fillMaxSize().testTag(MANAGE_DECK_TAG)
                     },
                     credentialStatuses = credentialStatuses,
-                    pinnedBatchId = pinnedBatchId,
-                    onPinnedBatchIdChange = { pinnedBatchId = it },
+                    liftedBatchId = liftedBatchId,
+                    onLiftedBatchIdChange = { liftedBatchId = it },
                 )
             }
         }
