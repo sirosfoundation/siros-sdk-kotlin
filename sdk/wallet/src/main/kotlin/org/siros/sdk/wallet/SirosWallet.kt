@@ -10295,6 +10295,22 @@ class SirosWallet private constructor(
                 }
             }
             "sign_presentation" -> {
+                // A zkp_req query's presentation goes through the shared ZK
+                // pipeline - the same one the legacy engine transport's
+                // handleCircuitZkEngineSignPresentation and the DC API path
+                // both run (answerCircuitZkQueries) - NOT the plain
+                // DeviceResponse this arm otherwise builds. The plain path
+                // both words the consent wrong (a zkp_req match result
+                // carries no requestedClaims, so the ask renders nothing) and
+                // signs wrong (consentedClaims=null reads as "disclose
+                // everything", which the ZK wrapper refuses -
+                // DisclosureRefusedException; found on-device in the GDC
+                // round: the match offered the nym_auth credential, the
+                // consent asked, and the sign died on the null disclosure).
+                val zkResults = pendingMatchResultsByFlow[flowId]
+                if (zkResults.orEmpty().any { CredentialUtils.isCircuitZkFormat(it.format) }) {
+                    return answerWmpCircuitZkPresentation(flowId, params)
+                }
                 // Same defense-in-depth audience check as the legacy engine
                 // transport's handleSignRequest - this transport previously
                 // skipped it entirely, so a WMP-relayed sign_presentation was
@@ -10598,7 +10614,7 @@ class SirosWallet private constructor(
             if (results.isEmpty() || results.any { !CredentialUtils.isCircuitZkFormat(it.format) || it.circuitZkPlan == null }) {
                 refuse("query-shape", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
             }
-            val clientMetadata = circuitZkClientMetadataByFlow.remove(flowId) ?: params.clientMetadata as? JsonObject
+            val clientMetadata = circuitZkClientMetadataByFlow.remove(flowId)
             // The wallet's pick for this flow, in the engine's order; an id that is not a number is refused, never skipped.
             // Each reference names its query, and the choice is kept per query (a credential may answer several): a reference to an
             // unknown query, one without a number, or two different choices for one query is refused; a query without a reference is
@@ -10716,6 +10732,147 @@ class SirosWallet private constructor(
             reportSignFailure(flowId, "Request not completed")
         }
     }
+
+    /** The origin (scheme://authority) of a URI, for the verifier-id context and the transcript. */
+    private fun originOf(uri: String): String = try {
+        java.net.URI(uri).let { u -> "${u.scheme}://${u.authority}" }
+    } catch (e: Exception) { "" }
+
+    /**
+     * A `zkp_req` query's `sign_presentation` on the WMP transport: the shared ZK pipeline
+     * ([answerCircuitZkQueries]) with the WMP result shapes - the port of the legacy engine
+     * transport's [handleCircuitZkEngineSignPresentation], whose policy gates, verifier-id
+     * resolution, ONE consent ask (built from the PLAN, so the circuit's proof description
+     * words what the verifier learns - the plain arm's consent showed nothing, a zkp_req
+     * match result carries no requestedClaims) and ZK-wrapped presentation this replaces.
+     */
+    private suspend fun answerWmpCircuitZkPresentation(
+        flowId: String,
+        params: org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams,
+    ): org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult {
+        fun refuse(step: String, reason: org.siros.sdk.wallet.dcapi.DCAPIRefusalReason): Nothing {
+            Timber.w("zkp_req request refused on the WMP transport (step=$step, reason=$reason) for flow $flowId")
+            throw WmpCircuitZkRefusal(step, reason)
+        }
+        val audience = params.audience
+        val nonce = params.nonce
+        val responseUri = params.responseUri.orEmpty()
+        val verifierSessionId = params.verifierSessionId
+        // The wallet's own zkp_req policy, the same as the legacy transport's and the web
+        // wallet's: a signed request object the engine verified AND an encrypted response.
+        ZkpReqPolicy.refusalStep(params.verifiedRequest, params.responseEncryption != null)?.let { step ->
+            refuse(step, org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
+        }
+        val thumbprint = try {
+            wmpTranscriptThumbprint(params)
+        } catch (e: WalletException) {
+            refuse("handover-thumbprint", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        }
+        if (audience.isEmpty() || nonce.isEmpty() || responseUri.isEmpty() || thumbprint.isNullOrEmpty()) {
+            refuse("handover-inputs", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        }
+        if (!params.transactionData.isNullOrEmpty()) {
+            refuse("transaction-data", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        }
+        val support = circuitZkSupport ?: refuse("disabled", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        val prover = circuitZkProver ?: defaultCircuitZkProverHolder.value
+        val registry = verifierIdRegistry ?: refuse("no-sources", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
+        val consentHandler = presentationConsentHandler ?: refuse("no-consent-handler", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.CONSENT_UNAVAILABLE)
+        val trust = lastTrustResults[flowId] ?: refuse("no-trust", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.TRUST_UNAVAILABLE)
+        if (!trust.trusted) refuse("trust", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
+        when (ClientIdScheme.parse(audience)) {
+            is ClientIdScheme.X509SanDns, is ClientIdScheme.X509SanUri, is ClientIdScheme.X509Hash -> Unit
+            else -> refuse("unsigned-scheme", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
+        }
+        validateAudience(flowId, audience)
+        val results = pendingMatchResultsByFlow.remove(flowId).orEmpty()
+        if (results.isEmpty() || results.any { !CredentialUtils.isCircuitZkFormat(it.format) || it.circuitZkPlan == null }) {
+            refuse("query-shape", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        }
+        val clientMetadata = circuitZkClientMetadataByFlow.remove(flowId)
+        val allCreds = credentialStore.getAll()
+        // The wallet's pick for each query, in the engine's order (the same validation the
+        // legacy transport performs: every ref names a matched query, one pick per query).
+        val selectionByQuery = HashMap<String, Long>()
+        for (ref in params.credentialsToInclude.orEmpty()) {
+            val queryId = ref.credentialQueryId ?: refuse("selection-query", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            val id = ref.credentialId.toLongOrNull() ?: refuse("selection", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            if (results.none { it.queryId == queryId }) refuse("selection-query", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            selectionByQuery.put(queryId, id).let { if (it != null && it != id) refuse("selection-ambiguous", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE) }
+        }
+        if (selectionByQuery.isEmpty()) refuse("no-pick", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        val picked = selectionByQuery.values.distinct()
+        val currentResults = results.map { r -> r.copy(candidates = r.candidates.mapNotNull { c -> allCreds.firstOrNull { it.id == c.id } }) }
+        val request = org.siros.sdk.wallet.dcapi.DCAPIRequest(
+            clientId = audience,
+            responseMode = "direct_post.jwt",
+            nonce = nonce,
+            dcqlQuery = null,
+            clientMetadata = clientMetadata,
+            protocol = "openid4vp-redirect",
+            state = null,
+        )
+        val answer = answerCircuitZkQueries(
+            results = currentResults,
+            allCreds = allCreds,
+            selectedCredentialIds = picked,
+            buildTranscript = {
+                try {
+                    MdocDeviceResponseBuilder.buildCircuitZkRedirectSessionTranscript(audience, nonce, responseUri, thumbprint ?: "")
+                } catch (e: IllegalArgumentException) {
+                    refuse("handover-thumbprint", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+                }
+            },
+            trust = trust,
+            verifierContext = VerifierIdContext(request, trust, originOf(responseUri)),
+            verifiedClientIdDisplayName = ClientIdScheme.parse(audience).displayName,
+            attestedOrigin = originOf(responseUri),
+            requestSigned = true,
+            support = support,
+            prover = prover,
+            registry = registry,
+            consentHandler = consentHandler,
+            refuse = ::refuse,
+            selectionByQuery = selectionByQuery,
+            stillValid = { true },
+        )
+        // The circuit_zk response shape on this transport: vp_token is the stringified
+        // per-query presentation map (the same shape the legacy transport sends).
+        val vpTokenObject = JsonObject(answer.tokensByQueryId.mapValues { (_, tokens) -> kotlinx.serialization.json.JsonArray(tokens) })
+        val responseEncryption = params.responseEncryption
+        if (responseEncryption != null) {
+            val jarmAudience = params.verifiedRequest?.clientId?.takeIf { it.isNotEmpty() }
+                ?: refuse("jarm-audience", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+            return org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
+                responseJwe = BlindPresentation.responseJwe(responseEncryption, jarmAudience, params.state, vpTokenObject),
+            )
+        }
+        recordPresentation(PresentationRecord(
+            id = randomUint32Id(),
+            flowId = flowId,
+            verifierName = trust.entityName,
+            credentialIds = answer.usedIds,
+            credentialNames = answer.usedIds.mapNotNull { id -> allCreds.find { it.id == id }?.metadata?.name },
+            requestedClaims = emptyList(),
+            zkProof = true,
+            timestamp = System.currentTimeMillis(),
+        ))
+        return org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(vpToken = vpTokenObject.toString())
+    }
+
+    /** The thumbprint for a WMP sign params's session transcript (the [transcriptThumbprint] WMP twin). */
+    private fun wmpTranscriptThumbprint(params: org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams): String? {
+        val encryption = params.responseEncryption ?: return params.verifierJwkThumbprint
+        val own = AuthorizationResponseEncryption.jwkThumbprint(encryption.jwk)
+        val engines = params.verifierJwkThumbprint
+        if (!engines.isNullOrEmpty() && engines != own) {
+            throw WalletException("The verifier key thumbprint the engine sent is not the one of the key the response is encrypted to")
+        }
+        return own
+    }
+
+    /** A zkp_req refusal on the WMP transport: the step is the sub-flow's error text, never a request content. */
+    private class WmpCircuitZkRefusal(val step: String, val reason: org.siros.sdk.wallet.dcapi.DCAPIRefusalReason) : Exception()
 
     /** The legacy-transport `sign_presentation` for a request carrying `transaction_data` (see [signScaPresentation]). */
     private suspend fun handleScaEngineSignPresentation(engine: WalletEngineSession, msg: SignRequestMessage) {
