@@ -153,6 +153,14 @@ class WmpHttpSseTransport(
                 while (true) {
                     val line = reader.readLine() ?: break
 
+                    // The SSE stream's own line-level log: what the transport
+                    // actually receives, before any parsing. The on-device
+                    // remote-engine debugging (the GDC round) needed this —
+                    // the match ask arrived but the completion didn't, and
+                    // there was no way to tell whether the SSE was alive,
+                    // dead, or receiving events the parser was dropping.
+                    Timber.d("SSE line: ${if (line.length > 180) line.take(180) + "…" else line}")
+
                     when {
                         line.isEmpty() -> {
                             // Empty line = end of event, dispatch (once per event id)
