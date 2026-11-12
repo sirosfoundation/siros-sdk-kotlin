@@ -83,6 +83,7 @@ import coil.request.ImageRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -153,6 +154,14 @@ fun CredentialCard(
      * SDK, not in a Compose render.
      */
     credentialStatus: CredentialStatus? = null,
+    /**
+     * The wallet's consumption policy says a presented copy presents again
+     * (see `WalletViewModel.credentialConsumptionPolicy`) - under that policy
+     * "remaining" counts keyed copies whether or not they were presented.
+     * Defaults to false (a consuming policy): only never-presented copies
+     * remain.
+     */
+    copiesReusable: Boolean = false,
 ) {
     // Null when the caller doesn't have batch/usage data on hand (see
     // [instances]'s doc comment) - only gates the greyed-out/Renew state
@@ -161,7 +170,17 @@ fun CredentialCard(
     // "remaining" (and therefore the "shadow"/renew-only state below) counts
     // only copies that are both, so a lost key can't masquerade as a live,
     // presentable one (see CredentialInstance.hasKey's doc comment).
-    val remainingCount = instances?.count { it.sigCount == 0 && it.hasKey }
+    //
+    // [copiesReusable] folds in the wallet's consumption policy
+    // (NEVER_CONSUME: a presented copy presents again) - the same formula
+    // [needsAttention] uses. Without it the card counted never-presented
+    // copies only and called a fully-spent batch "exhausted" even when every
+    // copy was still perfectly presentable under the wallet's own policy -
+    // the deck then showed Renew/Delete on cards the "Needs attention"
+    // filter (rightly) called fine, and the two disagreeing surfaces read as
+    // a bug (found on-device: a Nym card worn out by a single presentation,
+    // policy NEVER_CONSUME).
+    val remainingCount = instances?.count { it.hasKey && (copiesReusable || it.sigCount == 0) }
     val isExhausted = remainingCount == 0
     // A credential whose metadata has not been built yet is still a
     // credential, and it already carries everything a card needs: its
@@ -1300,7 +1319,7 @@ fun credentialStackCardTestTag(batchId: Long): String = "credential-stack-card-$
  * position in it. The *lift* is the caller's state, not the deck's: it
  * outlives the screen (and the deck) the way the pin did before it.
  *
- * Pile cards are wrapped in their own `combinedClickable` (tap + the lift
+ * Pile cards wrap in [detectPileCardGestures] (tap + the lift
  * long-press); the lifted card wraps in [detectFocusedCardGestures],
  * which resolves tap against the horizontal swipes and lets vertical
  * drags fall through to the deck's scroll.
@@ -1332,6 +1351,8 @@ fun CredentialStack(
     liftedBatchId: Long? = null,
     /** Sets/clears [liftedBatchId]; see its doc comment for who owns it. */
     onLiftedBatchIdChange: (Long?) -> Unit = {},
+    /** The wallet's consumption policy - see [CredentialCard.copiesReusable]. */
+    copiesReusable: Boolean = false,
 ) {
     if (entries.isEmpty()) return
     val entryIds = entries.map { it.credential.batchId }
@@ -1462,16 +1483,12 @@ fun CredentialStack(
                                         )
                                     }
                                 } else {
-                                    Modifier.combinedClickable(
-                                        onClick = { onCredentialClick(entry.credential) },
-                                        onLongClick = { onLiftCredential(entry.credential) },
-                                        // The deck is the scroll container: a
-                                        // ripple that only a drag-cancelled
-                                        // press ever shows would read as noise
-                                        // on top of it.
-                                        interactionSource = null,
-                                        indication = null,
-                                    )
+                                    Modifier.pointerInput(id) {
+                                        detectPileCardGestures(
+                                            onTap = { onCredentialClick(entry.credential) },
+                                            onLongPress = { onLiftCredential(entry.credential) },
+                                        )
+                                    }
                                 },
                             ),
                     ) {
@@ -1483,9 +1500,70 @@ fun CredentialStack(
                             onRenewClick = { onRenewCredential(entry.credential) },
                             onDeleteClick = { onDeleteCredential(entry.credential) },
                             credentialStatus = credentialStatuses[entry.credential.id],
+                            copiesReusable = copiesReusable,
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Tap and long-press on a card in the pile. Written by hand rather than
+ * `combinedClickable` for the same reason the deck's earlier detector was:
+ * an exhausted card's face is covered by its own Renew/Delete buttons, and
+ * a `combinedClickable` wrapper only ever sees a down no child claimed -
+ * over those buttons it starved, and a long-press there did nothing at all
+ * (found on-device: a shadow card could not be lifted). This detector sees
+ * every down regardless of consumption (`requireUnconsumed = false`), so
+ * the lift works anywhere on the card, while a tap whose release a child
+ * consumed (one of those buttons) is left to the child. Movement is never
+ * consumed, so the deck's scroll owns drags - the same arbitration
+ * [detectFocusedCardGestures] uses for the lifted card.
+ */
+private suspend fun PointerInputScope.detectPileCardGestures(
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        val touchSlop = viewConfiguration.touchSlop
+        var longPressFired = false
+        var moved = false
+        var accumulatedX = 0f
+        var accumulatedY = 0f
+        // Races the wait itself against the deadline (a finger held dead
+        // still may never produce an intermediate event to check the clock
+        // against), the way the deck's original detector did.
+        var remainingMillis = viewConfiguration.longPressTimeoutMillis
+        while (true) {
+            val event = if (longPressFired) {
+                awaitPointerEvent()
+            } else {
+                val waitStart = System.nanoTime()
+                val result = withTimeoutOrNull(remainingMillis) { awaitPointerEvent() }
+                val waited = (System.nanoTime() - waitStart) / 1_000_000
+                remainingMillis = (remainingMillis - waited).coerceAtLeast(0)
+                if (result == null) {
+                    longPressFired = true
+                    onLongPress()
+                    continue
+                }
+                result
+            }
+            val change = event.changes.firstOrNull()
+            if (change == null || change.changedToUpIgnoreConsumed()) {
+                if (!longPressFired && !moved && change?.isConsumed == false) onTap()
+                break
+            }
+            if (!longPressFired && !moved) {
+                accumulatedX += change.positionChange().x
+                accumulatedY += change.positionChange().y
+                if (kotlin.math.abs(accumulatedX) > touchSlop || kotlin.math.abs(accumulatedY) > touchSlop) {
+                    moved = true
+                }
+                // Deliberately unconsumed: the deck's scroll takes the drag.
             }
         }
     }

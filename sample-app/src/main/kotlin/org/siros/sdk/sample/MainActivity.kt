@@ -1678,6 +1678,7 @@ fun CredentialsTab(
                     credentialStatuses = credentialStatuses,
                     liftedBatchId = liftedBatchId,
                     onLiftedBatchIdChange = { liftedBatchId = it },
+                    copiesReusable = copiesReusable,
                 )
             }
         }
