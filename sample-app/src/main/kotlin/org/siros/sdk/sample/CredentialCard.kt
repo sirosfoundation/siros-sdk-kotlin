@@ -65,8 +65,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.res.stringResource
@@ -1280,7 +1283,7 @@ fun credentialStackCardTestTag(batchId: Long): String = "credential-stack-card-$
  *  - a vertical drag anywhere scrolls the deck, so every card in even a
  *    very long pile stays reachable.
  *
- * The lifted card hovers over the *viewport's* centre, not a slot in the
+ * The lifted card hovers over the *display's* centre, not a slot in the
  * content: while it is lifted it tracks the deck's scroll (its position is
  * the scroll offset plus the centre), so panning the pile behind it never
  * strands the card half off screen. There is deliberately no long-press
@@ -1355,10 +1358,15 @@ fun CredentialStack(
     val lifted = liftedBatchId?.takeIf { it in order }
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+    // Where the deck's top edge sits in the window - read once the deck is
+    // placed, so the hover below can be aimed at the display's centre
+    // rather than at the deck's own middle.
+    var deckTopInRoot by remember { mutableStateOf(0f) }
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
+            .onGloballyPositioned { deckTopInRoot = it.positionInRoot().y }
             .verticalScroll(scrollState),
     ) {
         val density = LocalDensity.current
@@ -1366,10 +1374,16 @@ fun CredentialStack(
         val peek = cardHeight * CREDENTIAL_PEEK_FRACTION
         val peekPx = with(density) { peek.toPx() }
         val cardWidthPx = with(density) { maxWidth.toPx() }
-        // Where a lifted card hovers: the centre of the *viewport* (the
-        // deck's own visible area), in content coordinates - i.e. wherever
-        // the scroll is at the moment.
-        val hoverCentrePx = with(density) { (maxHeight - cardHeight).toPx() } / 2f
+        val cardHeightPx = with(density) { cardHeight.toPx() }
+        // Where a lifted card hovers: the centre of the *display*, in
+        // content coordinates. Not the deck viewport's own centre: the deck
+        // sits low on the screen (under the title, search field and filter
+        // pills), so its middle is a good third of a card below the middle
+        // of the display, and a card lifted to "the centre" has to centre
+        // on what the user is looking at (found on-device: the hover parked
+        // visibly below mid-screen and read as "not front and centre").
+        val window = LocalView.current
+        val hoverY = { scrollState.value + window.height / 2f - cardHeightPx / 2f - deckTopInRoot }
         val totalHeight = cardHeight + peek * (order.size - 1).coerceAtLeast(0)
 
         Box(modifier = Modifier.fillMaxWidth().height(totalHeight)) {
@@ -1402,7 +1416,7 @@ fun CredentialStack(
                             anchorScroll = scrollState.value.toFloat()
                             hasLiftedBefore = true
                             settledY.animateTo(
-                                scrollState.value + hoverCentrePx,
+                                hoverY(),
                                 spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
                             )
                         } else {
