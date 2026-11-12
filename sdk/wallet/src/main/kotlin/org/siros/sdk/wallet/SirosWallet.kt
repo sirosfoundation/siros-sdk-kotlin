@@ -10854,13 +10854,30 @@ class SirosWallet private constructor(
             )
         }
 
-        val matchResults = CredentialMatcher.match(dcqlQuery, allCreds, zkSystemIds)
+        // The match WITH the circuit_zk support - the same parameter the
+        // legacy collector, the DC API handler and the UI-event paths all
+        // pass, and without which a `zkp_req` query falls through to
+        // matchSingleQuery, whose format filter ("mso_mdoc") rejects the
+        // credential before the doctype check runs (found on-device in the
+        // GDC round: a nym_auth presentation matched nothing despite the
+        // wallet holding the credential, format=zkp_req doctype=nym_auth.1
+        // -> 0 matches, because this call passed only the zkSystemIds).
+        val wmpClientMetadata = payload?.get("client_metadata") as? JsonObject
+        val dcqlOutput = CredentialMatcher.matchDcql(
+            dcqlQuery, allCreds, zkSystemIds, circuitZkSupport, wmpClientMetadata,
+        )
+        val matchResults = dcqlOutput.queryResults
         // Stash for the consent ask that follows on this transport: its
         // selections (the per-credential record) read this map - without the
         // stash the ask rendered an empty list (found on-device: the consent
         // dialog showed no requested claims). The UI-event paths (the
         // legacy collector and the DC API handler) each do their own.
         synchronized(consentLock) { pendingMatchResultsByFlow[flowId] = matchResults }
+        // The client metadata the planner used, for the sign step's verifier-id
+        // resolution (the same stash planCircuitZkMatches makes for the DC
+        // API path): without it a zkp_req sign step that needs a verifier id
+        // reads none and refuses with no-verifier-id.
+        wmpClientMetadata?.let { circuitZkClientMetadataByFlow[flowId] = it }
         // The query each candidate is answered under - first match wins, the
         // same rule the other two transports apply.
         var matchResultByCredentialId = buildMap {
