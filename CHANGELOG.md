@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-12
+
+The SDK's local WMP engine pins to the **released wallet-core v0.2.2** (`org.siros:siros-wallet-core`, the first release-track pin
+rather than a dev overlay): the PDP response context and the no-match redirect_uri - the wire inputs the consent surfaces consume -
+plus the OID4VP link-parsing fixes and the AuthZEN proxy shape. The consent round and the credential deck ship with it.
+
+### Changed
+- **wallet-core 0.2.2.** The default `walletCoreVersion` moves from 0.2.1 to the released 0.2.2; the vendored UniFFI bindings match the
+  release byte-for-byte.
+- **Sample app: the credential deck.** A long-press lifts a card out of the pile to the display's centre; a swipe left puts it back,
+  a swipe right opens its detail; vertical drags scroll the pile; the detail view closes on a pull-down. A card's "remaining" count
+  honours the wallet's consumption policy, and the app paints edge-to-edge under the navigation bar.
+- **Sample app: the consent round.** "Show me details" bridges the minimal consent sheet into the full in-wallet consent view at the
+  claim-selection step; the claim lines are noun phrases completing the header's sentence in all five locales; the verifier's label
+  resolves the registry display_name, the client_name, then the domain.
+
+### Fixed
+- **The offset-less validity timestamps parse** - a VCDM dateTime with no zone or offset (the GDC credentials carry
+  `2025-03-25T07:52:38`) is read as UTC instead of being dropped, which had hidden every expired credential from the
+  needs-attention list.
+- **A second issuance attempt while one is in flight reports guidance, not an error** (renewal's fallback path, found on-device).
+- The WMP ask path stashed no match results (empty consent selections) and a conflated StateFlow hid Ready→Ready completions
+  (the spinner that never ended).
 ## [0.22.0] - 2026-11-10
 
 The sample app takes on the wallet design (landing, navigation, light and dark appearance); the SDK changes since 0.21.4, including the breaking ones marked below, ship with it.
