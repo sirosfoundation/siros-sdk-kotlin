@@ -20,6 +20,13 @@ jobs:
     name: Build SDK & Sample App
     runs-on: ubuntu-latest
     needs: nymauth-native
+    # The Gradle credentials (settings.gradle.kts) read GITHUB_ACTOR/GITHUB_TOKEN
+    # from the environment for every GH Packages Maven resolution - ci.yml's jobs
+    # map these; without them every registry read 401s (the v0.23.0 build lost
+    # siros-wallet-core and siros-verifier-core-ffi resolution this way).
+    env:
+      GITHUB_ACTOR: ${{ github.actor }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -110,6 +117,13 @@ jobs:
     name: Publish to GitHub Packages
     runs-on: ubuntu-latest
     needs: nymauth-native
+    # Same as the build job's: without these two, Gradle resolves GH Packages
+    # anonymously and every read 401s (v0.23.0's Central publish died on
+    # siros-verifier-core-ffi this way - and the drift this comment's neighbour
+    # warns about is exactly this class of job-config loss).
+    env:
+      GITHUB_ACTOR: ${{ github.actor }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     # Deliberately NOT `needs: build`. Publication to Maven Central and GitHub
     # Packages is what makes a tag a release for consumers; it must not be
     # suppressed because attaching a file to the GitHub release page flaked.
