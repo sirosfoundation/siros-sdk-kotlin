@@ -49,6 +49,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -1319,10 +1321,9 @@ fun credentialStackCardTestTag(batchId: Long): String = "credential-stack-card-$
  * position in it. The *lift* is the caller's state, not the deck's: it
  * outlives the screen (and the deck) the way the pin did before it.
  *
- * Pile cards wrap in [detectPileCardGestures] (tap + the lift
- * long-press); the lifted card wraps in [detectFocusedCardGestures],
- * which resolves tap against the horizontal swipes and lets vertical
- * drags fall through to the deck's scroll.
+ * Every card wraps in [detectCardGestures] - tap, the lift long-press,
+ * and the horizontal swipes of the lifted card, resolved against the
+ * deck's scroll and the card's own child buttons in one place.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1379,6 +1380,11 @@ fun CredentialStack(
     val lifted = liftedBatchId?.takeIf { it in order }
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+    // Read by the per-card gesture detector without restarting it: a card's
+    // detector must see the lift happen MID-GESTURE (the finger that
+    // long-pressed the card up is the finger that should then swipe it),
+    // so it reads this State rather than capturing the parameter.
+    val liftedIdState = rememberUpdatedState(lifted)
     // Where the deck's top edge sits in the window - read once the deck is
     // placed, so the hover below can be aimed at the display's centre
     // rather than at the deck's own middle.
@@ -1412,6 +1418,10 @@ fun CredentialStack(
                 val entry = byId[id] ?: return@forEachIndexed
                 key(id) {
                     val isLifted = lifted == id
+                    // Stable across recompositions (see liftedIdState): the
+                    // gesture block captures THIS, not the parameter, so a
+                    // lift that happens under a finger already down is seen.
+                    val isLiftedNow = remember(id) { derivedStateOf { liftedIdState.value == id } }
                     val slotY = index * peekPx
                     val settledY = remember { Animatable(slotY) }
                     val hDrag = remember { Animatable(0f) }
@@ -1463,34 +1473,32 @@ fun CredentialStack(
                                 scaleY = liftScale
                             }
                             .zIndex(if (isLifted) order.size + 1f else index.toFloat())
-                            .then(
-                                if (isLifted) {
-                                    Modifier.pointerInput(id) {
-                                        detectFocusedCardGestures(
-                                            swipeThresholdPx = cardWidthPx * 0.25f,
-                                            onTap = { onCredentialClick(entry.credential) },
-                                            onSwipeLeft = { onLiftedBatchIdChange(null) },
-                                            onSwipeRight = { onCredentialClick(entry.credential) },
-                                            onDragX = { delta -> scope.launch { hDrag.snapTo(hDrag.value + delta) } },
-                                            onDragXEnd = {
-                                                scope.launch {
-                                                    hDrag.animateTo(
-                                                        0f,
-                                                        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
-                                                    )
-                                                }
-                                            },
-                                        )
-                                    }
-                                } else {
-                                    Modifier.pointerInput(id) {
-                                        detectPileCardGestures(
-                                            onTap = { onCredentialClick(entry.credential) },
-                                            onLongPress = { onLiftCredential(entry.credential) },
-                                        )
-                                    }
-                                },
-                            ),
+                            // One detector for every card, pile or lifted: the
+                            // gesture that lifts a card (a long-press) is the
+                            // gesture that should then swipe it - swapping the
+                            // detector when the lift lands meant the finger
+                            // already down never reached the new one, and
+                            // "press, hold, keep dragging sideways" (the
+                            // natural motion) did nothing at all.
+                            .pointerInput(id) {
+                                detectCardGestures(
+                                    isLifted = { isLiftedNow.value },
+                                    swipeThresholdPx = cardWidthPx * 0.25f,
+                                    onTap = { onCredentialClick(entry.credential) },
+                                    onLongPress = { onLiftCredential(entry.credential) },
+                                    onSwipeLeft = { onLiftedBatchIdChange(null) },
+                                    onSwipeRight = { onCredentialClick(entry.credential) },
+                                    onDragX = { delta -> scope.launch { hDrag.snapTo(hDrag.value + delta) } },
+                                    onDragXEnd = {
+                                        scope.launch {
+                                            hDrag.animateTo(
+                                                0f,
+                                                spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+                                            )
+                                        }
+                                    },
+                                )
+                            },
                     ) {
                         CredentialCard(
                             credential = entry.credential,
@@ -1510,80 +1518,36 @@ fun CredentialStack(
 }
 
 /**
- * Tap and long-press on a card in the pile. Written by hand rather than
- * `combinedClickable` for the same reason the deck's earlier detector was:
- * an exhausted card's face is covered by its own Renew/Delete buttons, and
- * a `combinedClickable` wrapper only ever sees a down no child claimed -
- * over those buttons it starved, and a long-press there did nothing at all
- * (found on-device: a shadow card could not be lifted). This detector sees
- * every down regardless of consumption (`requireUnconsumed = false`), so
- * the lift works anywhere on the card, while a tap whose release a child
- * consumed (one of those buttons) is left to the child. Movement is never
- * consumed, so the deck's scroll owns drags - the same arbitration
- * [detectFocusedCardGestures] uses for the lifted card.
- */
-private suspend fun PointerInputScope.detectPileCardGestures(
-    onTap: () -> Unit,
-    onLongPress: () -> Unit,
-) {
-    awaitEachGesture {
-        awaitFirstDown(requireUnconsumed = false)
-        val touchSlop = viewConfiguration.touchSlop
-        var longPressFired = false
-        var moved = false
-        var accumulatedX = 0f
-        var accumulatedY = 0f
-        // Races the wait itself against the deadline (a finger held dead
-        // still may never produce an intermediate event to check the clock
-        // against), the way the deck's original detector did.
-        var remainingMillis = viewConfiguration.longPressTimeoutMillis
-        while (true) {
-            val event = if (longPressFired) {
-                awaitPointerEvent()
-            } else {
-                val waitStart = System.nanoTime()
-                val result = withTimeoutOrNull(remainingMillis) { awaitPointerEvent() }
-                val waited = (System.nanoTime() - waitStart) / 1_000_000
-                remainingMillis = (remainingMillis - waited).coerceAtLeast(0)
-                if (result == null) {
-                    longPressFired = true
-                    onLongPress()
-                    continue
-                }
-                result
-            }
-            val change = event.changes.firstOrNull()
-            if (change == null || change.changedToUpIgnoreConsumed()) {
-                if (!longPressFired && !moved && change?.isConsumed == false) onTap()
-                break
-            }
-            if (!longPressFired && !moved) {
-                accumulatedX += change.positionChange().x
-                accumulatedY += change.positionChange().y
-                if (kotlin.math.abs(accumulatedX) > touchSlop || kotlin.math.abs(accumulatedY) > touchSlop) {
-                    moved = true
-                }
-                // Deliberately unconsumed: the deck's scroll takes the drag.
-            }
-        }
-    }
-}
-
-/**
- * Tap and horizontal swipes on the *lifted* card - the one hovering over the
- * pile - with vertical drags deliberately left unconsumed so the deck's own
- * scroll receives them. A swipe past [swipeThresholdPx] left puts the card
- * back into the pile and right opens the detail view; either way the card
- * settles back under [onDragXEnd] (the horizontal drag offset animates to
- * zero), including behind a detail view that a swipe right just opened.
+ * Tap, long-press and horizontal swipes on one card, resolved by hand: the
+ * card's own children (an exhausted card's Renew/Delete buttons) claim downs
+ * themselves, so a `combinedClickable` wrapper - which only ever sees a down
+ * no child consumed - starved over them, and the lift did nothing at all
+ * (found on-device: a shadow card could not be long-pressed). This detector
+ * sees every down regardless of consumption (`requireUnconsumed = false`);
+ * a tap whose release a child consumed is left to the child.
  *
- * No long-press here: the pile's long-press is the lift, and once lifted
- * there is nothing for a second one to do - the pull-up menu it used to
- * open was retired with the gestures this detector serves.
+ * The same gesture owns the card across a lift: the finger that long-presses
+ * a card up is the finger that then swipes it, so the long-press transitions
+ * straight into swipe tracking rather than handing off to a detector that
+ * has not seen this finger (found on-device: swapping the detector when the
+ * lift landed meant "press, hold, keep dragging sideways" - the natural
+ * motion - did nothing; the swipe only worked as a second, separate touch).
+ * [isLifted] is read live for exactly that reason, and the lift the
+ * long-press fires flips it mid-gesture.
+ *
+ * Vertical drags are never consumed (the deck's scroll owns them), for pile
+ * cards and lifted cards alike; a lifted card's horizontal swipe tracks the
+ * finger past [swipeThresholdPx] - left puts it back into the pile, right
+ * opens the detail view - and the drag offset springs back to zero whether
+ * the swipe fired or fell short. No long-press on an already-lifted card
+ * fires anything (there is nothing for a second one to do); it just starts
+ * swipe tracking from that same touch.
  */
-private suspend fun PointerInputScope.detectFocusedCardGestures(
+private suspend fun PointerInputScope.detectCardGestures(
+    isLifted: () -> Boolean,
     swipeThresholdPx: Float,
     onTap: () -> Unit,
+    onLongPress: () -> Unit,
     onSwipeLeft: () -> Unit,
     onSwipeRight: () -> Unit,
     onDragX: (Float) -> Unit,
@@ -1592,18 +1556,40 @@ private suspend fun PointerInputScope.detectFocusedCardGestures(
     awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false)
         val touchSlop = viewConfiguration.touchSlop
-        // 0 = undecided, 1 = ours (horizontal), 2 = the deck scroll's (vertical).
+        // 0 = pending, 1 = horizontal swipe (ours), 2 = vertical (the deck
+        // scroll's - left unconsumed), 3 = long-pressed, now swipe-tracking.
         var mode = 0
         var totalX = 0f
+        var accumulatedX = 0f
+        var accumulatedY = 0f
+        // Races the wait itself against the deadline (a finger held dead
+        // still may never produce an intermediate event to check the clock
+        // against) - the same trick the deck's original detector used.
+        var remainingMillis = viewConfiguration.longPressTimeoutMillis
         while (true) {
-            val event = awaitPointerEvent()
+            val event = if (mode == 0) {
+                val waitStart = System.nanoTime()
+                val result = withTimeoutOrNull(remainingMillis) { awaitPointerEvent() }
+                val waited = (System.nanoTime() - waitStart) / 1_000_000
+                remainingMillis = (remainingMillis - waited).coerceAtLeast(0)
+                if (result == null) {
+                    if (!isLifted()) onLongPress()
+                    // Either way this finger now owns the swipe: it lifted
+                    // the card just now, or the card was lifted already.
+                    mode = 3
+                    continue
+                }
+                result
+            } else {
+                awaitPointerEvent()
+            }
             val change = event.changes.firstOrNull()
             if (change == null || change.changedToUpIgnoreConsumed()) {
-                if (mode == 1) {
+                if (mode == 1 || mode == 3) {
                     if (totalX < -swipeThresholdPx) onSwipeLeft()
                     else if (totalX > swipeThresholdPx) onSwipeRight()
                     onDragXEnd()
-                } else if (mode == 0 && change != null && !change.isConsumed) {
+                } else if (mode == 0 && change?.isConsumed == false) {
                     // A child (an exhausted card's Renew/Delete buttons)
                     // consumed the tap; it isn't the deck's.
                     onTap()
@@ -1612,15 +1598,27 @@ private suspend fun PointerInputScope.detectFocusedCardGestures(
             }
             val dx = change.positionChange().x
             val dy = change.positionChange().y
-            if (mode == 1) {
-                totalX += dx
-                onDragX(dx)
-                change.consume()
-            } else if (mode == 0 && (kotlin.math.abs(dx) > touchSlop || kotlin.math.abs(dy) > touchSlop)) {
-                mode = if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) 1 else 2
-                if (mode == 1) change.consume()
+            when (mode) {
+                1, 3 -> {
+                    totalX += dx
+                    onDragX(dx)
+                    change.consume()
+                }
+                0 -> {
+                    accumulatedX += dx
+                    accumulatedY += dy
+                    if (kotlin.math.abs(accumulatedX) > touchSlop || kotlin.math.abs(accumulatedY) > touchSlop) {
+                        mode = if (isLifted()) 1 else 2
+                        if (mode == 1) {
+                            totalX = accumulatedX
+                            change.consume()
+                        }
+                    }
+                    // Deliberately unconsumed either way: the deck's scroll
+                    // takes what a horizontal slop on a pile card wasn't.
+                }
+                // mode 2: vertical - leave the event unconsumed for the scroll.
             }
-            // mode 2: vertical - leave the event unconsumed for the scroll.
         }
     }
 }
