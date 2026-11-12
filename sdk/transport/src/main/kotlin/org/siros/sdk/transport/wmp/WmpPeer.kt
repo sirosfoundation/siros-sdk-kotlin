@@ -237,6 +237,7 @@ class WmpPeer(
     private suspend fun dispatch(msg: JsonRpcRequest) {
         val params = msg.params
 
+        Timber.d("WmpPeer dispatch: ${msg.method} id=${msg.id}")
         when (msg.method) {
             WmpMethods.FLOW_PROGRESS -> {
                 val p = decodeParams<FlowProgressParams>(params)
@@ -273,7 +274,9 @@ class WmpPeer(
                 if (handler != null) {
                     trackFlowType(p.flowId, p.flowType)
                     val result = try {
-                        handler.startFlow(p)
+                        val r = handler.startFlow(p)
+                        Timber.d("WmpPeer: FLOW_START ${p.flowType} flow=${p.flowId} startFlow returned")
+                        r
                     } catch (e: FlowStartRefusedException) {
                         // The handler refuses the request itself: an error response, nothing started, nothing tracked.
                         forgetFlowType(p.flowId)

@@ -40,6 +40,11 @@ class WmpSession(
     private var sessionId: String? = null
     private var resumptionToken: String? = null
     private var lastReceivedId: String? = null
+    // Saved from the create() call so the fresh-create fallback after a
+    // resume exhaustion replays the same auth, sender and capabilities.
+    private var authToken: String? = null
+    private var sender: String? = null
+    private var capabilities: JsonObject? = null
 
     private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<JsonRpcResponse>>()
     private val incomingNotifications = Channel<JsonRpcRequest>(Channel.BUFFERED)
@@ -60,6 +65,10 @@ class WmpSession(
         sender: String? = null,
         capabilitiesOffered: JsonObject? = null,
     ) {
+        // Saved for the fresh-create fallback (see handleDisconnect).
+        this.authToken = authToken
+        this.sender = sender
+        this.capabilities = capabilitiesOffered
         _state.value = WmpSessionState.CONNECTING
         transport.connect()
         startMessageLoop()
@@ -344,6 +353,7 @@ class WmpSession(
         _state.value = WmpSessionState.RESUMING
 
         var attempt = 0
+        var lastError: Exception? = null
         while (attempt < config.maxReconnectAttempts) {
             attempt++
             val backoffMs = min(config.reconnectBaseMs * (1L shl attempt), config.reconnectMaxMs)
@@ -354,7 +364,32 @@ class WmpSession(
                 resume()
                 return
             } catch (e: Exception) {
+                lastError = e
                 Timber.w(e, "Reconnect attempt $attempt failed")
+            }
+        }
+
+        // The resume exhausted. A "Session not found" means the session
+        // expired or the server restarted - it is GONE, and trying to
+        // resume again in 30 seconds is trying to bring back the dead.
+        // The wallet's engine session is stateless from its own
+        // perspective (the credentials live in the wallet's store, not
+        // the engine's), so a transparent fresh create is safe and the
+        // wallet never gets stranded on a dead session. Found on-device
+        // against the GDC released engine: the session's TTL lapsed
+        // while the wallet sat in the background, the resume loop
+        // exhausted, and every later QR scan's flow start landed on
+        // the dead session - the engine answered "Capability not
+        // supported" (the capability gate fires on an unresolvable
+        // session before the flow's own matching, so every request
+        // failed identically regardless of which credential it named).
+        if (lastError?.message?.contains("Session not found") == true && authToken != null) {
+            Timber.i("Session expired on the server; creating a fresh session")
+            try {
+                create(authToken!!, sender, capabilities)
+                return
+            } catch (e: Exception) {
+                Timber.e(e, "Fresh session creation after resume exhaustion failed")
             }
         }
 
