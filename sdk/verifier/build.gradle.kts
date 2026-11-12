@@ -24,7 +24,7 @@ android {
     }
 }
 
-val sirosVerifierCoreVersion: String = providers.gradleProperty("sirosVerifierCoreVersion").getOrElse("0.1.0-SNAPSHOT")
+val sirosVerifierCoreVersion: String = providers.gradleProperty("sirosVerifierCoreVersion").getOrElse("0.1.2")
 
 dependencies {
     // `api`, not `implementation`: callers can supply their own unauthenticated
