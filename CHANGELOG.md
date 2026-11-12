@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.10.0] - 2026-11-12
+## [0.23.0] - 2026-11-12
 
 The SDK's local WMP engine pins to the **released wallet-core v0.2.2** (`org.siros:siros-wallet-core`, the first release-track pin
 rather than a dev overlay): the PDP response context and the no-match redirect_uri - the wire inputs the consent surfaces consume -
