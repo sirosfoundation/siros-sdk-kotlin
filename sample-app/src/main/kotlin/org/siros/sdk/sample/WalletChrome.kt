@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -171,39 +172,54 @@ const val NAV_MENU_TAG = "nav_menu"
 /** Home, Scan QR (the raised black button) and Menu. */
 @Composable
 fun WalletBottomBar(selected: WalletNavItem?, onHome: () -> Unit, onScanQr: () -> Unit, onMenu: () -> Unit) {
-    Row(
+    // A hairline on top, the same boundary BackBar and the plain header use:
+    // with the white window strip gone from under the app (the root paints
+    // edge to edge now), the bar's own background is the page's background,
+    // and without the line the bar read as three loose glyphs floating in the
+    // page rather than the fixture it is (found on-device: "the bottom bar
+    // seems to be gone").
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
-            .padding(top = 8.dp, bottom = 12.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.Bottom,
+            // The root no longer pads the navigation bar away (see the root
+            // Surface in MainActivity), so every bar that sits at the bottom
+            // of a screen takes the inset itself - background first, so the
+            // paint still reaches edge to edge underneath it.
+            .navigationBarsPadding(),
     ) {
-        BottomBarItem(
-            label = stringResource(R.string.nav_home),
-            selected = selected == WalletNavItem.Home,
-            onClick = onHome,
-            tag = NAV_HOME_TAG,
-        ) { tint -> Icon(Icons.Outlined.Home, contentDescription = null, tint = tint, modifier = Modifier.size(32.dp)) }
-        BottomBarItem(
-            label = stringResource(R.string.nav_scan_qr),
-            selected = selected == WalletNavItem.ScanQr,
-            onClick = onScanQr,
-            tag = NAV_SCAN_QR_TAG,
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.Bottom,
         ) {
-            Box(
-                modifier = Modifier.size(48.dp).background(SirosDesign.scanButton, CircleShape),
-                contentAlignment = Alignment.Center,
+            BottomBarItem(
+                label = stringResource(R.string.nav_home),
+                selected = selected == WalletNavItem.Home,
+                onClick = onHome,
+                tag = NAV_HOME_TAG,
+            ) { tint -> Icon(Icons.Outlined.Home, contentDescription = null, tint = tint, modifier = Modifier.size(32.dp)) }
+            BottomBarItem(
+                label = stringResource(R.string.nav_scan_qr),
+                selected = selected == WalletNavItem.ScanQr,
+                onClick = onScanQr,
+                tag = NAV_SCAN_QR_TAG,
             ) {
-                Icon(Icons.Filled.QrCode2, contentDescription = null, tint = SirosDesign.onScanButton, modifier = Modifier.size(26.dp))
+                Box(
+                    modifier = Modifier.size(48.dp).background(SirosDesign.scanButton, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.QrCode2, contentDescription = null, tint = SirosDesign.onScanButton, modifier = Modifier.size(26.dp))
+                }
             }
+            BottomBarItem(
+                label = stringResource(R.string.nav_menu),
+                selected = selected == WalletNavItem.Menu,
+                onClick = onMenu,
+                tag = NAV_MENU_TAG,
+            ) { tint -> Icon(Icons.Filled.Menu, contentDescription = null, tint = tint, modifier = Modifier.size(32.dp)) }
         }
-        BottomBarItem(
-            label = stringResource(R.string.nav_menu),
-            selected = selected == WalletNavItem.Menu,
-            onClick = onMenu,
-            tag = NAV_MENU_TAG,
-        ) { tint -> Icon(Icons.Filled.Menu, contentDescription = null, tint = tint, modifier = Modifier.size(32.dp)) }
     }
 }
 
@@ -234,7 +250,14 @@ private fun BottomBarItem(
 /** The single full-width Back button that replaces the bottom bar on full-attention screens. */
 @Composable
 fun BackBar(onBack: () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            // See WalletBottomBar: with the root painting edge to edge, a
+            // bottom-of-screen bar takes the navigation-bar inset itself.
+            .navigationBarsPadding(),
+    ) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         OutlinedButton(
             onClick = onBack,

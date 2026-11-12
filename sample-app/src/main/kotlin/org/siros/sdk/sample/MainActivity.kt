@@ -87,7 +87,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.wallet.WalletState
 import android.util.Log
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -153,7 +152,15 @@ class MainActivity : ComponentActivity() {
             androidx.compose.runtime.CompositionLocalProvider(LocalThemeSettings provides themeSettings) {
             SirosTheme(darkTheme = themeMode.isDark(androidx.compose.foundation.isSystemInDarkTheme())) {
                 Surface(
-                    modifier = Modifier.fillMaxSize().navigationBarsPadding(),
+                    // No inset padding on the root: the window is edge to
+                    // edge (forced since API 35), so padding the root away
+                    // from the navigation bar leaves the white window
+                    // background showing through as a strip under the app -
+                    // a narrow white band under the bottom bar, found
+                    // on-device. The root paints under the insets instead,
+                    // and every screen's own bottom furniture takes the
+                    // inset (see WalletChrome).
+                    modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
                     viewModel = viewModel(factory = vmFactory)
@@ -1551,59 +1558,13 @@ fun CredentialsTab(
         org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory, availableKeyIds)
     }
 
-    // Long-press action menu (Renew/Delete) - a quicker path to the same two
-    // actions already reachable via the detail screen's icons/the exhausted-
-    // credential overlay, for a credential the user hasn't tapped into yet.
-    var actionMenuFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
     var pendingDeleteFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
 
-    actionMenuFor?.let { credential ->
-        ModalBottomSheet(onDismissRequest = { actionMenuFor = null }) {
-            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-                Text(
-                    credential.metadata?.name ?: credential.format,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                )
-                TextButton(
-                    onClick = {
-                        actionMenuFor = null
-                        onRenewCredential(credential)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.padding(end = 16.dp))
-                        Text(stringResource(R.string.credential_renew))
-                    }
-                }
-                TextButton(
-                    onClick = {
-                        actionMenuFor = null
-                        pendingDeleteFor = credential
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Filled.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(end = 16.dp),
-                        )
-                        Text(stringResource(R.string.credential_detail_delete), color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        }
-    }
+    // The credential lifted out of the deck (see CredentialStack) - held
+    // here rather than in the deck so that it outlives leaving the screen:
+    // a card lifted before tapping into a credential's detail is still
+    // lifted on returning.
+    var liftedBatchId by rememberSaveable { mutableStateOf<Long?>(null) }
 
     pendingDeleteFor?.let { credential ->
         AlertDialog(
@@ -1700,14 +1661,13 @@ fun CredentialsTab(
                     modifier = Modifier.padding(vertical = 24.dp),
                 )
                 // A partially-overlapping, interactive deck: CredentialStack
-                // owns its own scrolling (a card's drag and a plain vertical
-                // scroll are the same gesture, so it has to arbitrate between
-                // them itself) and its own reorder state, so there's nothing
-                // further to wrap it in here.
+                // owns its own scrolling and its own pile order; the lift is
+                // held here so it outlives the deck (a card lifted before
+                // entering a detail is still lifted on coming back).
                 else -> CredentialStack(
                     entries = shown,
                     onCredentialClick = onCredentialClick,
-                    onCredentialLongClick = { actionMenuFor = it },
+                    onLiftCredential = { liftedBatchId = it.batchId },
                     onRenewCredential = onRenewCredential,
                     onDeleteCredential = { pendingDeleteFor = it },
                     modifier = if (compact) {
@@ -1716,6 +1676,9 @@ fun CredentialsTab(
                         Modifier.fillMaxSize().testTag(MANAGE_DECK_TAG)
                     },
                     credentialStatuses = credentialStatuses,
+                    liftedBatchId = liftedBatchId,
+                    onLiftedBatchIdChange = { liftedBatchId = it },
+                    copiesReusable = copiesReusable,
                 )
             }
         }

@@ -54,6 +54,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.composed
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.mutableFloatStateOf
 import coil.compose.AsyncImage
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.CredentialDisclosureGuard
@@ -119,6 +126,11 @@ fun CredentialDetailScreen(
     }
 
     Scaffold(
+        // Swipe down to close (see [pullDownToDismiss]): the leftover of a
+        // downward drag - what the content's own scrollables could not take
+        // because they are already at their top - pulls the whole view down
+        // with the finger; releasing past the threshold closes the screen.
+        modifier = Modifier.pullDownToDismiss(onDismiss = onBack),
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.credential_detail_title)) },
@@ -442,4 +454,88 @@ private fun DetailRow(label: String, value: String) {
             modifier = Modifier.weight(0.6f),
         )
     }
+}
+
+
+/**
+ * Swipe down to close: the leftover of a downward drag - what the content's
+ * own scrollables could not take because they are already at their top -
+ * drags the whole view down with the finger. Releasing past [threshold]
+ * fires [onDismiss]; releasing short of it settles back with a short
+ * ease-out. A drag the content CAN still take scrolls it normally, so the
+ * gesture never fights the Claims/Raw tabs - it only ever engages from the
+ * top.
+ *
+ * The drag writes the offset DIRECTLY from the nested-scroll callbacks
+ * rather than through a launched `snapTo` per pointer delta: launching put
+ * every delta a frame behind the finger and the pull read as sluggish
+ * (found on-device). Only the settle-back is a coroutine - one shot, on
+ * the frame clock, cancelled the moment a finger takes over again.
+ */
+private fun Modifier.pullDownToDismiss(
+    threshold: androidx.compose.ui.unit.Dp = 100.dp,
+    onDismiss: () -> Unit,
+): Modifier = composed {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val thresholdPx = with(density) { threshold.toPx() }
+    var pullY by remember { mutableFloatStateOf(0f) }
+    var settleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val scope = rememberCoroutineScope()
+    val fired = remember { mutableStateOf(false) }
+    val connection = remember {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                // A new finger movement cancels the settle-back and owns the
+                // offset again.
+                settleJob?.let { if (it.isActive) it.cancel(); settleJob = null }
+                // Dragging back up while pulled down: the pull-back comes off
+                // the offset before the content scrolls.
+                if (available.y < 0f && pullY > 0f) {
+                    val take = (-available.y).coerceAtMost(pullY)
+                    pullY -= take
+                    return androidx.compose.ui.geometry.Offset(0f, -take)
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: androidx.compose.ui.geometry.Offset,
+                available: androidx.compose.ui.geometry.Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
+            ): androidx.compose.ui.geometry.Offset {
+                if (available.y > 0f) {
+                    pullY = (pullY + available.y).coerceAtMost(thresholdPx * 2f)
+                    return available
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+                if (pullY > thresholdPx && !fired.value) {
+                    fired.value = true
+                    onDismiss()
+                    return available
+                }
+                val start = pullY
+                if (start > 0f) {
+                    settleJob = scope.launch {
+                        val startNanos = androidx.compose.runtime.withFrameNanos { it }
+                        val durationNanos = 180_000_000L
+                        while (true) {
+                            val now = androidx.compose.runtime.withFrameNanos { it }
+                            val t = ((now - startNanos).toFloat() / durationNanos).coerceIn(0f, 1f)
+                            // ease-out cubic: quick off the mark, gentle at home.
+                            pullY = start * (1f - (1f - (1f - t) * (1f - t) * (1f - t)))
+                            if (t >= 1f) break
+                        }
+                        pullY = 0f
+                    }
+                }
+                return androidx.compose.ui.unit.Velocity.Zero
+            }
+        }
+    }
+    this
+        .nestedScroll(connection)
+        .graphicsLayer { translationY = pullY }
 }
