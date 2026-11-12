@@ -28,7 +28,7 @@ dependencies {
     // The wallet-core AAR's version: MUST match the vendored UniFFI bindings
     // (uniffi/engine_adapter_sdk) - both come from the same wallet-core
     // release, bump them together (issue #396).
-    val walletCoreVersion: String = providers.gradleProperty("walletCoreVersion").getOrElse("0.2.1")
+    val walletCoreVersion: String = providers.gradleProperty("walletCoreVersion").getOrElse("0.2.2")
 
     // `api`, not `implementation`: FlowStartMessage.authorizationDetails is a
     // public field of type AuthorizationDetail, so a consumer of this module
