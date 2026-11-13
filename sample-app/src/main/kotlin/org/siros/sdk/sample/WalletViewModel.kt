@@ -925,6 +925,74 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage
 
+    // ── The error journal (the "Recent errors" screen) ────────────────
+    //
+    // A snackbar alone auto-dismisses in seconds and loses the failure
+    // entirely; the journal keeps the last N (configurable in Settings,
+    // default 5) with a title, a summary and the technical trail the user
+    // must choose to see. Reachable from the snackbar's "Details" action and
+    // the menu's "Recent errors" row.
+
+    /** How many entries the journal keeps; persisted, changed in Settings. */
+    private val _errorJournalLength = MutableStateFlow(
+        activity.getSharedPreferences("siros_sample_settings", android.content.Context.MODE_PRIVATE)
+            .getInt("error_journal_length", DEFAULT_ERROR_JOURNAL_LENGTH)
+    )
+    val errorJournalLength: StateFlow<Int> get() = _errorJournalLength
+
+    /** The journal itself; entries flow to the screen. */
+    private val errorJournal = ErrorJournal { _errorJournalLength.value }
+    val errorJournalEntries: StateFlow<List<ErrorJournalEntry>> = errorJournal.entries
+
+    /** The journal screen is open (menu row, snackbar action). */
+    private val _showErrorJournal = MutableStateFlow(false)
+    val showErrorJournal: StateFlow<Boolean> = _showErrorJournal
+
+    fun openErrorJournal() { _errorMessage.value = null; _showErrorJournal.value = true }
+    fun closeErrorJournal() { _showErrorJournal.value = false }
+    fun clearErrorJournal() { errorJournal.clear() }
+
+    /** The Settings cycling [ERROR_JOURNAL_LENGTH_CHOICES], persisted. */
+    fun cycleErrorJournalLength() {
+        val next = ERROR_JOURNAL_LENGTH_CHOICES[
+            (ERROR_JOURNAL_LENGTH_CHOICES.indexOf(_errorJournalLength.value) + 1)
+                .coerceAtMost(ERROR_JOURNAL_LENGTH_CHOICES.size - 1)
+        ].let { chosen ->
+            // A stored value outside the choices (an older defaults change)
+            // restarts the cycle from the default.
+            if (ERROR_JOURNAL_LENGTH_CHOICES.indexOf(_errorJournalLength.value) == -1) DEFAULT_ERROR_JOURNAL_LENGTH else chosen
+        }
+        _errorJournalLength.value = next
+        activity.getSharedPreferences("siros_sample_settings", android.content.Context.MODE_PRIVATE)
+            .edit().putInt("error_journal_length", next).apply()
+    }
+
+    /**
+     * The ONE funnel every failure goes through: journal it (title + summary +
+     * the technical trail), then show the snackbar. [cause] rides into the
+     * entry's details; [titleRes] names the class of event;
+     * [context]/[contact] are reserved for support routing and render only
+     * when a source provides them.
+     */
+    private fun reportError(
+        summary: String,
+        cause: Throwable? = null,
+        titleRes: Int = R.string.error_journal_generic_title,
+        details: String? = null,
+        context: String? = null,
+        contact: String? = null,
+    ) {
+        errorJournal.record(
+            title = activity.getString(titleRes),
+            summary = summary,
+            details = details,
+            cause = cause,
+            context = context,
+            contact = contact,
+        )
+        reportError(summary)
+    }
+
     fun clearError() { _errorMessage.value = null }
 
     // ── Info feedback (non-error, transient confirmations e.g. batch receipt) ─
@@ -1475,6 +1543,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     return
                 }
                 val shownMessage = refusal?.let { activity.getString(transactionRefusalMessageRes(it)) } ?: errorMessage
+                // The journal: the flow error's raw engine message beside the
+                // wording the dialog shows (the dialog persists, the journal
+                // outlives it either way).
+                errorJournal.record(
+                    title = activity.getString(R.string.error_journal_flow_title),
+                    summary = shownMessage,
+                    details = errorMessage,
+                    context = "flow: $flowId" + (redirectUri?.let { ", redirect: present" } ?: ""),
+                )
                 if (pendingAuthFlowId == flowId) {
                     pendingAuthFlowId = null
                 }
@@ -1544,6 +1621,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     // cross-device presentation showed "no match" - the
                     // pre-fix heuristic could not tell the two apart).
                     _infoMessage.value = activity.getString(R.string.flow_no_matching_credential)
+                    // The journal records the no-match too (it reads as any other
+                    // failure and disappears with the snackbar): a title of its own,
+                    // the flow it belonged to.
+                    errorJournal.record(
+                        title = activity.getString(R.string.error_journal_no_match_title),
+                        summary = activity.getString(R.string.flow_no_matching_credential),
+                        context = "flow: $flowId",
+                    )
                 } else if (wasPresentation) {
                     // A presentation this session started, completing with
                     // nothing received and no refusal: it was SENT (the
@@ -1630,7 +1715,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             wallet.completeAuthorization(flowId, code, state)
         } else {
             Log.e(TAG, "Auth redirect but no pending flow")
-            _errorMessage.value = activity.getString(R.string.error_auth_failed)
+            reportError(activity.getString(R.string.error_auth_failed))
         }
     }
 
@@ -1641,7 +1726,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 wallet.login(accountId)
             } catch (e: Exception) {
-                _errorMessage.value = localizedErrorMessage(e)
+                reportError(localizedErrorMessage(e), cause = e)
             } finally {
                 _isLoading.value = false
             }
@@ -1655,7 +1740,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 wallet.register(displayName)
             } catch (e: Exception) {
-                _errorMessage.value = localizedErrorMessage(e)
+                reportError(localizedErrorMessage(e), cause = e)
             } finally {
                 _isLoading.value = false
             }
@@ -1672,7 +1757,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 // CancellationException and is one.
                 if (isSilentCancellation(e)) throw e
                 Log.e(TAG, "startIssuance failed", e)
-                _errorMessage.value = localizedErrorMessage(e)
+                reportError(localizedErrorMessage(e), cause = e)
             }
         }
     }
@@ -1683,7 +1768,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 wallet.startPresentation(requestUri)
             } catch (e: Exception) {
                 Log.e(TAG, "startPresentation failed", e)
-                _errorMessage.value = localizedErrorMessage(e)
+                reportError(localizedErrorMessage(e), cause = e)
             }
         }
     }
@@ -1796,35 +1881,35 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     }
                     is DeleteAccountResult.OperatorRequired -> {
                         resetAccountScreens()
-                        _errorMessage.value = if (result.localWipe.complete) {
+                        reportError(if (result.localWipe.complete) {
                             activity.getString(R.string.delete_account_operator_required)
                         } else {
                             activity.getString(R.string.delete_account_wipe_incomplete)
-                        }
+                        })
                     }
                     is DeleteAccountResult.RetryNeeded ->
-                        _errorMessage.value = activity.getString(R.string.delete_account_retry)
+                        reportError(activity.getString(R.string.delete_account_retry))
                     is DeleteAccountResult.ConfirmationRequired ->
-                        _errorMessage.value = activity.getString(R.string.delete_account_confirmation_required)
+                        reportError(activity.getString(R.string.delete_account_confirmation_required))
                     is DeleteAccountResult.StepUpUnavailable ->
-                        _errorMessage.value = activity.getString(R.string.delete_account_step_up_unavailable)
+                        reportError(activity.getString(R.string.delete_account_step_up_unavailable))
                     is DeleteAccountResult.StepUpRequired,
                     is DeleteAccountResult.StepUpFailed ->
-                        _errorMessage.value = activity.getString(R.string.delete_account_step_up_failed)
+                        reportError(activity.getString(R.string.delete_account_step_up_failed))
                     is DeleteAccountResult.StepUpExpired ->
-                        _errorMessage.value = activity.getString(R.string.delete_account_step_up_expired)
+                        reportError(activity.getString(R.string.delete_account_step_up_expired))
                     is DeleteAccountResult.SessionRevoked ->
-                        _errorMessage.value = activity.getString(R.string.delete_account_session_revoked)
+                        reportError(activity.getString(R.string.delete_account_session_revoked))
                     is DeleteAccountResult.NoPasskey ->
-                        _errorMessage.value = activity.getString(R.string.delete_account_no_passkey)
+                        reportError(activity.getString(R.string.delete_account_no_passkey))
                     is DeleteAccountResult.InsufficientScope ->
-                        _errorMessage.value = activity.getString(R.string.delete_account_insufficient_scope)
+                        reportError(activity.getString(R.string.delete_account_insufficient_scope))
                     is DeleteAccountResult.NotFound ->
-                        _errorMessage.value = activity.getString(R.string.delete_account_not_found)
+                        reportError(activity.getString(R.string.delete_account_not_found))
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "deleteAccount failed", e)
-                _errorMessage.value = localizedErrorMessage(e)
+                reportError(localizedErrorMessage(e), cause = e)
             } finally {
                 _deletingAccount.value = false
             }
@@ -1846,30 +1931,30 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 when (val result = wallet.addPasskey(nickname)) {
                     is AddPasskeyResult.Added -> _infoMessage.value = activity.getString(R.string.add_passkey_done)
                     is AddPasskeyResult.AuthorizerUnavailable ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_authorizer_unavailable)
+                        reportError(activity.getString(R.string.add_passkey_authorizer_unavailable))
                     is AddPasskeyResult.PasskeyCreationUnavailable ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_creation_unavailable)
+                        reportError(activity.getString(R.string.add_passkey_creation_unavailable))
                     is AddPasskeyResult.AuthorizationRequired,
                     is AddPasskeyResult.AuthorizationFailed ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_authorization_failed)
+                        reportError(activity.getString(R.string.add_passkey_authorization_failed))
                     is AddPasskeyResult.PrfUnsupported ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_prf_unsupported)
+                        reportError(activity.getString(R.string.add_passkey_prf_unsupported))
                     is AddPasskeyResult.RetryNeeded ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_retry)
+                        reportError(activity.getString(R.string.add_passkey_retry))
                     is AddPasskeyResult.PrivateDataConflict ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_conflict)
+                        reportError(activity.getString(R.string.add_passkey_conflict))
                     is AddPasskeyResult.RegistrationRejected ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_rejected)
+                        reportError(activity.getString(R.string.add_passkey_rejected))
                     is AddPasskeyResult.WalletLocked ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_locked)
+                        reportError(activity.getString(R.string.add_passkey_locked))
                     is AddPasskeyResult.InsufficientScope ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_insufficient_scope)
+                        reportError(activity.getString(R.string.add_passkey_insufficient_scope))
                     is AddPasskeyResult.SessionRevoked ->
-                        _errorMessage.value = activity.getString(R.string.add_passkey_session_revoked)
+                        reportError(activity.getString(R.string.add_passkey_session_revoked))
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "addPasskey failed", e)
-                _errorMessage.value = localizedErrorMessage(e)
+                reportError(localizedErrorMessage(e), cause = e)
             } finally {
                 _addingPasskey.value = false
             }
@@ -1934,7 +2019,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 throw e
             } catch (e: Exception) {
                 android.util.Log.e("SIROS_VM", "getAvailableCredentials failed", e)
-                if (_availableCredentials.value.isEmpty()) _errorMessage.value = e.message ?: "Failed to load available credentials"
+                if (_availableCredentials.value.isEmpty()) reportError(e.message ?: "Failed to load available credentials", cause = e)
             } finally {
                 _isLoadingOffers.value = false
             }
@@ -1951,7 +2036,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 throw e
             } catch (e: Exception) {
                 android.util.Log.e("SIROS_VM", "refreshAvailableCredentials failed", e)
-                _errorMessage.value = e.message ?: "Failed to load available credentials"
+                reportError(e.message ?: "Failed to load available credentials")
             } finally {
                 _isLoadingOffers.value = false
             }
@@ -2012,7 +2097,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             val issuerId = credential.credentialIssuerIdentifier
             val configId = credential.credentialConfigurationId
             if (issuerId == null || configId == null) {
-                _errorMessage.value = activity.getString(R.string.credential_renew_not_possible)
+                reportError(activity.getString(R.string.credential_renew_not_possible))
                 return@launch
             }
             startIssuanceByOffer(
@@ -2051,7 +2136,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     return@launch
                 }
                 Log.e(TAG, "Failed to start issuance for ${offer.credentialConfigurationId}", e)
-                _errorMessage.value = e.message ?: "Failed to start issuance"
+                reportError(e.message ?: "Failed to start issuance")
             }
         }
     }
@@ -2108,14 +2193,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 android.util.Log.e("SIROS_VM", "IDV failed", e)
                 // IDVException is not a SirosException, so localizedErrorMessage
                 // would not find its idv_* code.
-                _errorMessage.value = ERROR_CODE_RESOURCES[e.errorCode]?.let(activity::getString)
-                    ?: e.message ?: "Identity verification failed"
+                reportError(
+                    ERROR_CODE_RESOURCES[e.errorCode]?.let(activity::getString)
+                        ?: e.message ?: "Identity verification failed",
+                    cause = e,
+                )
             } catch (e: Exception) {
                 // Cancelling the pending issuance (startIssuance inside
                 // verifyIdentityAndIssue) is not a failure to report.
                 if (isSilentCancellation(e)) throw e
                 android.util.Log.e("SIROS_VM", "IDV failed", e)
-                _errorMessage.value = e.message ?: "Identity verification failed"
+                reportError(e.message ?: "Identity verification failed")
             } finally {
                 _isLoading.value = false
             }
@@ -2139,7 +2227,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 wallet.deleteCredential(credentialId)
             } catch (e: Exception) {
-                _errorMessage.value = e.message ?: "Delete failed"
+                reportError(e.message ?: "Delete failed")
             }
         }
     }
@@ -2454,7 +2542,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 val manager = wallet.wscdManager
                 if (manager == null) {
-                    _errorMessage.value = "WSCD signer not initialized"
+                    reportError("WSCD signer not initialized")
                     return@launch
                 }
                 val pluginId = activePluginId
@@ -2492,7 +2580,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             } catch (e: Exception) {
                 Log.e(TAG, "WSCD enrollment failed", e)
                 Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
-                _errorMessage.value = if (e is kotlinx.coroutines.TimeoutCancellationException) {
+                reportError(if (e is kotlinx.coroutines.TimeoutCancellationException) {
                     "Enrollment timed out - no security key detected in time"
                 } else if (e is org.siros.sdk.keystore.WscdPinException) {
                     // The SDK's own short localised text; nothing to interpret here.
@@ -2501,7 +2589,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     activity.getString(e.failure.messageRes) + (e.reason?.let { " ($it)" } ?: "")
                 } else {
                     "Enrollment failed: ${e.message}"
-                }
+                })
             } finally {
                 fido2Enrolment?.clear()
                 fido2Enrolment = null
@@ -2966,7 +3054,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 if (activePluginId == "fido2" && typesPinAheadFor(registeredFido2Mode(wallet.wscdManager))) {
                     val pin = awaitFido2PinEntry()
                     if (pin == null) {
-                        _errorMessage.value = "Rotation cancelled"
+                        reportError("Rotation cancelled")
                         return@launch
                     }
                     typedAheadPin.hold(pin.toByteArray())
@@ -2976,7 +3064,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 val manager = wallet.wscdManager
                 val ctxId = lifecycleContextId
                 if (manager == null) {
-                    _errorMessage.value = "WSCD not enrolled"
+                    reportError("WSCD not enrolled")
                     Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"WSCD not enrolled (manager=false)"}""")
                     return@withTimeout
                 }
@@ -2994,11 +3082,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             } catch (e: Exception) {
                 Log.e(TAG, "Lifecycle rotation failed", e)
                 Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
-                _errorMessage.value = if (e is kotlinx.coroutines.TimeoutCancellationException) {
+                reportError(if (e is kotlinx.coroutines.TimeoutCancellationException) {
                     "Rotation timed out - no security key detected in time"
                 } else {
                     "Rotation failed: ${e.message}"
-                }
+                })
             } finally {
                 _wscdLifecycleBusy.value = false
                 _fido2AwaitingPresentation.value = false
@@ -3025,7 +3113,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 val manager = wallet.wscdManager
                 val ctxId = lifecycleContextId
                 if (manager == null) {
-                    _errorMessage.value = "WSCD not enrolled"
+                    reportError("WSCD not enrolled")
                     Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"WSCD not enrolled (manager=false)"}""")
                     return@withTimeout
                 }
@@ -3044,11 +3132,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             } catch (e: Exception) {
                 Log.e(TAG, "Lifecycle destruction failed", e)
                 Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
-                _errorMessage.value = if (e is kotlinx.coroutines.TimeoutCancellationException) {
+                reportError(if (e is kotlinx.coroutines.TimeoutCancellationException) {
                     "Destruction timed out"
                 } else {
                     "Destruction failed: ${e.message}"
-                }
+                })
             } finally {
                 _wscdLifecycleBusy.value = false
             }
@@ -3117,7 +3205,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             } catch (e: Exception) {
                 if (isSilentCancellation(e)) throw e
                 Log.e(TAG, "QR/deep-link flow failed", e)
-                _errorMessage.value = e.message ?: "QR flow failed"
+                reportError(e.message ?: "QR flow failed")
                 _flowStarting.value = null
             }
         }
