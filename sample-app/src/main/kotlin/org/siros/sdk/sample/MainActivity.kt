@@ -330,6 +330,8 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val presentationHistory by viewModel.presentationHistory.collectAsState()
     val selectedCredential by viewModel.selectedCredential.collectAsState()
     val showHistory by viewModel.showHistory.collectAsState()
+    val showErrorJournal by viewModel.showErrorJournal.collectAsState()
+    val errorJournalEntries by viewModel.errorJournalEntries.collectAsState()
     val activateMode by viewModel.activateMode.collectAsState()
     val flowStarting by viewModel.flowStarting.collectAsState()
     val pendingPresentation by viewModel.pendingPresentationRequest.collectAsState()
@@ -343,16 +345,25 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val pendingAmbiguity by viewModel.pendingAmbiguity.collectAsState()
     val showTransactionLog by viewModel.showTransactionLog.collectAsState()
 
+    // The snackbar's Details action label, resolved in composition (the
+    // effect block below is not a composable context).
+    val errorDetailsLabel = androidx.compose.ui.res.stringResource(R.string.snackbar_error_details)
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
             // withDismissAction shows Material3's built-in close (X) icon on the
             // snackbar; Long duration gives users time to read an error before it
-            // auto-dismisses, while the X still lets them dismiss immediately.
-            snackbarHostState.showSnackbar(
+            // auto-dismisses, while the X still lets them dismiss immediately. The
+            // Details action opens the error journal — the failure outlives its
+            // snackbar there (the entry was recorded when the message was raised).
+            val result = snackbarHostState.showSnackbar(
                 message = it,
+                actionLabel = errorDetailsLabel,
                 withDismissAction = true,
                 duration = SnackbarDuration.Long,
             )
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                viewModel.openErrorJournal()
+            }
             viewModel.clearError()
         }
     }
@@ -562,6 +573,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     }
     val currentMenuItem = when {
         showHistory -> MenuItem.History
+        showErrorJournal -> MenuItem.RecentErrors
         showAddCredential || showIDVPreparation -> MenuItem.AddCredentials
         else -> when (destination) {
             WalletDestination.Credentials -> MenuItem.ManageCredentials
@@ -606,12 +618,13 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
         !showDevices && !showWscaDeveloper && flowStarting == null
     androidx.activity.compose.BackHandler(
         enabled = chromeVisible && (
-            activateMode != null || showIDVPreparation || showAddCredential || showHistory ||
+            activateMode != null || showIDVPreparation || showAddCredential || showHistory || showErrorJournal ||
                 (destination != WalletDestination.Home && walletState is WalletState.Ready)
             ),
     ) {
         when {
             showHistory -> viewModel.closeHistory()
+            showErrorJournal -> viewModel.closeErrorJournal()
             activateMode != null -> viewModel.closeActivate()
             showIDVPreparation -> viewModel.closeIDVPreparation()
             showAddCredential -> viewModel.closeAddCredential()
@@ -698,6 +711,16 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             // Presentation history sub-screen
             showHistory -> chrome(null, false, null) {
                 PresentationHistoryScreen(history = presentationHistory)
+            }
+
+            // The error journal ("Recent errors"): the last N failures with
+            // their technical details behind an explicit reveal, reached from
+            // the menu or the snackbar's Details action.
+            showErrorJournal -> chrome(null, false, viewModel::closeErrorJournal) {
+                ErrorJournalScreen(
+                    entries = errorJournalEntries,
+                    onClear = viewModel::clearErrorJournal,
+                )
             }
 
             // Settings → Devices: this user's wallet instances (SID-AUTH-06).
@@ -883,6 +906,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                                         }
                                         MenuItem.ShareInPerson -> go(WalletDestination.Share)
                                         MenuItem.History -> viewModel.openHistory()
+                                        MenuItem.RecentErrors -> viewModel.openErrorJournal()
                                         MenuItem.AddCredentials -> viewModel.openAddCredential()
                                         MenuItem.Settings -> go(WalletDestination.Settings)
                                         MenuItem.About -> go(WalletDestination.About)
@@ -915,6 +939,8 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             deletingAccount = viewModel.deletingAccount.collectAsState().value,
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
+                            errorJournalLength = viewModel.errorJournalLength.collectAsState().value,
+                            onCycleErrorJournalLength = viewModel::cycleErrorJournalLength,
                             onShowWscdSettings = viewModel::openWscaDeveloper,
                             onShowDevices = viewModel::openDevices,
                             onForgetAccount = viewModel::forgetAccount,
@@ -1814,6 +1840,9 @@ fun SettingsTab(
     deletingAccount: Boolean = false,
     onDeleteAccount: (confirmation: String) -> Unit,
     onShowHistory: () -> Unit,
+    /** The error journal's kept length (Settings cycles it). */
+    errorJournalLength: Int = DEFAULT_ERROR_JOURNAL_LENGTH,
+    onCycleErrorJournalLength: () -> Unit = {},
     onShowWscdSettings: () -> Unit,
     onShowDevices: () -> Unit = {},
     onForgetAccount: ((String) -> Unit)? = null,
@@ -1889,6 +1918,26 @@ fun SettingsTab(
                 SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
                 SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
                 SettingsRow("Transport", if (useWmpProtocol) "WMP (JSON-RPC 2.0)" else "Legacy")
+                // The error journal's kept length: tap cycles the choices
+                // (3/5/10/25), persisted — see ErrorJournal.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onCycleErrorJournalLength() },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        stringResource(R.string.error_journal_length_setting),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = SirosDesign.secondaryText,
+                    )
+                    Text(
+                        errorJournalLength.toString(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 // Which interoperability profiles this wallet can speak.
                 // Deliberately a fact, not a control: which one is used is
                 // negotiated per issuer from its advertised
