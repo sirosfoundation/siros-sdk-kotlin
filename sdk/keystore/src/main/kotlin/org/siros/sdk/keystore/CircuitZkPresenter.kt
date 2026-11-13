@@ -516,9 +516,37 @@ class CircuitZkPresenter(
 
         // 6. A circuit that fits the plan, and that the request OFFERED: a response states a `system_id` from the request's
         // `system_id_values` (and a proof system the request accepts), so a request that offered none (or none of ours) cannot be answered.
-        val filter = plan.circuitFilter ?: refuse(CircuitZkStep.CIRCUIT)
+        val filter = plan.circuitFilter ?: run {
+            Timber.w("circuit_zk CIRCUIT refusal: the plan carries no system_filter (the query named no circuits)")
+            refuse(CircuitZkStep.CIRCUIT)
+        }
         val offered = circuits.circuits().filter {
             it.supports(plan, document.docType, serving) && prover.admits(it, plan) && filter.offeredCircuitId(it) != null && filter.offersProofSystem(it)
+        }
+        // The GDC on-device debugging: which leg of the filter rejected each
+        // circuit (a bare "no circuit" left the silent serving/serves catch as
+        // the only suspect, unnameable).
+        if (offered.isEmpty()) {
+            val all = circuits.circuits()
+            Timber.w(
+                "circuit_zk CIRCUIT refusal: ${all.size} circuit(s) in the table, filter=proofSystems:${filter.proofSystems} ids:${filter.circuitIds}"
+            )
+            for (c in all) {
+                val why = buildList {
+                    if (!filter.admits(c)) add("not-admitted")
+                    if (filter.offeredCircuitId(c) == null) add("id-not-offered")
+                    if (!filter.offersProofSystem(c)) add("proof-system-not-offered")
+                    if (document.docType !in c.docTypes) add("doctype")
+                    if (!prover.admits(c, plan)) add("prover-admits")
+                    val servingAnswer = try {
+                        serving?.serves(c, document.docType, plan.raw)
+                    } catch (e: Exception) {
+                        "threw:${e.javaClass.simpleName}"
+                    }
+                    if (servingAnswer != true) add("serving=$servingAnswer")
+                }
+                Timber.w("circuit_zk CIRCUIT refusal: ${c.circuitId} (docTypes=${c.docTypes}) rejected by: ${why.joinToString(", ")}")
+            }
         }
         // The app's preference narrows and orders the verifier's offered set; it never widens it.
         val circuit = org.siros.sdk.credentials.ZkProofSystemPreference.order(offered, proofSystemPreference).firstOrNull()
