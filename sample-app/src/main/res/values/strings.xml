@@ -392,6 +392,7 @@
     <string name="error_journal_contact">Contact: %1$s</string>
     <string name="error_journal_context">Context: %1$s</string>
     <string name="snackbar_error_details">Details</string>
+    <string name="snackbar_show_credential">Show me</string>
     <string name="error_journal_length_setting">Errors kept in history</string>
     <string name="error_journal_generic_title">Error</string>
     <string name="error_journal_flow_title">Request failed</string>

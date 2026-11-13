@@ -368,9 +368,23 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
         }
     }
 
-    LaunchedEffect(infoMessage) {
+    // The credential-received snackbar's "Show me" label, resolved in
+    // composition (the effect block below is not a composable context).
+    val showCredentialLabel = androidx.compose.ui.res.stringResource(R.string.snackbar_show_credential)
+    val infoShowsCredential by viewModel.infoShowsCredential.collectAsState()
+    LaunchedEffect(infoMessage, infoShowsCredential) {
         infoMessage?.let {
-            snackbarHostState.showSnackbar(message = it, withDismissAction = true)
+            val result = snackbarHostState.showSnackbar(
+                message = it,
+                actionLabel = if (infoShowsCredential) showCredentialLabel else null,
+                withDismissAction = true,
+            )
+            if (infoShowsCredential && result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                // A credential just arrived: the action opens its detail view
+                // (unconditional — a fresh credential is exactly what the
+                // showCredentialDetails setting gates).
+                viewModel.openLastReceivedCredential()
+            }
             viewModel.clearInfo()
         }
     }

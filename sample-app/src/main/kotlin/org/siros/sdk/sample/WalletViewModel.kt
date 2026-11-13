@@ -1000,7 +1000,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _infoMessage = MutableStateFlow<String?>(null)
     val infoMessage: StateFlow<String?> = _infoMessage
 
-    fun clearInfo() { _infoMessage.value = null }
+    /** Whether the CURRENT info message is a credential-received one (the snackbar's "Show me" rides only on it). */
+    private val _infoShowsCredential = MutableStateFlow(false)
+    val infoShowsCredential: StateFlow<Boolean> = _infoShowsCredential
+
+    fun clearInfo() { _infoMessage.value = null; _infoShowsCredential.value = false }
 
     /**
      * Credentials received so far in the current flow. Flows in this app run
@@ -1009,6 +1013,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * onCredentialReceived doesn't carry anyway.
      */
     private var receivedCredentialCount = 0
+
+    /** The last credential a flow delivered — the "Show me" snackbar action's target. */
+    private var lastReceivedCredential: StoredCredential? = null
 
     // ── Flow error feedback (issuance/presentation flows that fail server-side,
     // e.g. an untrusted issuer) ──────────────────────────────────────────────
@@ -1584,6 +1591,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
             override fun onCredentialReceived(credential: StoredCredential) {
                 receivedCredentialCount++
+                // The stash behind the completion snackbar's "Show me" action:
+                // the last credential this flow delivered.
+                lastReceivedCredential = credential
             }
 
             override fun onFlowComplete(flowId: String, redirectUri: String?, matchedNothing: Boolean) {
@@ -1604,6 +1614,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         R.string.flow_credentials_received,
                         receivedCredentialCount,
                     )
+                    // The "Show me" action rides this message: it opens the
+                    // last delivered credential's detail view.
+                    _infoShowsCredential.value = lastReceivedCredential != null
                     receivedCredentialCount = 0
                 } else if ((wallet.state.value as? WalletState.FlowActive)?.flowType == "presentation") {
                     // onFlowComplete fires before the SDK transitions FlowActive -> Ready
@@ -2215,6 +2228,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun openCredentialDetail(credential: StoredCredential) {
         if (!_showCredentialDetails.value) return
         _selectedCredential.value = credential
+    }
+
+    /**
+     * Opens the detail view unconditionally — the "Show me" snackbar action
+     * after a credential was received (a fresh credential is exactly what the
+     * setting gates: a tap-through from a just-issued one). The stash is the
+     * credential itself ([onCredentialReceived] set it); nothing else is
+     * looked up, a cleared stash simply opens nothing.
+     */
+    fun openLastReceivedCredential() {
+        lastReceivedCredential?.let { _selectedCredential.value = it }
     }
 
     fun closeCredentialDetail() {
