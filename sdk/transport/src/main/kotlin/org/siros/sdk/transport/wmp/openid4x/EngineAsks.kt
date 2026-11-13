@@ -139,6 +139,26 @@ data class EngineVpParams(
     @SerialName("transaction_data") val transactionData: List<String> = emptyList(),
     /** The match answer's opaque handle, passed through untouched. */
     @SerialName("selection_handle") val selectionHandle: String? = null,
+    /**
+     * The request as the engine verified it (wallet-core #33, v0.2.4): the
+     * wallet's ZK policy gate reads `signed` AND
+     * `signature_verification == "verified"` from it, and the JARM
+     * audience is its certificate-authenticated `client_id` — never the
+     * ask's `audience`. Absent for a request the engine did not verify;
+     * the gate then refuses, which is the correct answer. A field-for-field
+     * mirror of engine-ports' `VpVerifiedRequest`.
+     */
+    @SerialName("verified_request") val verifiedRequest: org.siros.sdk.transport.VerifiedRequest? = null,
+    /**
+     * The verifier's response encryption parameters (wallet-core #33,
+     * v0.2.4): the JWK for direct_post.jwt's JARM, with the wrapping and
+     * content algorithms. The wallet's ZK gate requires its presence (the
+     * "encrypted response" leg); the ENGINE wraps the answer itself (the
+     * flow's `response::submit_response` builds the JARM with the same
+     * verifier key), so the dialect's answer stays the `vp_token` — the
+     * wallet never builds the JWE on this ask.
+     */
+    @SerialName("response_encryption") val responseEncryption: org.siros.sdk.transport.ResponseEncryptionRequest? = null,
 )
 
 /**

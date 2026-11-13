@@ -9014,6 +9014,13 @@ class SirosWallet private constructor(
         presented: List<Pair<String?, String>>,
     ): org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult {
         val responseEncryption = params.responseEncryption
+            // The engine dialect (encryptForVerifier == false): the ENGINE
+            // wraps the answer in the JARM itself (response::submit_response's
+            // direct_post.jwt arm, the same verifier key) - the wallet answers
+            // the vp_token. Every other path (the go-wmp sub-flow dialect)
+            // builds the JWE itself: the #471 contract, the engine relays it
+            // verbatim, it does not encrypt.
+            ?.takeIf { params.encryptForVerifier != false }
             ?: return org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(vpToken = presented.joinToString("\n") { it.second })
         return org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
             responseJwe = BlindPresentation.responseJwe(responseEncryption, jarmAudience(params.verifiedRequest), params.state, presented),
@@ -9961,10 +9968,24 @@ class SirosWallet private constructor(
                 // TS12 pipeline decodes it itself.
                 org.siros.sdk.transport.wmp.openid4x.TransactionData(type = "", raw = it)
             },
+            // The wallet's ZK policy gate reads these (signed +
+            // signature_verification == "verified", and the encrypted-response
+            // leg); the JARM audience is the verified_request's
+            // certificate-authenticated client_id. Found on-device twice: the
+            // members ride the ask since engine v0.2.4/#33 but this synthesis
+            // dropped them - EngineVpParams lacked them, so the gate refused
+            // every zkp_req sign ask at step=unsigned-request.
+            verifiedRequest = params.verifiedRequest,
+            responseEncryption = params.responseEncryption,
+            // The engine wraps the answer in the JARM itself - this dialect
+            // answers the vp_token, the wallet never builds the JWE.
+            encryptForVerifier = false,
         )
         val signed = handleWmpSignRequestAt(parentFlowId, synthesized, epoch)
-        // The Rust engine relays direct_post.jwt encryption itself; this ask has
-        // no response-encryption member, so a JWE answer cannot occur here.
+        // The engine relays direct_post.jwt encryption itself, so the
+        // synthesis marks encryptForVerifier=false and EVERY sign arm (the
+        // ZK pipeline and the plain SCA path both) answers the vp_token —
+        // a responseJwe here is a routing fault, never a legitimate answer.
         val vpToken = signed.vpToken
             ?: throw WalletException("The presentation ask produced no vp_token (an encrypted response has no WMP carriage in this dialect)")
         return org.siros.sdk.transport.wmp.openid4x.EngineVpResult(vpToken = vpToken)
@@ -10840,6 +10861,14 @@ class SirosWallet private constructor(
         // per-query presentation map (the same shape the legacy transport sends).
         val vpTokenObject = JsonObject(answer.tokensByQueryId.mapValues { (_, tokens) -> kotlinx.serialization.json.JsonArray(tokens) })
         val responseEncryption = params.responseEncryption
+            // The engine dialect (encryptForVerifier == false): the ENGINE
+            // wraps the ZK vp_token in the JARM itself (the same verifier
+            // key, the same certificate-authenticated client_id as the
+            // audience) - the wallet answers the vp_token and the engine
+            // encrypts. The go-wmp sub-flow dialect has no JWE carriage
+            // through the engine: the wallet builds the JWE (#471's
+            // contract) and the engine relays it verbatim.
+            ?.takeIf { params.encryptForVerifier != false }
         if (responseEncryption != null) {
             val jarmAudience = params.verifiedRequest?.clientId?.takeIf { it.isNotEmpty() }
                 ?: refuse("jarm-audience", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
