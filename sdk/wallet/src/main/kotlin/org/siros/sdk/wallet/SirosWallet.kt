@@ -11005,6 +11005,14 @@ class SirosWallet private constructor(
                             entityName = label,
                             identifier = clientId,
                             domain = domain,
+                            // The PDP's response context, verbatim (engine v0.2.7's
+                            // VerifierInfo.trust_context): the verifier-id sources
+                            // read `context.verifier_ids` to scope a nym_auth
+                            // pseudonym — without it every zkp_req sign ask refused
+                            // at step=verifier-id (found on-device: the engine's own
+                            // trust evaluation was the only place the context
+                            // existed). Absent when the PDP answered with none.
+                            context = verifier["trust_context"] as? JsonObject,
                         )
                     }
                 }
