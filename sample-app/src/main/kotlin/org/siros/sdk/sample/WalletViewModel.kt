@@ -933,8 +933,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     // must choose to see. Reachable from the snackbar's "Details" action and
     // the menu's "Recent errors" row.
 
-    /** The journal itself; entries flow to the screen (hard-capped at the last 10 messages). */
-    private val errorJournal = ErrorJournal()
+    /** The journal itself; entries flow to the screen (hard-capped at the last 10 messages, persisted across restarts). */
+    private val errorJournal = ErrorJournal(
+        java.io.File(activity.filesDir, "message_journal.json")
+    )
     val errorJournalEntries: StateFlow<List<ErrorJournalEntry>> = errorJournal.entries
 
     /** The journal screen is open (menu row, snackbar action). */
