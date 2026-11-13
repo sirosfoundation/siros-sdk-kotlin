@@ -159,7 +159,29 @@ class WmpHttpSseTransport(
                     // the match ask arrived but the completion didn't, and
                     // there was no way to tell whether the SSE was alive,
                     // dead, or receiving events the parser was dropping.
-                    Timber.d("SSE line: ${if (line.length > 180) line.take(180) + "…" else line}")
+                    // A `data:` line is NEVER logged as content: it carries
+                    // the payload (credential metadata, presentations), and
+                    // the logs must stay secret-free (the seedmark test
+                    // enforces it) — its length and the JSON-RPC method are
+                    // the whole diagnostic.
+                    if (line.startsWith("data: ")) {
+                        val payload = line.removePrefix("data: ")
+                        val method = payload
+                            .takeIf { it.startsWith("{") }
+                            ?.let { body ->
+                                body.indexOf("\"method\":\"")
+                                    .takeIf { it >= 0 }
+                                    ?.let { at ->
+                                        body.substring(at + 10, body.indexOf('"', at + 10).coerceAtLeast(at + 10))
+                                    }
+                            }
+                        Timber.d(
+                            "SSE data: ${payload.length} chars" +
+                                (method?.let { ", method=$it" } ?: "")
+                        )
+                    } else {
+                        Timber.d("SSE line: ${if (line.length > 180) line.take(180) + "…" else line}")
+                    }
 
                     when {
                         line.isEmpty() -> {

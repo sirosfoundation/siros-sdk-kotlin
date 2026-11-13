@@ -333,6 +333,17 @@ data class SignSubFlowParams(
     val state: String? = null,
     /** See [org.siros.sdk.transport.engine.SignRequestParams.verifiedRequest]. */
     @SerialName("verified_request") val verifiedRequest: org.siros.sdk.transport.VerifiedRequest? = null,
+    /**
+     * NEVER ON ANY WIRE — a synthesis-only marker. `false` on the engine
+     * dialect's `presentation` ask ([org.siros.sdk.transport.wmp.openid4x.EngineVpParams]):
+     * the ENGINE wraps the answer in the JARM itself (`response::submit_response`'s
+     * direct_post.jwt arm encrypts with the same verifier key), so the wallet
+     * answers the `vp_token` and never builds the JWE — the dialect's answer
+     * carriage has no JWE member. Absent (or `true`) on every other path: the
+     * wallet builds the JWE itself (the go-wmp sub-flow dialect's #471
+     * contract — the engine relays it verbatim, it does not encrypt).
+     */
+    val encryptForVerifier: Boolean? = null,
     /** Credential Auxiliary Data v0.1: the advertised `to_issuer` entries verbatim (same meaning as the legacy transport's). Appended last. */
     @SerialName("auxiliary_data_to_issuer") val auxiliaryDataToIssuer: List<kotlinx.serialization.json.JsonObject>? = null,
 )
