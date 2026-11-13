@@ -933,15 +933,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     // must choose to see. Reachable from the snackbar's "Details" action and
     // the menu's "Recent errors" row.
 
-    /** How many entries the journal keeps; persisted, changed in Settings. */
-    private val _errorJournalLength = MutableStateFlow(
-        activity.getSharedPreferences("siros_sample_settings", android.content.Context.MODE_PRIVATE)
-            .getInt("error_journal_length", DEFAULT_ERROR_JOURNAL_LENGTH)
-    )
-    val errorJournalLength: StateFlow<Int> get() = _errorJournalLength
-
-    /** The journal itself; entries flow to the screen. */
-    private val errorJournal = ErrorJournal { _errorJournalLength.value }
+    /** The journal itself; entries flow to the screen (hard-capped at the last 10 messages). */
+    private val errorJournal = ErrorJournal()
     val errorJournalEntries: StateFlow<List<ErrorJournalEntry>> = errorJournal.entries
 
     /** The journal screen is open (menu row, snackbar action). */
@@ -952,20 +945,6 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun closeErrorJournal() { _showErrorJournal.value = false }
     fun clearErrorJournal() { errorJournal.clear() }
 
-    /** The Settings cycling [ERROR_JOURNAL_LENGTH_CHOICES], persisted. */
-    fun cycleErrorJournalLength() {
-        val next = ERROR_JOURNAL_LENGTH_CHOICES[
-            (ERROR_JOURNAL_LENGTH_CHOICES.indexOf(_errorJournalLength.value) + 1)
-                .coerceAtMost(ERROR_JOURNAL_LENGTH_CHOICES.size - 1)
-        ].let { chosen ->
-            // A stored value outside the choices (an older defaults change)
-            // restarts the cycle from the default.
-            if (ERROR_JOURNAL_LENGTH_CHOICES.indexOf(_errorJournalLength.value) == -1) DEFAULT_ERROR_JOURNAL_LENGTH else chosen
-        }
-        _errorJournalLength.value = next
-        activity.getSharedPreferences("siros_sample_settings", android.content.Context.MODE_PRIVATE)
-            .edit().putInt("error_journal_length", next).apply()
-    }
 
     /**
      * The ONE funnel every failure goes through: journal it (title + summary +
@@ -994,6 +973,27 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     }
 
     fun clearError() { _errorMessage.value = null }
+
+    /**
+     * The INFO funnel: a non-error confirmation journalled alongside the
+     * errors (severity INFO) and shown as the info snackbar. The journal
+     * covers both classes; the screen filters by severity.
+     */
+    private fun reportInfo(
+        summary: String,
+        titleRes: Int = R.string.error_journal_info_title,
+        details: String? = null,
+        context: String? = null,
+    ) {
+        errorJournal.record(
+            title = activity.getString(titleRes),
+            summary = summary,
+            severity = JournalSeverity.INFO,
+            details = details,
+            context = context,
+        )
+        _infoMessage.value = summary
+    }
 
     // ── Info feedback (non-error, transient confirmations e.g. batch receipt) ─
 
@@ -1610,9 +1610,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 val wasPresentation = startedPresentationLinks.isNotEmpty()
                 startedPresentationLinks.clear()
                 if (receivedCredentialCount > 0) {
-                    _infoMessage.value = activity.getString(
-                        R.string.flow_credentials_received,
-                        receivedCredentialCount,
+                    reportInfo(
+                        activity.getString(R.string.flow_credentials_received, receivedCredentialCount),
+                        context = "flow: $flowId",
                     )
                     // The "Show me" action rides this message: it opens the
                     // last delivered credential's detail view.
@@ -1625,7 +1625,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     // above; presentation has no analogous per-item count, so a plain
                     // confirmation is the equivalent "something happened" signal for a
                     // flow whose whole point is watching this screen after a QR scan.
-                    _infoMessage.value = activity.getString(R.string.flow_presentation_sent)
+                    reportInfo(activity.getString(R.string.flow_presentation_sent), context = "flow: $flowId")
                 } else if (matchedNothing) {
                     // The engine's explicit no-match refusal (the completion
                     // payload's refused=true): the verifier sees "wallet
@@ -1633,13 +1633,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     // actually happened (found on-device: a SUCCESSFUL
                     // cross-device presentation showed "no match" - the
                     // pre-fix heuristic could not tell the two apart).
-                    _infoMessage.value = activity.getString(R.string.flow_no_matching_credential)
                     // The journal records the no-match too (it reads as any other
                     // failure and disappears with the snackbar): a title of its own,
                     // the flow it belonged to.
-                    errorJournal.record(
-                        title = activity.getString(R.string.error_journal_no_match_title),
-                        summary = activity.getString(R.string.flow_no_matching_credential),
+                    reportInfo(
+                        activity.getString(R.string.flow_no_matching_credential),
+                        titleRes = R.string.error_journal_no_match_title,
                         context = "flow: $flowId",
                     )
                 } else if (wasPresentation) {
@@ -1647,7 +1646,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     // nothing received and no refusal: it was SENT (the
                     // local-WMP path never enters FlowActive, so the old
                     // flowType check missed it entirely).
-                    _infoMessage.value = activity.getString(R.string.flow_presentation_sent)
+                    reportInfo(activity.getString(R.string.flow_presentation_sent), context = "flow: $flowId")
                 }
 
                 // Some verifiers (e.g. verifier.multipaz.org) return a
@@ -1878,19 +1877,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 when (val result = wallet.deleteAccount(confirmation)) {
                     is DeleteAccountResult.Deleted -> {
                         resetAccountScreens()
-                        _infoMessage.value = if (result.localWipe.complete) {
+                        reportInfo(if (result.localWipe.complete) {
                             activity.getString(R.string.delete_account_done)
                         } else {
                             activity.getString(R.string.delete_account_wipe_incomplete)
-                        }
+                        })
                     }
                     is DeleteAccountResult.CleanupPending -> {
                         resetAccountScreens()
-                        _infoMessage.value = if (result.localWipe.complete) {
+                        reportInfo(if (result.localWipe.complete) {
                             activity.getString(R.string.delete_account_cleanup_pending)
                         } else {
                             activity.getString(R.string.delete_account_wipe_incomplete)
-                        }
+                        })
                     }
                     is DeleteAccountResult.OperatorRequired -> {
                         resetAccountScreens()
@@ -1942,7 +1941,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             _addingPasskey.value = true
             try {
                 when (val result = wallet.addPasskey(nickname)) {
-                    is AddPasskeyResult.Added -> _infoMessage.value = activity.getString(R.string.add_passkey_done)
+                    is AddPasskeyResult.Added -> reportInfo(activity.getString(R.string.add_passkey_done))
                     is AddPasskeyResult.AuthorizerUnavailable ->
                         reportError(activity.getString(R.string.add_passkey_authorizer_unavailable))
                     is AddPasskeyResult.PasskeyCreationUnavailable ->
@@ -2145,7 +2144,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     // issuance → browser auth → credential received, while
                     // a second Renew tap mid-flight raised exactly this).
                     Log.i(TAG, "Issuance already in progress; ignoring the second start", e)
-                    _infoMessage.value = activity.getString(R.string.issuance_already_in_progress)
+                    reportInfo(activity.getString(R.string.issuance_already_in_progress))
                     return@launch
                 }
                 Log.e(TAG, "Failed to start issuance for ${offer.credentialConfigurationId}", e)

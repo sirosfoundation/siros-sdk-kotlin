@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -36,10 +37,11 @@ import java.text.DateFormat
 import java.util.Date
 
 /**
- * The "Recent errors" journal: the last N failures, newest first, each with
- * its title and one-line summary — and its technical details behind an
- * explicit "Show technical details" reveal (never shown by default). An entry
- * opens its full record on tap. The reserved contact/context lines render only
+ * The "Recent messages" journal: the last 10 messages, newest first, with
+ * clickable severity filters (All / Errors / Info) — each entry shows its
+ * title and one-line summary, and its technical details behind an explicit
+ * "Show technical details" reveal (never shown by default). An entry opens
+ * its full record on tap. The reserved contact/context lines render only
  * when a source provided them.
  */
 @Composable
@@ -48,6 +50,16 @@ fun ErrorJournalScreen(
     onClear: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // The severity filter: All (default), Errors, Info. Chip state survives
+    // recomposition but not the screen's own closing — a reopen starts at All.
+    var filter by remember { mutableStateOf(JournalFilter.ALL) }
+    val filtered = remember(entries, filter) {
+        when (filter) {
+            JournalFilter.ALL -> entries
+            JournalFilter.ERRORS -> entries.filter { it.severity == JournalSeverity.ERROR }
+            JournalFilter.INFO -> entries.filter { it.severity == JournalSeverity.INFO }
+        }
+    }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -70,21 +82,59 @@ fun ErrorJournalScreen(
                 }
             }
         }
-        if (entries.isEmpty()) {
+        // The severity filters: All / Errors / Info (clickable, the count rides each).
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            JournalFilter.entries.forEach { f ->
+                val selected = filter == f
+                val count = when (f) {
+                    JournalFilter.ALL -> entries.size
+                    JournalFilter.ERRORS -> entries.count { it.severity == JournalSeverity.ERROR }
+                    JournalFilter.INFO -> entries.count { it.severity == JournalSeverity.INFO }
+                }
+                FilterChip(
+                    selected = selected,
+                    onClick = { filter = f },
+                    label = {
+                        Text(
+                            stringResource(
+                                when (f) {
+                                    JournalFilter.ALL -> R.string.error_journal_filter_all
+                                    JournalFilter.ERRORS -> R.string.error_journal_filter_errors
+                                    JournalFilter.INFO -> R.string.error_journal_filter_info
+                                }
+                            ) + " ($count)"
+                        )
+                    },
+                    modifier = Modifier.testTag("journal_filter_${f.name.lowercase()}"),
+                )
+            }
+        }
+        if (filtered.isEmpty()) {
             Spacer(modifier = Modifier.height(32.dp))
             Text(
-                text = stringResource(R.string.error_journal_empty),
+                text = stringResource(
+                    if (entries.isEmpty()) R.string.error_journal_empty
+                    else R.string.error_journal_filter_empty
+                ),
                 style = MaterialTheme.typography.bodyLarge,
                 color = SirosDesign.secondaryText,
             )
         }
-        entries.forEachIndexed { index, entry ->
+        filtered.forEachIndexed { index, entry ->
             if (index > 0) Spacer(modifier = Modifier.height(8.dp))
             ErrorJournalCard(entry)
         }
         Spacer(modifier = Modifier.height(32.dp))
     }
 }
+
+/** The journal screen's severity filters. */
+enum class JournalFilter { ALL, ERRORS, INFO }
 
 /** One journal entry: the card shows the title, time and summary; the tap opens the details. */
 @Composable
@@ -107,7 +157,13 @@ private fun ErrorJournalCard(entry: ErrorJournalEntry) {
             Text(
                 text = entry.title,
                 style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.error,
+                // A failure titles in the error color; an info message in the
+                // ordinary text color (the severity is the title's hue).
+                color = if (entry.severity == JournalSeverity.ERROR) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
             )
             Text(
                 text = time,
