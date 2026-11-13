@@ -990,7 +990,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             context = context,
             contact = contact,
         )
-        reportError(summary)
+        _errorMessage.value = summary
     }
 
     fun clearError() { _errorMessage.value = null }
