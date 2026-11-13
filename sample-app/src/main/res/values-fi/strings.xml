@@ -412,4 +412,25 @@
     <string name="settings_appearance_system">Järjestelmä</string>
     <string name="settings_appearance_light">Vaalea</string>
     <string name="settings_appearance_dark">Tumma</string>
+
+    <!-- The message journal (errors + info), 2026-11-13 -->
+    <string name="menu_recent_errors">Viimeisimmät viestit</string>
+    <string name="error_journal_title">Viimeisimmät viestit</string>
+    <string name="error_journal_empty">Ei tallennettuja viestejä.</string>
+    <string name="error_journal_clear">Tyhjennä</string>
+    <string name="error_journal_show_details">Näytä tekniset tiedot</string>
+    <string name="error_journal_details_label">Tekniset tiedot</string>
+    <string name="error_journal_details_none">Teknisitä tietoja ei tallennettu.</string>
+    <string name="error_journal_contact">Yhteystieto: %1$s</string>
+    <string name="error_journal_context">Konteksti: %1$s</string>
+    <string name="snackbar_error_details">Yksityiskohdat</string>
+    <string name="snackbar_show_credential">Näytä</string>
+    <string name="error_journal_generic_title">Virhe</string>
+    <string name="error_journal_flow_title">Pyyntö epäonnistui</string>
+    <string name="error_journal_no_match_title">Ei sopivaa tunnistetta</string>
+    <string name="error_journal_info_title">Ilmoitus</string>
+    <string name="error_journal_filter_all">Kaikki</string>
+    <string name="error_journal_filter_errors">Virheet</string>
+    <string name="error_journal_filter_info">Ilmoitukset</string>
+    <string name="error_journal_filter_empty">Ei viestejä tässä suodattimessa.</string>
 </resources>

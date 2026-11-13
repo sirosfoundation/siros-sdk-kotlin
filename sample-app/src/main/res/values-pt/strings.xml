@@ -412,4 +412,25 @@
     <string name="settings_appearance_system">Sistema</string>
     <string name="settings_appearance_light">Claro</string>
     <string name="settings_appearance_dark">Escuro</string>
+
+    <!-- The message journal (errors + info), 2026-11-13 -->
+    <string name="menu_recent_errors">Mensagens recentes</string>
+    <string name="error_journal_title">Mensagens recentes</string>
+    <string name="error_journal_empty">Nenhuma mensagem registrada.</string>
+    <string name="error_journal_clear">Limpar</string>
+    <string name="error_journal_show_details">Mostrar detalhes técnicos</string>
+    <string name="error_journal_details_label">Detalhes técnicos</string>
+    <string name="error_journal_details_none">Nenhum detalhe técnico adicional foi registrado.</string>
+    <string name="error_journal_contact">Contato: %1$s</string>
+    <string name="error_journal_context">Contexto: %1$s</string>
+    <string name="snackbar_error_details">Detalhes</string>
+    <string name="snackbar_show_credential">Mostrar</string>
+    <string name="error_journal_generic_title">Erro</string>
+    <string name="error_journal_flow_title">A solicitação falhou</string>
+    <string name="error_journal_no_match_title">Nenhuma credencial correspondente</string>
+    <string name="error_journal_info_title">Notificação</string>
+    <string name="error_journal_filter_all">Tudo</string>
+    <string name="error_journal_filter_errors">Erros</string>
+    <string name="error_journal_filter_info">Informações</string>
+    <string name="error_journal_filter_empty">Nenhuma mensagem neste filtro.</string>
 </resources>

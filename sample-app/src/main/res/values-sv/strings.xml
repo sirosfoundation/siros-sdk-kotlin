@@ -412,4 +412,25 @@
     <string name="settings_appearance_system">System</string>
     <string name="settings_appearance_light">Ljust</string>
     <string name="settings_appearance_dark">Mörkt</string>
+
+    <!-- The message journal (errors + info), 2026-11-13 -->
+    <string name="menu_recent_errors">Senaste meddelanden</string>
+    <string name="error_journal_title">Senaste meddelanden</string>
+    <string name="error_journal_empty">Inga meddelanden har sparats.</string>
+    <string name="error_journal_clear">Rensa</string>
+    <string name="error_journal_show_details">Visa tekniska detaljer</string>
+    <string name="error_journal_details_label">Tekniska detaljer</string>
+    <string name="error_journal_details_none">Inga ytterligare tekniska detaljer sparades.</string>
+    <string name="error_journal_contact">Kontakt: %1$s</string>
+    <string name="error_journal_context">Kontext: %1$s</string>
+    <string name="snackbar_error_details">Detaljer</string>
+    <string name="snackbar_show_credential">Visa</string>
+    <string name="error_journal_generic_title">Fel</string>
+    <string name="error_journal_flow_title">Begäran misslyckades</string>
+    <string name="error_journal_no_match_title">Inga matchande credential</string>
+    <string name="error_journal_info_title">Notifiering</string>
+    <string name="error_journal_filter_all">Alla</string>
+    <string name="error_journal_filter_errors">Fel</string>
+    <string name="error_journal_filter_info">Info</string>
+    <string name="error_journal_filter_empty">Inga meddelanden under detta filter.</string>
 </resources>
