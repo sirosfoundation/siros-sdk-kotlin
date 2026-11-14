@@ -9295,6 +9295,10 @@ class SirosWallet private constructor(
         result: kotlinx.serialization.json.JsonObject?,
         lifetime: Int,
     ) {
+        // The on-device hang hunt: name the completion's arrival and its
+        // shape before any branch runs — nothing else logged between the
+        // dispatch and the spinner's hang.
+        Timber.i("WMP flow $flowId completing (result keys: ${result?.keys?.joinToString(",") ?: "absent"})")
         try {
             // siros-wallet-core's oid4vci completion is a single `credential`
             // member beside the renewal relay and the notification members -
@@ -9601,6 +9605,19 @@ class SirosWallet private constructor(
                         withContext(peerJob) { onWmpFlowComplete(peer, flowId, result, lifetime) }
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         if (!currentCoroutineContext().isActive) throw e
+                        // A completion silently dropped (the spinner never
+                        // clears; found on-device: the nym_auth presentation
+                        // succeeded verifier-side and the wallet hung on
+                        // "contacting verifier"): this is the ONLY place that
+                        // can happen silently, so it names itself.
+                        Timber.e(e, "WMP completion for $flowId dropped: the peer job no longer runs it")
+                    } catch (e: Exception) {
+                        Timber.e(e, "WMP completion for $flowId failed")
+                        // The flow ENDED server-side; the local state must
+                        // still clear or the spinner hangs forever.
+                        runCatching { resetIssuanceGuards() }
+                        runCatching { returnToReadyState() }
+                        runCatching { eventListener?.onFlowError(flowId, "The flow completed but the wallet could not process it: ${e.message}") }
                     }
                 },
                 onError = { flowId, code, message ->
