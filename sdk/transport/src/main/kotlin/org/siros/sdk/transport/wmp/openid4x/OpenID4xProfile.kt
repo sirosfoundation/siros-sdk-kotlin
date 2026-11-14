@@ -639,8 +639,11 @@ class OpenID4xProfile(
     }
 
     override suspend fun handleComplete(params: FlowCompleteParams) {
+        Timber.d("OpenID4x handleComplete: flow=${params.flowId} (stopping sub-flows)")
         stopSubFlows(params.flowId)
+        Timber.d("OpenID4x handleComplete: sub-flows stopped, invoking onComplete")
         config.onComplete?.invoke(params.flowId, params.result)
+        Timber.d("OpenID4x handleComplete: onComplete returned")
     }
 
     override suspend fun handleError(params: FlowErrorParams) {

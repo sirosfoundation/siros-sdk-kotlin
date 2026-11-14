@@ -134,6 +134,13 @@ class WmpPeer(
                 params = params,
             )
         )
+        // Tracked BEFORE the call: the engine answers a wallet-initiated
+        // flow.start only AFTER the flow has run (the completion races the
+        // response and used to LOSE — the type was unknown, the completion
+        // was silently dropped, the wallet hung on "contacting verifier").
+        // The wallet chose this id itself; nothing about the type needs the
+        // response. A start that fails forgets again below.
+        trackFlowType(flowId, flowType)
         val response = call(WmpMethods.FLOW_START, reqParams)
         if (response.error != null) {
             // A transport-level retry (OkHttp re-sends a POST whose keep-alive
@@ -153,6 +160,8 @@ class WmpPeer(
                 // Both belong in the exception: a "Flow error" alone sent
                 // us logcat-diving with nothing to find (found driving the
                 // GDC diploma issuance on the local engine).
+                // The flow never started: no completion will arrive for it.
+                forgetFlowType(flowId)
                 throw WmpSessionException(
                     "flow.start failed: ${response.error.message}" +
                         (reason?.let { " ($it)" } ?: ""),
@@ -161,11 +170,11 @@ class WmpPeer(
         }
         val result = codec.json.decodeFromJsonElement(
             FlowStartResult.serializer(),
-            response.result ?: throw WmpSessionException("flow.start: missing result"),
+            response.result ?: run {
+                forgetFlowType(flowId)
+                throw WmpSessionException("flow.start: missing result")
+            },
         )
-        // Track so that subsequent server-initiated progress/action/complete/error
-        // notifications for this flow are dispatched to the correct handler.
-        trackFlowType(flowId, flowType)
         return result
     }
 
@@ -234,6 +243,10 @@ class WmpPeer(
         }
     }
 
+    /** A frame's flow_id member, for the dispatch bisect logs (null when absent). */
+    private fun p2FlowId(params: kotlinx.serialization.json.JsonObject?): String? =
+        (params?.get("flow_id") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+
     private suspend fun dispatch(msg: JsonRpcRequest) {
         val params = msg.params
 
@@ -249,8 +262,10 @@ class WmpPeer(
             }
 
             WmpMethods.FLOW_COMPLETE -> {
+                Timber.d("WmpPeer: FLOW_COMPLETE arrived for ${p2FlowId(params)}")
                 val p = decodeParams<FlowCompleteParams>(params)
                 val handler = registry.flowHandler(lookupFlowType(p.flowId))
+                Timber.d("WmpPeer: FLOW_COMPLETE decoded for ${p.flowId} (type=${lookupFlowType(p.flowId)}, handler=${handler != null})")
                 if (handler != null) {
                     handler.handleComplete(p)
                 }
@@ -380,6 +395,7 @@ class WmpPeer(
     private val flowTypeMap = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private fun trackFlowType(flowId: String, flowType: String) {
+        Timber.d("WmpPeer track: $flowId -> $flowType")
         flowTypeMap[flowId] = flowType
     }
 
@@ -388,6 +404,7 @@ class WmpPeer(
     }
 
     private fun forgetFlowType(flowId: String) {
+        Timber.d("WmpPeer forget: $flowId (was ${flowTypeMap[flowId] ?: "unknown"})")
         flowTypeMap.remove(flowId)
     }
 }

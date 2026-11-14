@@ -368,9 +368,23 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
         }
     }
 
-    LaunchedEffect(infoMessage) {
+    // The credential-received snackbar's "Show me" label, resolved in
+    // composition (the effect block below is not a composable context).
+    val showCredentialLabel = androidx.compose.ui.res.stringResource(R.string.snackbar_show_credential)
+    val infoShowsCredential by viewModel.infoShowsCredential.collectAsState()
+    LaunchedEffect(infoMessage, infoShowsCredential) {
         infoMessage?.let {
-            snackbarHostState.showSnackbar(message = it, withDismissAction = true)
+            val result = snackbarHostState.showSnackbar(
+                message = it,
+                actionLabel = if (infoShowsCredential) showCredentialLabel else null,
+                withDismissAction = true,
+            )
+            if (infoShowsCredential && result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                // A credential just arrived: the action opens its detail view
+                // (unconditional — a fresh credential is exactly what the
+                // showCredentialDetails setting gates).
+                viewModel.openLastReceivedCredential()
+            }
             viewModel.clearInfo()
         }
     }
@@ -939,8 +953,6 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             deletingAccount = viewModel.deletingAccount.collectAsState().value,
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
-                            errorJournalLength = viewModel.errorJournalLength.collectAsState().value,
-                            onCycleErrorJournalLength = viewModel::cycleErrorJournalLength,
                             onShowWscdSettings = viewModel::openWscaDeveloper,
                             onShowDevices = viewModel::openDevices,
                             onForgetAccount = viewModel::forgetAccount,
@@ -1840,9 +1852,6 @@ fun SettingsTab(
     deletingAccount: Boolean = false,
     onDeleteAccount: (confirmation: String) -> Unit,
     onShowHistory: () -> Unit,
-    /** The error journal's kept length (Settings cycles it). */
-    errorJournalLength: Int = DEFAULT_ERROR_JOURNAL_LENGTH,
-    onCycleErrorJournalLength: () -> Unit = {},
     onShowWscdSettings: () -> Unit,
     onShowDevices: () -> Unit = {},
     onForgetAccount: ((String) -> Unit)? = null,
@@ -1918,26 +1927,7 @@ fun SettingsTab(
                 SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
                 SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
                 SettingsRow("Transport", if (useWmpProtocol) "WMP (JSON-RPC 2.0)" else "Legacy")
-                // The error journal's kept length: tap cycles the choices
-                // (3/5/10/25), persisted — see ErrorJournal.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onCycleErrorJournalLength() },
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        stringResource(R.string.error_journal_length_setting),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = SirosDesign.secondaryText,
-                    )
-                    Text(
-                        errorJournalLength.toString(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
+
                 // Which interoperability profiles this wallet can speak.
                 // Deliberately a fact, not a control: which one is used is
                 // negotiated per issuer from its advertised
