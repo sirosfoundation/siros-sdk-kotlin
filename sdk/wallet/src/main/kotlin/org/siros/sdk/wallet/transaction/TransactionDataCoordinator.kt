@@ -73,6 +73,8 @@ internal class TransactionDataCoordinator(
     private val log: () -> TransactionLogStore,
     private val nowMillis: () -> Long = System::currentTimeMillis,
     private val consentTimeoutMillis: Long = CONSENT_TIMEOUT_MILLIS,
+    /** Tells the wallet a transaction-log write did not reach durable storage (the Swift `onTransactionLogFailure` twin). */
+    private val onLogFailure: () -> Unit = {},
 ) {
     /** Records [error] as a refusal of [request] and throws it. */
     suspend fun refuse(request: TransactionDataRequest, error: TransactionDataError): Nothing {
@@ -233,6 +235,7 @@ internal class TransactionDataCoordinator(
             } catch (e: Exception) {
                 // Never include the exception: a store failure message may name what was being written.
                 Timber.e("Could not record the transaction in the log (${e.javaClass.simpleName})")
+                onLogFailure()
             }
         }
     }
