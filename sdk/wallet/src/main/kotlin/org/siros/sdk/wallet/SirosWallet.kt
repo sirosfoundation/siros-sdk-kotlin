@@ -466,6 +466,12 @@ class SirosWallet private constructor(
                 }
             },
             log = { transactionLogStore },
+            // The Swift `onTransactionLogFailure` twin: a log write that could
+            // not be made durable reaches the listener, exactly as Swift's
+            // `reportTransactionLogFailure` does.
+            onLogFailure = {
+                synchronized(consentLock) { eventListener }?.onTransactionLogFailure()
+            },
         )
     }
 
@@ -14420,12 +14426,24 @@ class SirosWallet private constructor(
             if (parked.size > 1) {
                 Timber.w("%d authorizations parked; not guessing which one this presentation belonged to", parked.size)
             }
+            eventListener?.onNoMatchingCredential(
+                flowId = presentationFlowId,
+                requestedTypes = requestedTypes,
+                reason = (error.details?.get("no_match_reason") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull,
+                redirectUri = (error.details?.get("redirect_uri") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull,
+            )
             return
         }
         val parentFlowId = parked.single()
         pendingAuthorizations.remove(parentFlowId)
         terminatedFlowIds.add(parentFlowId)
         Timber.i("Issuance flow $parentFlowId required this presentation; reporting it as failed too")
+        eventListener?.onNoMatchingCredential(
+            flowId = presentationFlowId,
+            requestedTypes = requestedTypes,
+            reason = (error.details?.get("no_match_reason") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull,
+            redirectUri = (error.details?.get("redirect_uri") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull,
+        )
         eventListener?.onFlowError(parentFlowId, error.message)
     }
 

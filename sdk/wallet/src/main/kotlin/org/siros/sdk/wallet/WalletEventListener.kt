@@ -328,6 +328,30 @@ presents
     fun onFlowError(flowId: String, errorMessage: String, redirectUri: String? = null) {}
 
     /**
+     * Called when a presentation flow matched NOTHING the wallet holds -
+     * the engine's `no_matching_credential` progress, distinct from a
+     * flow error: the flow itself completes (the verifier sees the
+     * wallet's decline). The Swift twin's exact shape; Kotlin callers
+     * that prefer it get it beside [onFlowComplete]'s `matchedNothing`
+     * flag (both fire - the flag for the flag-only consumers, this for
+     * the detail consumers).
+     *
+     * @param requestedTypes The credential types the verifier asked for
+     *   (the DCQL `requested` list), for the "we don't hold X" message.
+     * @param reason The engine's own reason text, when it carried one.
+     * @param redirectUri The verifier's return URL, when its
+     *   error-response endpoint provided one.
+     */
+    fun onNoMatchingCredential(flowId: String, requestedTypes: List<String>, reason: String?, redirectUri: String? = null) {}
+
+    /**
+     * Called when a transaction-log record (EC TS12 section 5.3) could not be
+     * made durable. The record is still held for the running session; only
+     * the durability promise is broken. The Swift twin's exact shape.
+     */
+    fun onTransactionLogFailure() {}
+
+    /**
      * The issuer refused the auxiliary data the wallet sent because it holds a conflicting one (`AUXILIARY_DATA_CONFLICT`). Terminal
      * and NOT retryable ([AuxiliaryDataConflictException.retryable] is false): show [AuxiliaryDataConflictException.userMessageRes]
      * without a retry button. The default forwards the issuer's text to [onFlowError].

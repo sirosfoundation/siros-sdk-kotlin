@@ -1457,8 +1457,10 @@ public abstract interface class org/siros/sdk/wallet/WalletEventListener {
 	public abstract fun onFlowComplete (Ljava/lang/String;Ljava/lang/String;Z)V
 	public abstract fun onFlowError (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public abstract fun onIssuerNotTrusted (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public abstract fun onNoMatchingCredential (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)V
 	public abstract fun onReauthenticationRequired ()V
 	public abstract fun onTransactionDataRefused (Ljava/lang/String;Lorg/siros/sdk/credentials/TransactionDataReason;)V
+	public abstract fun onTransactionLogFailure ()V
 	public abstract fun onTxCodeRequired (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
 	public abstract fun onWalletLifecycleBlocked (Lorg/siros/sdk/auth/WalletLifecycleRefusal;Ljava/lang/String;)V
 }
@@ -1521,8 +1523,11 @@ public final class org/siros/sdk/wallet/WalletEventListener$DefaultImpls {
 	public static fun onFlowError (Lorg/siros/sdk/wallet/WalletEventListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public static synthetic fun onFlowError$default (Lorg/siros/sdk/wallet/WalletEventListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
 	public static fun onIssuerNotTrusted (Lorg/siros/sdk/wallet/WalletEventListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public static fun onNoMatchingCredential (Lorg/siros/sdk/wallet/WalletEventListener;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)V
+	public static synthetic fun onNoMatchingCredential$default (Lorg/siros/sdk/wallet/WalletEventListener;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
 	public static fun onReauthenticationRequired (Lorg/siros/sdk/wallet/WalletEventListener;)V
 	public static fun onTransactionDataRefused (Lorg/siros/sdk/wallet/WalletEventListener;Ljava/lang/String;Lorg/siros/sdk/credentials/TransactionDataReason;)V
+	public static fun onTransactionLogFailure (Lorg/siros/sdk/wallet/WalletEventListener;)V
 	public static fun onTxCodeRequired (Lorg/siros/sdk/wallet/WalletEventListener;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
 	public static fun onWalletLifecycleBlocked (Lorg/siros/sdk/wallet/WalletEventListener;Lorg/siros/sdk/auth/WalletLifecycleRefusal;Ljava/lang/String;)V
 }
