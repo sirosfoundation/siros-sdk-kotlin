@@ -63,6 +63,25 @@ class WmpHttpSseTransport(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var sseJob: Job? = null
 
+    /**
+     * The SSE stream's OWN client: [client] with a read timeout slightly
+     * above the engine's heartbeat cadence — the liveness deadline. The
+     * engine heartbeats the stream every ~15s (`:` comment lines), so a
+     * read blocking longer than this without ANY byte is a black-holed
+     * connection (a carrier NAT idle timeout, Android doze, a proxy that
+     * dropped the TCP session without RST) — not a quiet server. The
+     * default's `readTimeout(0)` (correct for the request calls) would block
+     * `readLine()` forever on the half-open socket: the state stays
+     * CONNECTED and every RPC then hangs with no SSE line and no error
+     * (found on-device 2026-11-14: the app sat ~8h idle, the stream died
+     * silently, the next flow.start hung on "contacting verifier" forever).
+     * The timeout throws SocketTimeoutException into the connect loop's
+     * catch → FAILED → the session's reconnect replays from
+     * Last-Event-ID. 60s = four missed heartbeats.
+     */
+    private val streamClient: OkHttpClient =
+        client.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+
     /** The ids of the events already delivered (bounded): a replayed event with the same `id:` is dropped, not delivered twice. */
     private val seenEventIds = object : LinkedHashSet<String>() {}
     @Volatile private var lastEventId: String? = null
@@ -134,7 +153,9 @@ class WmpHttpSseTransport(
         val opened = kotlinx.coroutines.CompletableDeferred<Unit>()
         sseJob = scope.launch {
             try {
-                val response = client.newCall(request).execute()
+                // streamClient (not client): the SSE call carries its own read
+                // timeout — the liveness deadline, see its declaration.
+                val response = streamClient.newCall(request).execute()
                 if (!response.isSuccessful) {
                     Timber.e("SSE connection failed: ${response.code}")
                     _state.value = TransportState.FAILED
@@ -146,7 +167,27 @@ class WmpHttpSseTransport(
                 opened.complete(Unit)
                 Timber.d("SSE connected to $sseUrl")
 
-                val reader = BufferedReader(InputStreamReader(response.body!!.byteStream()))
+                // The liveness deadline rides the SSE call's OWN client: a
+                // per-call builder with a read timeout slightly above the
+                // engine's heartbeat cadence. The engine heartbeats the
+                // stream every ~15s (`:` comment lines), so a read blocking
+                // this long without ANY byte is a black-holed connection (a
+                // carrier NAT idle timeout, Android doze, a proxy that
+                // dropped the TCP session without RST) — not a quiet server.
+                // The default client's readTimeout(0) (no timeout, correct for
+                // the OTHER calls) would block readLine() forever on the
+                // half-open socket: the state stays CONNECTED and every RPC
+                // then hangs with no SSE line and no error (found on-device
+                // 2026-11-14: the app sat ~8h idle, the stream died
+                // silently, the next flow.start hung "contacting verifier"
+                // forever). A SocketTimeoutException here lands in the
+                // catch below → FAILED → the session's reconnect replays
+                // from Last-Event-ID.
+                val reader = BufferedReader(
+                    InputStreamReader(
+                        response.body!!.byteStream(),
+                    )
+                )
                 var currentData = StringBuilder()
                 var currentId: String? = null
 
