@@ -433,4 +433,8 @@
     <string name="error_journal_filter_errors">Virheet</string>
     <string name="error_journal_filter_info">Ilmoitukset</string>
     <string name="error_journal_filter_empty">Ei viestejä tässä suodattimessa.</string>
+
+    <!-- The wallet rename (2026-11-15) -->
+    <string name="settings_wallet_display_name">Nimeä lompakko uudelleen</string>
+    <string name="header_rename_save">Tallenna</string>
 </resources>

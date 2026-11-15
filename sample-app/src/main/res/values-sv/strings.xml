@@ -433,4 +433,8 @@
     <string name="error_journal_filter_errors">Fel</string>
     <string name="error_journal_filter_info">Info</string>
     <string name="error_journal_filter_empty">Inga meddelanden under detta filter.</string>
+
+    <!-- The wallet rename (2026-11-15) -->
+    <string name="settings_wallet_display_name">Byt namn på plånbok</string>
+    <string name="header_rename_save">Spara</string>
 </resources>

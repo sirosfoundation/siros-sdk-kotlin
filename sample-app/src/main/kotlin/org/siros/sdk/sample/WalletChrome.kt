@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -82,6 +83,9 @@ fun WalletChrome(
     onScanQr: () -> Unit,
     onMenu: () -> Unit,
     onAccount: () -> Unit,
+    /** The header's FULL local rename ("demo's Wallet"), verbatim; null = derive. */
+    displayNameOverride: String? = null,
+    onEditDisplayName: () -> Unit = {},
     modifier: Modifier = Modifier,
     brandHeader: Boolean = false,
     onBack: (() -> Unit)? = null,
@@ -101,7 +105,7 @@ fun WalletChrome(
     // on it defaults to - in either theme, wherever the frame is hosted.
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
         Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            WalletHeader(displayName = displayName, onBrand = brandHeader, onAccount = onAccount)
+            WalletHeader(displayName = displayName, displayNameOverride = displayNameOverride, onBrand = brandHeader, onAccount = onAccount, onEditDisplayName = onEditDisplayName)
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) { content() }
             Box(modifier = Modifier.onGloballyPositioned { onBottomBarHeight(it.size.height) }) {
                 if (onBack != null) {
@@ -115,8 +119,9 @@ fun WalletChrome(
 }
 
 /** Mark and product name on the left, the signed-in user's wallet on the right. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun WalletHeader(displayName: String?, onBrand: Boolean, onAccount: () -> Unit) {
+fun WalletHeader(displayName: String?, displayNameOverride: String?, onBrand: Boolean, onAccount: () -> Unit, onEditDisplayName: () -> Unit = {}) {
     val background = if (onBrand) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.background
     val foreground = if (onBrand) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onBackground
     Column(modifier = Modifier.fillMaxWidth().background(background).statusBarsPadding()) {
@@ -142,18 +147,28 @@ fun WalletHeader(displayName: String?, onBrand: Boolean, onAccount: () -> Unit) 
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(CardCorner))
-                    .clickable(role = Role.Button, onClick = onAccount)
+                    .combinedClickable(
+                        role = Role.Button,
+                        onClick = onAccount,
+                        // Long-press: rename the FULL header string
+                        // ("<name>'s Wallet") - the local override.
+                        onLongClick = onEditDisplayName,
+                    )
                     .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Outlined.AccountCircle, contentDescription = null, tint = foreground, modifier = Modifier.size(24.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (displayName.isNullOrBlank()) {
-                        stringResource(R.string.header_my_wallet)
-                    } else {
-                        stringResource(R.string.header_wallet_of, displayName)
-                    },
+                    // The override is the FULL header string ("demo's
+                    // Wallet"), shown verbatim; blank/absent = derive from
+                    // the account's own display name as before.
+                    text = displayNameOverride?.takeIf { it.isNotBlank() }
+                        ?: if (displayName.isNullOrBlank()) {
+                            stringResource(R.string.header_my_wallet)
+                        } else {
+                            stringResource(R.string.header_wallet_of, displayName)
+                        },
                     style = MaterialTheme.typography.bodyLarge,
                     color = foreground,
                     maxLines = 1,
