@@ -9247,14 +9247,31 @@ class SirosWallet private constructor(
         persistAndSyncKeystore()
 
         // OID4VCI §10: tell the issuer the credential was accepted - the FLOW
-        // form on this engine (see [wmpSendCredentialNotification]).
-        if (stored != null && notificationId != null) {
-            wmpSendCredentialNotification(
-                flowId = flowId,
-                notificationId = notificationId,
-                event = CredentialNotificationEvent.ACCEPTED,
-            )
-        }
+        // form on this engine (see [wmpSendCredentialNotification]). The
+        // notification is BEST-EFFORT by design ("a failure is logged, the
+        // flow it belongs to is already over") and is sent OFF the completion
+        // path: the credential is stored, the guards are reset, the store is
+        // synced - the user's flow is DONE. The send then runs in the
+        // background scope, so a slow or failing notification forward (found
+        // on-device 2026-11-15: the DPoP sign_client_auth ask to the wallet
+        // times out after ~20s, the forward fails forward_failed, and the
+        // whole completion handler waited it out - every issuance looked
+        // like it took 20s+ when the actual flow took under 1s) never blocks
+        // or delays the UI's completion. The wallet may have been torn down
+        // meanwhile (a logout raced the send): a dead wallet sends nothing,
+        // the issuer times the notification out per its own retry contract.
+        val sendNotification: (suspend () -> Unit)? =
+            if (stored != null && notificationId != null) {
+                {
+                    wmpSendCredentialNotification(
+                        flowId = flowId,
+                        notificationId = notificationId,
+                        event = CredentialNotificationEvent.ACCEPTED,
+                    )
+                }
+            } else {
+                null
+            }
 
         if (stored == null) {
             // "Succeeded" with nothing to show for it is a failure to the user:
@@ -9267,6 +9284,21 @@ class SirosWallet private constructor(
             eventListener?.onFlowComplete(flowId, redirectUriOf(result))
         }
         returnToReadyState()
+
+        // LAST, and off the completion's critical path: the §10 notification.
+        if (sendNotification != null) {
+            scope.launch {
+                try {
+                    sendNotification()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Best-effort, logged, never surfaced: the flow is over
+                    // and the issuer's own retry contract owns the rest.
+                    Timber.w(e, "The §10 credential-accepted notification failed (best-effort, flow already complete)")
+                }
+            }
+        }
     }
 
     /** Back to Ready from a flow's end - the credentials re-read from the store, the user/display names kept. */

@@ -562,6 +562,14 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val readyDisplayName = (walletState as? WalletState.Ready)?.displayName
     var lastDisplayName by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(readyDisplayName) { if (readyDisplayName != null) lastDisplayName = readyDisplayName }
+    // The header's local rename (long-press the header): the override is
+    // the FULL header string ("demo's Wallet"), verbatim, winning over the
+    // account-derived one.
+    val displayNameOverride by viewModel.walletDisplayNameOverride.collectAsState()
+    // The long-press rename's open state, and the full header string the
+    // dialog starts from: the override when set, else the account-derived
+    // "<name>'s Wallet" (or "My Wallet").
+    var editWalletName by remember { mutableStateOf<String?>(null) }
 
     // Measured height of the custom bottom tab bar Row below, so the shared
     // SnackbarHost (which spans every sub-screen in the Box below - see its
@@ -597,6 +605,43 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             WalletDestination.Home, WalletDestination.Menu -> null
         }
     }
+    // The header long-press rename dialog: the FULL header string
+    // ("demo's Wallet") is editable; blank = back to the
+    // account-derived string. The initial value is computed in THIS
+    // composable scope because stringResource cannot run inside the
+    // onEditDisplayName callback.
+    val accountHeaderString = (readyDisplayName ?: lastDisplayName)
+        ?.takeIf { it.isNotBlank() }
+        ?.let { androidx.compose.ui.res.stringResource(R.string.header_wallet_of, it) }
+        ?: androidx.compose.ui.res.stringResource(R.string.header_my_wallet)
+    if (editWalletName != null) {
+        var field by remember(displayNameOverride) {
+            mutableStateOf(displayNameOverride ?: accountHeaderString)
+        }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { editWalletName = null },
+            title = { Text(androidx.compose.ui.res.stringResource(R.string.settings_wallet_display_name)) },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = field,
+                    onValueChange = { field = it },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    viewModel.updateWalletDisplayNameOverride(field.takeIf { it.isNotBlank() })
+                    editWalletName = null
+                }) { Text(androidx.compose.ui.res.stringResource(R.string.header_rename_save)) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { editWalletName = null }) {
+                    Text(androidx.compose.ui.res.stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
     // The frame of every signed-in screen (see WalletChrome): `back` non-null
     // swaps the three-way bar for a single Back button.
     val chrome: @Composable (WalletNavItem?, Boolean, (() -> Unit)?, @Composable () -> Unit) -> Unit =
@@ -606,6 +651,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             }
             WalletChrome(
                 displayName = readyDisplayName ?: lastDisplayName,
+                displayNameOverride = displayNameOverride,
                 selected = selected,
                 onHome = { go(WalletDestination.Home) },
                 onScanQr = {
@@ -617,6 +663,10 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                     go(WalletDestination.Menu)
                 },
                 onAccount = { go(WalletDestination.Settings) },
+                // Opens the rename dialog; the initial value is computed in
+                // the dialog's own composable scope (stringResource cannot
+                // run inside a callback).
+                onEditDisplayName = { editWalletName = "" },
                 brandHeader = brandHeader,
                 onBack = back,
                 onBottomBarHeight = { bottomNavBarHeightPx = it },

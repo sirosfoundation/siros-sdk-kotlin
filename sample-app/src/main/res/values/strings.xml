@@ -99,6 +99,8 @@
     <string name="settings_title">Settings</string>
     <string name="settings_account_section">Account</string>
     <string name="settings_signed_in_as">Signed in as</string>
+    <string name="settings_wallet_display_name">Rename wallet</string>
+    <string name="header_rename_save">Save</string>
     <string name="settings_backend_url">Backend</string>
     <string name="settings_zk_circuit_urls">ZK Circuit Hosting</string>
     <string name="settings_tenant_id">Tenant</string>
