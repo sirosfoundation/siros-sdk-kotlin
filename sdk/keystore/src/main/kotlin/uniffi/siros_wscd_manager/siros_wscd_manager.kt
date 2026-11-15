@@ -4045,8 +4045,12 @@ public object FfiConverterTypeFfiSignature: FfiConverterRustBuffer<FfiSignature>
 
 
 data class FfiWscdConfig (
-    var `defaultPlugin`: kotlin.String
-    
+    var `defaultPlugin`: kotlin.String,
+    /// The softkey plugin's OWN durable backing file
+    /// (`plugins.softkey.keys_file`): every generated key is durable
+    /// BEFORE generate_key returns (the security invariant,
+    /// 2026-11-15). Empty/unset: the historic volatile softkey.
+    var `softkeyKeysFile`: kotlin.String = ""
 ){
     
 
@@ -4063,15 +4067,18 @@ public object FfiConverterTypeFfiWscdConfig: FfiConverterRustBuffer<FfiWscdConfi
     override fun read(buf: ByteBuffer): FfiWscdConfig {
         return FfiWscdConfig(
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiWscdConfig) = (
-            FfiConverterString.allocationSize(value.`defaultPlugin`)
+            FfiConverterString.allocationSize(value.`defaultPlugin`) +
+            FfiConverterString.allocationSize(value.`softkeyKeysFile`)
     )
 
     override fun write(value: FfiWscdConfig, buf: ByteBuffer) {
             FfiConverterString.write(value.`defaultPlugin`, buf)
+            FfiConverterString.write(value.`softkeyKeysFile`, buf)
     }
 }
 

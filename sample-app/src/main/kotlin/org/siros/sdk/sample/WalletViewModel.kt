@@ -3301,7 +3301,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      */
     private fun buildWscdKeystore(pluginId: String, trackAsDiagnosticSigner: Boolean): org.siros.sdk.keystore.KeystoreManager? =
         try {
-            val wscdConfig = FfiWscdConfig(defaultPlugin = pluginId)
+            // The softkey plugin's OWN durable backing (the security
+            // invariant, 2026-11-15): every generated key is durable BEFORE
+            // generate_key returns - the plugin writes its container through
+            // to this file inside the mutating critical section, so an app
+            // restart can never orphan a stored credential's bound key (the
+            // 2026-11-14 on-device loss). Empty would be the volatile
+            // historic behaviour.
+            val wscdConfig = FfiWscdConfig(
+                defaultPlugin = pluginId,
+                softkeyKeysFile = java.io.File(activity.filesDir, "wscd_softkey_keys.json").absolutePath,
+            )
             val signer = UniFFISigner(
                 wscdConfig,
                 authProvider = object : AuthProvider {
