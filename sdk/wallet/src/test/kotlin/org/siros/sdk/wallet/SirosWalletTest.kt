@@ -14837,6 +14837,12 @@ class SirosWalletTest {
         // set here explicitly - without this, addPasskey's commit and
         // syncPrivateDataToBackend (persistAndSyncKeystore, deleteCredential,
         // ...) NPE on the null backing field.
+        // Same for the wallet scope: the §10 credential-notification send
+        // (2026-11-15) launches there when a test's completion carries a
+        // notification_id - without this backfill that launch NPEs.
+        if ("scope" !in values) {
+            values["scope"] = CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob())
+        }
         if ("privateDataWriteMutex" !in values) {
             values["privateDataWriteMutex"] = kotlinx.coroutines.sync.Mutex()
         }
