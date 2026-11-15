@@ -562,6 +562,10 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val readyDisplayName = (walletState as? WalletState.Ready)?.displayName
     var lastDisplayName by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(readyDisplayName) { if (readyDisplayName != null) lastDisplayName = readyDisplayName }
+    // The header's local rename (Settings): the override wins over the
+    // account's own display name, whatever login resolved.
+    val displayNameOverride by viewModel.walletDisplayNameOverride.collectAsState()
+    val headerDisplayName = displayNameOverride ?: readyDisplayName ?: lastDisplayName
 
     // Measured height of the custom bottom tab bar Row below, so the shared
     // SnackbarHost (which spans every sub-screen in the Box below - see its
@@ -605,7 +609,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 onDispose { bottomNavBarHeightPx = 0 }
             }
             WalletChrome(
-                displayName = readyDisplayName ?: lastDisplayName,
+                displayName = headerDisplayName,
                 selected = selected,
                 onHome = { go(WalletDestination.Home) },
                 onScanQr = {
@@ -953,6 +957,8 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             deletingAccount = viewModel.deletingAccount.collectAsState().value,
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
+                            walletDisplayNameOverride = viewModel.walletDisplayNameOverride.collectAsState().value,
+                            onUpdateWalletDisplayNameOverride = viewModel::updateWalletDisplayNameOverride,
                             onShowWscdSettings = viewModel::openWscaDeveloper,
                             onShowDevices = viewModel::openDevices,
                             onForgetAccount = viewModel::forgetAccount,
@@ -1852,6 +1858,9 @@ fun SettingsTab(
     deletingAccount: Boolean = false,
     onDeleteAccount: (confirmation: String) -> Unit,
     onShowHistory: () -> Unit,
+    /** The header display name's local override (null = the account's own); Settings edits it. */
+    walletDisplayNameOverride: String? = null,
+    onUpdateWalletDisplayNameOverride: (String?) -> Unit = {},
     onShowWscdSettings: () -> Unit,
     onShowDevices: () -> Unit = {},
     onForgetAccount: ((String) -> Unit)? = null,
@@ -1921,6 +1930,35 @@ fun SettingsTab(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 SettingsRow(stringResource(R.string.settings_signed_in_as), state.displayName ?: state.userId)
+                // The wallet display name's local rename: the header's
+                // "<name>'s Wallet" shows this instead of the account's
+                // own name. Blank = clear (back to the account name).
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.settings_wallet_display_name),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = SirosDesign.secondaryText,
+                    )
+                    var nameField by remember(walletDisplayNameOverride) {
+                        mutableStateOf(walletDisplayNameOverride ?: state.displayName ?: "")
+                    }
+                    androidx.compose.material3.OutlinedTextField(
+                        value = nameField,
+                        onValueChange = { nameField = it },
+                        modifier = Modifier.width(160.dp),
+                        singleLine = true,
+                        placeholder = { Text(stringResource(R.string.settings_wallet_display_name_hint), maxLines = 1) },
+                    )
+                    LaunchedEffect(nameField) {
+                        // Debounced-ish: persist what was typed, cleared = back to the account name.
+                        kotlinx.coroutines.delay(600)
+                        onUpdateWalletDisplayNameOverride(nameField.takeIf { it.isNotBlank() && it != (walletDisplayNameOverride ?: "") })
+                    }
+                }
                 SettingsRow(stringResource(R.string.settings_backend_url), backendUrl)
                 SettingsRow(stringResource(R.string.settings_zk_circuit_urls), zkCircuitUrls.joinToString(", "))
                 SettingsRow(stringResource(R.string.settings_tenant_id), tenantId)

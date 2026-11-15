@@ -282,14 +282,52 @@ class WscdKeystoreAdapter private constructor(
 
     override suspend fun generateKey(algorithm: String): String {
         checkUnlocked()
-        return signer.generateKey(algorithm)
+        val keyId = signer.generateKey(algorithm)
+        persistGeneratedKey(keyId)
+        return keyId
+    }
+
+    /**
+     * Folds a freshly generated key into the credentials container NOW —
+     * the persistence invariant: a generated key survives the process that
+     * made it, whatever later happens to the flow that requested it.
+     *
+     * Found on-device (2026-11-14, the Spherity PID re-presentation): a
+     * softkey signer's generated key lives only in ITS process memory; the
+     * fold into `S.keypairs` happened only at the wallet's next
+     * `exportEncryptedContainer()` (a flow-completion-triggered sync). An
+     * app restart in that window left the credential stored but its bound
+     * key gone — `unlock()` re-imports from the container, the key was
+     * never in it, and every later presentation of that credential fails
+     * "key not resolvable" forever. Generation is the keystore's own
+     * event; its persistence cannot depend on a wallet-level flow later
+     * choosing to sync.
+     *
+     * Fail-soft toward the signer's own success: the key IS generated and
+     * usable this session (the pre-fix behaviour); the fold failure is
+     * logged loudly, not thrown — but the next
+     * [exportEncryptedContainer] retries the fold (every export includes
+     * every key the signer reports), so the window closes on the next
+     * sync even when this direct fold fails.
+     */
+    private suspend fun persistGeneratedKey(keyId: String) {
+        try {
+            val exported = signer.exportPrivateKeypairs().firstOrNull { it.keyId == keyId } ?: return
+            credentialsKeystore.importKeypairJwk(keyId, exported.privateJwk)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            // Loud, never fatal: see the doc comment.
+            Timber.e(e, "Generated key not folded into the container immediately; the next export retries")
+        }
     }
 
     override val supportsAttestedKeyGeneration: Boolean get() = signer.supportsAttestedKeyGeneration
 
     override suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String {
         checkUnlocked()
-        return signer.generateAttestedKey(algorithm, attestationChallenge)
+        val keyId = signer.generateAttestedKey(algorithm, attestationChallenge)
+        persistGeneratedKey(keyId)
+        return keyId
     }
 
     override suspend fun deleteKey(keyId: String) {
@@ -944,7 +982,13 @@ class WscdKeystoreAdapter private constructor(
     private suspend fun selectSigningKey(keys: List<SignerKeyInfo>, kid: String?): SignerKeyInfo {
         if (kid != null) {
             return resolveSignerKey(keys, kid)
-                ?: throw IllegalStateException("Signing key '$kid' not found - this credential's bound key is unavailable")
+                ?: throw IllegalStateException(
+                    // Key ids are PUBLIC values (they ARE the kid names) -
+                    // safe to log. Found on-device: the Spherity PID
+                    // re-presentation fails while the first presentation
+                    // worked.
+                    "Signing key not resolvable (wanted kid: $kid, visible key ids: ${keys.map { it.keyId }.joinToString(",")})",
+                )
         }
         return keys.firstOrNull() ?: throw IllegalStateException("No keys available for signing")
     }

@@ -202,6 +202,24 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     val showDiagnosticMessages: StateFlow<Boolean> get() = _showDiagnosticMessages
 
     /**
+     * The wallet display name's local override (Settings): null = show the
+     * login's own account display name in the header ("<name>'s Wallet");
+     * a value = show that instead. The user's own name for their own
+     * wallet, a UI-only preference the backend never sees.
+     */
+    private val _walletDisplayNameOverride: MutableStateFlow<String?>
+    val walletDisplayNameOverride: StateFlow<String?> get() = _walletDisplayNameOverride
+
+    /** Sets (or clears, null/blank) the override; persisted. */
+    fun updateWalletDisplayNameOverride(value: String?) {
+        val trimmed = value?.trim()
+        val effective = trimmed.takeUnless { it.isNullOrEmpty() }
+        _walletDisplayNameOverride.value = effective
+        activity.getSharedPreferences(SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().putString("wallet_display_name_override", effective).apply()
+    }
+
+    /**
      * Sample-app-local setting gating Home's "Get your PhotoID" onboarding
      * CTA (see [HomeScreen]). Deliberately NOT derived from any real
      * per-tenant server capability yet - `facetec-api`'s availability isn't
@@ -318,6 +336,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         )
         _showPhotoIdOnboarding = MutableStateFlow(
             prefs.getBoolean("show_photo_id_onboarding", false)
+        )
+        // The wallet display name's LOCAL override: the header's
+        // "<name>'s Wallet" shows the login's account display name unless
+        // the user renames it here. Persisted, null = no override.
+        _walletDisplayNameOverride = MutableStateFlow(
+            prefs.getString("wallet_display_name_override", null)
         )
         // Core wallet policy (not a UI-only preference like the toggles
         // above) - persisted here, but enforced by SirosWallet itself. Can't

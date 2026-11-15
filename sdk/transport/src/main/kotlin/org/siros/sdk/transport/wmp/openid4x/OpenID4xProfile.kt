@@ -1154,8 +1154,12 @@ class OpenID4xProfile(
                 },
             )
         } catch (e: Exception) {
-            // Text stays out of the log: it can name keys or credentials.
-            Timber.e("Presentation signing failed (${e.javaClass.simpleName})")
+            // Text stays out of the log: it can name keys or credentials. The
+            // CLASS alone was too thin to debug the second-presentation
+            // IllegalStateException (2026-11-14, the Spherity PID re-scan) —
+            // the throw SITE now rides along (stack top), the message still
+            // withheld.
+            Timber.e(e, "Presentation signing failed (${e.javaClass.simpleName} at ${e.stackTrace.firstOrNull()?.let { f -> "${f.fileName}:${f.lineNumber}" } ?: "?"})")
             answerError(sub, WMP_ERR_FLOW_ERROR, "presentation signing failed", null)
         }
     }
