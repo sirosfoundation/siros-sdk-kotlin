@@ -633,11 +633,46 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /**
      * Upserts a profile into the registry. The caller hands the complete
      * profile (an edited copy); the id decides add vs edit.
+     *
+     * Editing the CURRENT backend also materializes the edit into the
+     * individual connection settings (the prefs every reader consumes) -
+     * found in review 2026-11-16: an edit to the active profile previously
+     * changed only the registry, so the app kept running against the OLD
+     * values until the user switched away and back. The materialization is
+     * the same one [switchBackend] performs, minus the logout: the
+     * settings are pre-login by design, and an in-place edit takes effect
+     * at the next wallet construction, exactly like typing into the
+     * pre-login fields does.
      */
     fun saveBackendProfile(profile: org.siros.sdk.sample.BackendProfile) {
         val next = _knownBackends.value.filterNot { it.id == profile.id } + profile
         _knownBackends.value = next
         org.siros.sdk.sample.BackendProfiles.save(activity, next)
+        if (profile.id == _currentBackendId.value) {
+            materializeBackendProfile(profile)
+        }
+    }
+
+    /** Writes a profile into the individual connection prefs and flows. */
+    private fun materializeBackendProfile(profile: org.siros.sdk.sample.BackendProfile) {
+        val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+        _backendUrl.value = profile.backendUrl
+        _tenantId.value = profile.tenantId
+        _engineUrlOverride.value = profile.engineUrl
+        if (profile.zkCircuitUrls.isNotEmpty()) {
+            _zkCircuitUrls.value = profile.zkCircuitUrls
+        }
+        prefs.edit()
+            .putString("backend_url", profile.backendUrl)
+            .putString("tenant_id", profile.tenantId)
+            .putString("engine_url", profile.engineUrl)
+            .apply()
+        if (profile.zkCircuitUrls.isNotEmpty()) {
+            prefs.edit().putString(
+                "zk_circuit_urls",
+                Json.encodeToString(ListSerializer(String.serializer()), profile.zkCircuitUrls),
+            ).apply()
+        }
     }
 
     fun deleteBackendProfile(id: String) {
@@ -659,24 +694,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      */
     fun switchBackend(id: String) {
         val profile = _knownBackends.value.firstOrNull { it.id == id } ?: return
-        val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
-        _backendUrl.value = profile.backendUrl
-        _tenantId.value = profile.tenantId
-        _engineUrlOverride.value = profile.engineUrl
-        if (profile.zkCircuitUrls.isNotEmpty()) {
-            _zkCircuitUrls.value = profile.zkCircuitUrls
-        }
-        prefs.edit()
-            .putString("backend_url", profile.backendUrl)
-            .putString("tenant_id", profile.tenantId)
-            .putString("engine_url", profile.engineUrl)
-            .apply()
-        if (profile.zkCircuitUrls.isNotEmpty()) {
-            prefs.edit().putString(
-                "zk_circuit_urls",
-                Json.encodeToString(ListSerializer(String.serializer()), profile.zkCircuitUrls),
-            ).apply()
-        }
+        materializeBackendProfile(profile)
         org.siros.sdk.sample.BackendProfiles.saveCurrentId(activity, profile.id)
         _currentBackendId.value = profile.id
         disconnect()
@@ -2670,8 +2688,25 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _presentationHistory.value = wallet.presentationHistory
     }
 
+    /**
+     * The credential-filtered history (2026-11-16): the detail view's
+     * "Recent presentations" opens the same history screen narrowed to one
+     * credential - [PresentationHistoryScreen]'s filterCredentialId,
+     * driven here. The filter does not survive an unfiltered open (null
+     * again), so the menu's History row stays the account-wide view.
+     */
+    private val _historyFilterCredentialId = MutableStateFlow<Long?>(null)
+    val historyFilterCredentialId: StateFlow<Long?> get() = _historyFilterCredentialId
+
+    fun openHistoryForCredential(credentialId: Long) {
+        refreshPresentationHistory()
+        _historyFilterCredentialId.value = credentialId
+        _showHistory.value = true
+    }
+
     fun openHistory() {
         refreshPresentationHistory()
+        _historyFilterCredentialId.value = null
         _showHistory.value = true
     }
 

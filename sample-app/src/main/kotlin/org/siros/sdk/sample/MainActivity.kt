@@ -773,12 +773,20 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 onBack = viewModel::closeCredentialDetail,
                 onDelete = { viewModel.deleteCredential(selectedCredential!!.id) },
                 onRenew = { viewModel.renewCredential(selectedCredential!!) },
+                // This credential's own presentation history, filtered
+                // (2026-11-16): the detail view's "Recent presentations".
+                onShowPresentations = viewModel::openHistoryForCredential,
                 credentialStatus = viewModel.credentialStatuses.collectAsState().value[selectedCredential!!.id],
             )
 
-            // Presentation history sub-screen
+            // Presentation history sub-screen - filtered when opened from
+            // a credential's detail view (openHistoryForCredential), the
+            // account-wide list otherwise.
             showHistory -> chrome(null, false, null) {
-                PresentationHistoryScreen(history = presentationHistory)
+                PresentationHistoryScreen(
+                    history = presentationHistory,
+                    filterCredentialId = viewModel.historyFilterCredentialId.collectAsState().value,
+                )
             }
 
             // The error journal ("Recent errors"): the last N failures with
@@ -788,6 +796,12 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 ErrorJournalScreen(
                     entries = errorJournalEntries,
                     onClear = viewModel::clearErrorJournal,
+                    // The presentation history rides the journal surface
+                    // (2026-11-16 review): the journal is the wallet's
+                    // messages-and-activity screen, so this account's
+                    // presentations list below the error entries.
+                    history = presentationHistory,
+                    onShowHistory = viewModel::openHistory,
                 )
             }
 
@@ -2120,17 +2134,6 @@ fun SettingsTab(
                             cachedAccounts = cachedAccounts,
                             onForgetAccount = onForgetAccount,
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        // Presentation history merged into General
-                        // (2026-11-16 review): the messages surface - the
-                        // journal lives on the menu's "Recent messages"
-                        // row, history is this account's activity log.
-                        SettingsLinkCard(
-                            title = "Presentation history",
-                            description = "This account's presentations ($presentationCount).",
-                            button = "Presentation history ($presentationCount)",
-                            onButton = onShowHistory,
-                        )
                     }
                     SettingsSection.BACKENDS -> {
                         BackendRegistryCard(
@@ -2298,7 +2301,7 @@ private fun SettingsMenu(
 
 @Composable
 private fun SettingsSection.description(): String = when (this) {
-    SettingsSection.GENERAL -> "This account, this app: facts, appearance, passkeys, accounts, history."
+    SettingsSection.GENERAL -> "This account, this app: facts, appearance, passkeys, other accounts."
     SettingsSection.BACKENDS -> "Every known backend, the current one, and the connection tuning."
     SettingsSection.TRUST -> "Reader (RICAL) and issuer (VICAL) trust; the key storages (WSCD)."
     SettingsSection.CREDENTIALS -> "Consumption policy, BBS types, TS12 transaction data."

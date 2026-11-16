@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.text.DateFormat
 import java.util.Date
@@ -48,6 +49,12 @@ import java.util.Date
 fun ErrorJournalScreen(
     entries: List<ErrorJournalEntry>,
     onClear: () -> Unit,
+    // The presentation history (2026-11-16 review): the journal is the
+    // wallet's messages-and-activity surface, so this account's
+    // presentations render below the error entries. Null = the older
+    // journal-only shape (kept for any call site that has no history).
+    history: List<org.siros.sdk.credentials.PresentationRecord>? = null,
+    onShowHistory: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     // The severity filter: All (default), Errors, Info. Chip state survives
@@ -128,6 +135,53 @@ fun ErrorJournalScreen(
         filtered.forEachIndexed { index, entry ->
             if (index > 0) Spacer(modifier = Modifier.height(8.dp))
             ErrorJournalCard(entry)
+        }
+
+        // The presentations, AGGREGATE (2026-11-16 review): the journal
+        // is the wallet's messages-and-activity surface, so it carries the
+        // account's presentation totals - count, the zero-knowledge share,
+        // the most recent one - with the full list one tap away in the
+        // history screen. NOT a per-record list here: the journal's rows
+        // are messages, not records.
+        if (history != null) {
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                text = stringResource(R.string.settings_presentation_history),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val zkCount = history.count { it.zkProof }
+            val last = history.maxByOrNull { it.timestamp }
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                    Text(
+                        "${history.size} presentation${if (history.size == 1) "" else "s"}" +
+                            (if (zkCount > 0) " · $zkCount zero-knowledge" else ""),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (last != null) {
+                        val time = remember(last.timestamp) {
+                            DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM).format(Date(last.timestamp))
+                        }
+                        Text(
+                            "Last: $time",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SirosDesign.secondaryText,
+                        )
+                    }
+                }
+            }
+            if (onShowHistory != null && history.isNotEmpty()) {
+                TextButton(onClick = onShowHistory) {
+                    Text("View history")
+                }
+            }
         }
         Spacer(modifier = Modifier.height(32.dp))
     }
