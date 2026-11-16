@@ -274,30 +274,13 @@ private fun PluginSpecificSection(
     PreferredWscdCard(pluginId, wscdGlobalOverride, onSetWscdGlobalOverride)
     Spacer(modifier = Modifier.height(24.dp))
 
-    // ── Developer section (collapsed by default) ────────────────────
-
-    var developerExpanded by rememberSaveable(pluginId) { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { developerExpanded = !developerExpanded }
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "Developer",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Icon(
-            if (developerExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-            contentDescription = if (developerExpanded) "Collapse" else "Expand",
-        )
-    }
-    if (developerExpanded) {
-        HorizontalDivider(modifier = Modifier.padding(bottom = 12.dp))
-        DeveloperSection(
+    // ── Developer sections (always visible since the 2026-11-16 settings
+    // restructure: this chrome previously HID the plugin transport/lifecycle/
+    // keys/build info behind a collapsed "Developer" expander, which is
+    // where the audit found them - "all settings are by default visible to
+    // the user". No collapsible indirection: they render in order with the
+    // rest of the plugin's settings.) ─────────────────────────────────
+    DeveloperSection(
             pluginId = pluginId,
             lifecycleState = lifecycleState,
             lifecycleStatus = lifecycleStatus,
@@ -315,7 +298,6 @@ private fun PluginSpecificSection(
             onRequestDestroy = onRequestDestroy,
             onRefresh = onRefresh,
         )
-    }
 }
 
 /**

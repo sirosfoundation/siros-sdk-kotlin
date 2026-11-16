@@ -507,6 +507,9 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             wmpSendUrl = wmpSendUrlState,
             wmpSseUrl = wmpSseUrlState,
             zkCircuitUrls = zkCircuitUrlsState,
+            backends = viewModel.knownBackends.collectAsState().value,
+            currentBackendId = viewModel.currentBackendId.collectAsState().value,
+            onSwitchBackend = viewModel::switchBackend,
             preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluationState,
             readerTrustRootCertificatePem = readerTrustRootCertificatePemState,
             engineLocalEnabled = engineLocalEnabledState,
@@ -547,6 +550,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
 
     // WSCA developer sub-screen state (read here so it's available in the `when` below)
     val showWscaDeveloper by viewModel.showWscaDeveloper.collectAsState()
+    val showIso18045Editor by viewModel.showIso18045Editor.collectAsState()
     val showDevices by viewModel.showDevices.collectAsState()
     // Where the user is among the screens the Home / Scan QR / Menu bar and the
     // menu lead to. The view-model's own flags (history, add credential, the
@@ -679,7 +683,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     // (consent, credential detail, settings sub-screens) keep their own Back.
     val chromeVisible = pendingAmbiguity == null && pendingPresentation == null && pendingTransactionConsent == null &&
         pendingPresentationConsent == null && !showTransactionLog && selectedCredential == null &&
-        !showDevices && !showWscaDeveloper && flowStarting == null
+        !showDevices && !showWscaDeveloper && !showIso18045Editor && flowStarting == null
     androidx.activity.compose.BackHandler(
         enabled = chromeVisible && (
             activateMode != null || showIDVPreparation || showAddCredential || showHistory || showErrorJournal ||
@@ -838,6 +842,17 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 )
             }
 
+            // The DEMO-ONLY ISO 18045 assurance-scheme editor (see
+            // Iso18045EditorScreen): full-attention editing of the mapping
+            // tables a production deployment fixes at integration time.
+            viewModel.showIso18045Editor.collectAsState().value -> {
+                Iso18045EditorScreen(
+                    state = viewModel.iso18045State.collectAsState().value,
+                    onUpdate = viewModel::updateIso18045State,
+                    onBack = viewModel::closeIso18045Editor,
+                )
+            }
+
             // Activate: the QR scanner, or an ISO 18013-5 device engagement
             // presented as an NFC tap or a displayed QR code - see
             // WalletViewModel.ActivateMode's doc comment. A full-attention
@@ -993,9 +1008,40 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             WalletDestination.About -> AboutScreen()
                             WalletDestination.Settings -> SettingsTab(
                             state = state,
+                            // The 2026-11-16 restructure bundles (SettingsSections.kt):
+                            // full trust modes, connection tuning, credential types.
+                            trustSettings = TrustSettings(
+                                readerMode = viewModel.readerTrustEvaluationMode.collectAsState().value,
+                                onReaderMode = viewModel::updateReaderTrustEvaluationMode,
+                                readerRootPem = viewModel.readerTrustRootCertificatePem.collectAsState().value,
+                                onReaderRootPem = viewModel::updateReaderTrustRootCertificatePem,
+                                issuerMode = viewModel.issuerTrustEvaluationMode.collectAsState().value,
+                                onIssuerMode = viewModel::updateIssuerTrustEvaluationMode,
+                                issuerRootPem = viewModel.issuerTrustRootCertificatePem.collectAsState().value,
+                                onIssuerRootPem = viewModel::updateIssuerTrustRootCertificatePem,
+                            ),
+                            connectionSettings = ConnectionSettings(
+                                registryUrl = viewModel.registryUrl.collectAsState().value,
+                                onRegistryUrl = viewModel::updateRegistryUrl,
+                                clockToleranceSeconds = viewModel.clockToleranceSeconds.collectAsState().value,
+                                onClockToleranceSeconds = viewModel::updateClockToleranceSeconds,
+                                trustDecisionCacheTtlSeconds = viewModel.trustDecisionCacheTtlSeconds.collectAsState().value,
+                                onTrustDecisionCacheTtlSeconds = viewModel::updateTrustDecisionCacheTtlSeconds,
+                                engineConnectRetries = viewModel.engineConnectRetries.collectAsState().value,
+                                onEngineConnectRetries = viewModel::updateEngineConnectRetries,
+                            ),
+                            credentialExtrasSettings = CredentialExtrasSettings(
+                                bbsCredentialTypes = viewModel.bbsCredentialTypes.collectAsState().value,
+                                onBbsCredentialTypes = viewModel::updateBbsCredentialTypes,
+                            ),
                             backendUrl = viewModel.backendUrl.collectAsState().value,
                             tenantId = viewModel.tenantId.collectAsState().value,
                             useWmpProtocol = useWmpProtocol,
+                            backends = viewModel.knownBackends.collectAsState().value,
+                            currentBackendId = viewModel.currentBackendId.collectAsState().value,
+                            onSaveBackend = viewModel::saveBackendProfile,
+                            onDeleteBackend = viewModel::deleteBackendProfile,
+                            onSwitchBackend = viewModel::switchBackend,
                             diipProfile = viewModel.diipProfile,
                             zkCircuitUrls = viewModel.zkCircuitUrls.collectAsState().value,
                             presentationCount = presentationHistory.size,
@@ -1004,29 +1050,32 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
                             onShowWscdSettings = viewModel::openWscaDeveloper,
+                            onShowIso18045Editor = viewModel::openIso18045Editor,
                             onShowDevices = viewModel::openDevices,
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
                             addingPasskey = viewModel.addingPasskey.collectAsState().value,
                             onAddPasskey = viewModel::addPasskey,
-                            showCredentialDetails = showCredentialDetails,
-                            onUpdateShowCredentialDetails = viewModel::updateShowCredentialDetails,
-                            showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
-                            onUpdateShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
                             showPhotoIdOnboarding = viewModel.showPhotoIdOnboarding.collectAsState().value,
                             onUpdateShowPhotoIdOnboarding = viewModel::updateShowPhotoIdOnboarding,
-                            transactionDataEnabled = viewModel.transactionDataEnabled.collectAsState().value,
-                            onUpdateTransactionDataEnabled = viewModel::updateTransactionDataEnabled,
-                            onShowTransactionLog = viewModel::openTransactionLog,
                             credentialConsumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
                             onUpdateCredentialConsumptionPolicy = viewModel::updateCredentialConsumptionPolicy,
+                            // The Diagnostics bundle (moved out of the Account card, 2026-11-16).
+                            diagnosticsSettings = DiagnosticsSettings(
+                                showCredentialDetails = showCredentialDetails,
+                                onShowCredentialDetails = viewModel::updateShowCredentialDetails,
+                                showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
+                                onShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
+                                vegaProfilingEnabled = viewModel.vegaProfilingEnabled.collectAsState().value,
+                                onVegaProfilingEnabled = viewModel::updateVegaProfilingEnabled,
+                                journalMaxEntries = viewModel.journalMaxEntries.collectAsState().value,
+                                onJournalMaxEntries = viewModel::updateJournalMaxEntries,
+                            ),
                             preferLocalReaderTrustEvaluation = viewModel.preferLocalReaderTrustEvaluation.collectAsState().value,
                             onUpdatePreferLocalReaderTrustEvaluation = viewModel::updatePreferLocalReaderTrustEvaluation,
                             readerTrustRootCertificatePem = viewModel.readerTrustRootCertificatePem.collectAsState().value,
                             onUpdateReaderTrustRootCertificatePem = viewModel::updateReaderTrustRootCertificatePem,
-                            vegaProfilingEnabled = viewModel.vegaProfilingEnabled.collectAsState().value,
-                            onUpdateVegaProfilingEnabled = viewModel::updateVegaProfilingEnabled,
                             walletPolicy = viewModel.walletPolicy.collectAsState().value,
                             onUpdateWalletPolicy = viewModel::updateWalletPolicy,
                         )
@@ -1086,6 +1135,11 @@ fun LoginScreen(
     wmpSendUrl: String,
     wmpSseUrl: String,
     zkCircuitUrls: List<String>,
+    // The registered backends to pick between before signing in (the
+    // pre-login picker materializes a profile into the connection fields).
+    backends: List<org.siros.sdk.sample.BackendProfile> = emptyList(),
+    currentBackendId: String? = null,
+    onSwitchBackend: (String) -> Unit = {},
     preferLocalReaderTrustEvaluation: Boolean = false,
     readerTrustRootCertificatePem: String = "",
     engineLocalEnabled: Boolean = true,
@@ -1127,6 +1181,9 @@ fun LoginScreen(
             wmpSendUrl = wmpSendUrl,
             wmpSseUrl = wmpSseUrl,
             zkCircuitUrls = zkCircuitUrls,
+            backends = backends,
+            currentBackendId = currentBackendId,
+            onSwitchBackend = onSwitchBackend,
             preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation,
             readerTrustRootCertificatePem = readerTrustRootCertificatePem,
             engineLocalEnabled = engineLocalEnabled,
@@ -1334,6 +1391,12 @@ fun PreLoginSettingsSheet(
     wmpSendUrl: String,
     wmpSseUrl: String,
     zkCircuitUrls: List<String>,
+    // The registered backends to pick between before signing in (switch
+    // materializes the profile into the fields below and disconnects -
+    // there is no wallet to disconnect yet, so it just sets the target).
+    backends: List<org.siros.sdk.sample.BackendProfile> = emptyList(),
+    currentBackendId: String? = null,
+    onSwitchBackend: (String) -> Unit = {},
     preferLocalReaderTrustEvaluation: Boolean = false,
     readerTrustRootCertificatePem: String = "",
     engineLocalEnabled: Boolean = true,
@@ -1352,9 +1415,9 @@ fun PreLoginSettingsSheet(
     onUpdateEngineTenantTokens: (Boolean) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
-    var editBackendUrl by remember { mutableStateOf(backendUrl) }
-    var editTenantId by remember { mutableStateOf(tenantId) }
-    var editEngineUrl by remember { mutableStateOf(engineUrl) }
+    var editBackendUrl by remember(backendUrl) { mutableStateOf(backendUrl) }
+    var editTenantId by remember(tenantId) { mutableStateOf(tenantId) }
+    var editEngineUrl by remember(engineUrl) { mutableStateOf(engineUrl) }
     // The WMP engine mode and the remote endpoints - edited locally, one
     // update carrying the triple (the mode change re-persists the pair).
     var editWmpEngineMode by remember { mutableStateOf(wmpEngineMode) }
@@ -1364,7 +1427,7 @@ fun PreLoginSettingsSheet(
     // One URL per line for editing - joined/split at the boundary with
     // onUpdateZkCircuitUrls rather than storing List<String> as Compose
     // TextField state directly.
-    var editZkCircuitUrls by remember { mutableStateOf(zkCircuitUrls.joinToString("\n")) }
+    var editZkCircuitUrls by remember(zkCircuitUrls) { mutableStateOf(zkCircuitUrls.joinToString("\n")) }
     var editReaderTrustRootCertificatePem by remember { mutableStateOf(readerTrustRootCertificatePem) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1386,6 +1449,51 @@ fun PreLoginSettingsSheet(
                 style = MaterialTheme.typography.bodySmall,
                 color = SirosDesign.secondaryText,
             )
+
+            // The registered backends first: picking one materializes it
+            // into the fields below (and the prefs they persist), so the
+            // login that follows runs against the picked backend. No
+            // confirmation dialog pre-login - there is no session to lose.
+            if (backends.isNotEmpty()) {
+                Column {
+                    Text(
+                        "Known backends",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SirosDesign.secondaryText,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    backends.forEach { profile ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = profile.id == currentBackendId,
+                                    onClick = { onSwitchBackend(profile.id) },
+                                )
+                                Column {
+                                    Text(
+                                        profile.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                    Text(
+                                        "${profile.backendUrl} · ${profile.tenantId}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = SirosDesign.secondaryText,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             OutlinedTextField(
                 value = editBackendUrl,
@@ -1890,6 +1998,14 @@ fun SettingsTab(
     backendUrl: String,
     tenantId: String,
     useWmpProtocol: Boolean,
+    // The backend registry (multi-backend add/switch; see BackendProfile).
+    // Android-only by design - the Swift sample app keeps a single backend
+    // (iOS registers redirect schemes statically in the Info.plist).
+    backends: List<org.siros.sdk.sample.BackendProfile> = emptyList(),
+    currentBackendId: String? = null,
+    onSaveBackend: (org.siros.sdk.sample.BackendProfile) -> Unit = {},
+    onDeleteBackend: (String) -> Unit = {},
+    onSwitchBackend: (String) -> Unit = {},
     /**
      * The DIIP release this wallet's wire behaviour follows. A build-time
      * choice (`WalletConfig.diipProfile`), so it is shown, not offered.
@@ -1903,6 +2019,7 @@ fun SettingsTab(
     onDeleteAccount: (confirmation: String) -> Unit,
     onShowHistory: () -> Unit,
     onShowWscdSettings: () -> Unit,
+    onShowIso18045Editor: () -> Unit = {},
     onShowDevices: () -> Unit = {},
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
@@ -1910,18 +2027,14 @@ fun SettingsTab(
     addingPasskey: Boolean = false,
     onAddPasskey: ((String) -> Unit)? = null,
     onUpdateUseWmpProtocol: ((Boolean) -> Unit)? = null,
-    showCredentialDetails: Boolean = false,
-    onUpdateShowCredentialDetails: ((Boolean) -> Unit)? = null,
-    showDiagnosticMessages: Boolean = true,
-    onUpdateShowDiagnosticMessages: ((Boolean) -> Unit)? = null,
     showPhotoIdOnboarding: Boolean = false,
     onUpdateShowPhotoIdOnboarding: ((Boolean) -> Unit)? = null,
-    transactionDataEnabled: Boolean = false,
-    onUpdateTransactionDataEnabled: ((Boolean) -> Unit)? = null,
-    onShowTransactionLog: (() -> Unit)? = null,
     credentialConsumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
         org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME,
     onUpdateCredentialConsumptionPolicy: ((org.siros.sdk.credentials.CredentialConsumptionPolicy) -> Unit)? = null,
+    // The Diagnostics bundle (SettingsSections.kt): the diagnostic toggles
+    // + the journal cap, moved out of the Account card 2026-11-16.
+    diagnosticsSettings: DiagnosticsSettings = DiagnosticsSettings(),
     // RICAL reader-trust local fallback - see PreLoginSettingsSheet's identical
     // controls for why this exists. Duplicated here (not moved) because
     // PreLoginSettingsSheet also configures backendUrl/tenantId, which must
@@ -1932,8 +2045,13 @@ fun SettingsTab(
     onUpdatePreferLocalReaderTrustEvaluation: ((Boolean) -> Unit)? = null,
     readerTrustRootCertificatePem: String = "",
     onUpdateReaderTrustRootCertificatePem: ((String) -> Unit)? = null,
-    vegaProfilingEnabled: Boolean = false,
-    onUpdateVegaProfilingEnabled: ((Boolean) -> Unit)? = null,
+    // The 2026-11-16 restructure: the full Security & Trust, Connection
+    // Tuning and Credential Types sections (SettingsSections.kt). The
+    // deprecated RICAL boolean above stays honored (buildWalletConfig
+    // reconciles) but the mode dropdowns are the real setting now.
+    trustSettings: TrustSettings = TrustSettings(),
+    connectionSettings: ConnectionSettings = ConnectionSettings(),
+    credentialExtrasSettings: CredentialExtrasSettings = CredentialExtrasSettings(),
     walletPolicy: org.siros.sdk.wallet.WalletPolicyOptions = org.siros.sdk.wallet.WalletPolicyOptions(),
     onUpdateWalletPolicy: ((org.siros.sdk.wallet.WalletPolicyOptions) -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -1953,6 +2071,20 @@ fun SettingsTab(
 
         // Appearance: follow the device, or always light, or always dark.
         AppearanceSetting()
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // The backend registry: every known backend, the current one, and
+        // the add/edit/delete/switch actions. First card under Appearance
+        // because the connection targets it manages are what everything
+        // below (and the login itself) run against. Switching logs out by
+        // design - see BackendRegistryCard.
+        BackendRegistryCard(
+            backends = backends,
+            currentBackendId = currentBackendId,
+            onSaveBackend = onSaveBackend,
+            onDeleteBackend = onDeleteBackend,
+            onSwitchBackend = onSwitchBackend,
+        )
         Spacer(modifier = Modifier.height(16.dp))
 
         // Account section
@@ -1988,197 +2120,28 @@ fun SettingsTab(
                     stringResource(R.string.settings_interop_profiles),
                     "HAIP \u00b7 DIIP ${diipProfile.version.uppercase()}",
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_credential_details),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_credential_details_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = showCredentialDetails,
-                        onCheckedChange = onUpdateShowCredentialDetails,
-                        enabled = onUpdateShowCredentialDetails != null,
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_diagnostic_messages),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_diagnostic_messages_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = showDiagnosticMessages,
-                        onCheckedChange = onUpdateShowDiagnosticMessages,
-                        enabled = onUpdateShowDiagnosticMessages != null,
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_photo_id_onboarding),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_photo_id_onboarding_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = showPhotoIdOnboarding,
-                        onCheckedChange = onUpdateShowPhotoIdOnboarding,
-                        enabled = onUpdateShowPhotoIdOnboarding != null,
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_transaction_data),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_transaction_data_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = transactionDataEnabled,
-                        onCheckedChange = onUpdateTransactionDataEnabled,
-                        enabled = onUpdateTransactionDataEnabled != null,
-                    )
-                }
-                TextButton(
-                    onClick = { onShowTransactionLog?.invoke() },
-                    enabled = onShowTransactionLog != null,
-                ) {
-                    Text(stringResource(R.string.settings_transaction_log))
-                }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Reader trust (RICAL) section - see PreLoginSettingsSheet's
-        // identical controls for the full rationale; kept reachable here too
-        // since flipping it mid-session (right before a proximity test) is
-        // the common case, and this tab - unlike the pre-login sheet - is
-        // still reachable once a wallet session is active.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Text(
-                    "Reader Trust (RICAL)",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = SirosDesign.secondaryText,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Evaluate reader trust locally", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "Skip the remote RICAL trust check and validate proximity readers " +
-                                "only against the root certificate below.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = preferLocalReaderTrustEvaluation,
-                        onCheckedChange = onUpdatePreferLocalReaderTrustEvaluation,
-                        enabled = onUpdatePreferLocalReaderTrustEvaluation != null,
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = readerTrustRootCertificatePem,
-                    onValueChange = { onUpdateReaderTrustRootCertificatePem?.invoke(it) },
-                    label = { Text("RICAL root certificate (PEM)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = onUpdateReaderTrustRootCertificatePem != null,
-                    singleLine = false,
-                )
-            }
-        }
+        // Security & Trust (SettingsSections.kt): the mode dropdowns that
+        // supersede the deprecated "evaluate locally" boolean - LOCAL_ONLY is
+        // what that toggle meant - plus the VICAL issuer side the UI never
+        // exposed. Both reachable mid-session for the same reason as before.
+        TrustSection(settings = trustSettings)
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // VEGA ZK proof profiling - see WalletConfig.vegaProfilingEnabled's
-        // doc comment for the file location and why it needs no root to pull.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_vega_profiling),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_vega_profiling_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = vegaProfilingEnabled,
-                        onCheckedChange = onUpdateVegaProfilingEnabled,
-                        enabled = onUpdateVegaProfilingEnabled != null,
-                    )
-                }
-            }
-        }
+        // Connection tuning (SettingsSections.kt): registry URL, clock
+        // tolerance, trust-decision cache TTL, engine connect retries -
+        // previously compiled-in defaults, unreachable from the UI.
+        ConnectionTuningSection(settings = connectionSettings)
 
         Spacer(modifier = Modifier.height(16.dp))
+
+        // VEGA profiling moved into DiagnosticsSection (SettingsSections.kt)
+        // with the other diagnostic toggles + the journal cap, 2026-11-16.
 
         RequestPolicyCard(policy = walletPolicy, onChange = onUpdateWalletPolicy)
 
@@ -2233,6 +2196,13 @@ fun SettingsTab(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Credential types (SettingsSections.kt): the BBS blind-credential
+        // vct list - the one deployment-decision credential knob the UI
+        // never exposed (WalletConfig.bbsCredentialTypes).
+        CredentialExtrasSection(settings = credentialExtrasSettings)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // WSCD settings - a single entry point into the consolidated,
         // tabbed WscdScreen (one tab per plugin: softkey/r2ps/fido2), which
         // now owns everything that used to be spread across four separate
@@ -2269,6 +2239,18 @@ fun SettingsTab(
                     shape = RoundedCornerShape(12.dp),
                 ) {
                     Text("WSCD Settings")
+                }
+                // The DEMO-ONLY ISO 18045 scheme editor (see
+                // Iso18045EditorScreen): the mapping tables a production
+                // deployment fixes at integration time, editable here so
+                // the WSCD selection policy can be demonstrated live.
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onShowIso18045Editor,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text("ISO 18045 assurance scheme (demo)")
                 }
             }
         }
@@ -2446,6 +2428,13 @@ fun SettingsTab(
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Diagnostics (SettingsSections.kt): the diagnostic toggles (moved
+        // out of the Account card - they are diagnostics, not account
+        // facts) and the error journal's cap (previously hard-coded 10).
+        DiagnosticsSection(settings = diagnosticsSettings)
 
         Spacer(modifier = Modifier.height(16.dp))
 
