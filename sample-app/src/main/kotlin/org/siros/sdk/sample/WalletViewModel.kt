@@ -1108,7 +1108,24 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _ts11DiscoveryInProgress.value = true
         viewModelScope.launch {
             try {
-                _ts11DiscoveredCredentials.value = Ts11CredentialDiscovery().discover()
+                // The CONFIGURED registry URL feeds the discovery (2026-11-16
+                // registry-dedup): Ts11RegistryClient defaults to the
+                // public registry.siros.org, so the Backends "TS11 registry
+                // URL" setting previously never reached this fetch - two
+                // registry URLs, two fetchers, no wiring. The configured URL
+                // rides first in the sources list (the client tries sources
+                // in order and merges); the public default stays as a
+                // fallback source, so a blank/demo configuration keeps the
+                // public catalog.
+                val configured = _registryUrl.value.trim().trimEnd('/')
+                val sources = buildList {
+                    if (configured.isNotBlank()) add(configured)
+                    add(org.siros.sdk.credentials.Ts11RegistryClient.DEFAULT_REGISTRY_URL)
+                }
+                _ts11DiscoveredCredentials.value =
+                    Ts11CredentialDiscovery(
+                        registryClient = org.siros.sdk.credentials.Ts11RegistryClient(sources = sources),
+                    ).discover()
             } catch (e: Exception) {
                 Log.w(TAG, "TS11 registry discovery failed", e)
             } finally {
@@ -3141,7 +3158,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             _walletInstances.value = wallet.listWalletInstances()
         } catch (e: Exception) {
             Log.w(TAG, "listWalletInstances failed", e)
-            _devicesError.value = localizedErrorMessage(e)
+            // Graceful degradation (2026-11-16): a 404 means this backend does
+            // not serve the wallet-instance lifecycle routes (the feature
+            // lives on the backend's wallet-instance-lifecycle release; the
+            // deployed GDC wallet-backend predates it). A plain "not
+            // supported by this backend" beats a raw API error for what is a
+            // deployment fact, not a failure the user can act on - and the
+            // screen stays usable (empty, with the message) rather than an
+            // unexpected-error dead end.
+            if (e is org.siros.sdk.credentials.BackendApiException && e.code == 404) {
+                _devicesError.value = "This backend does not support wallet instances (not deployed)."
+            } else {
+                _devicesError.value = localizedErrorMessage(e)
+            }
         } finally {
             _devicesLoading.value = false
         }
