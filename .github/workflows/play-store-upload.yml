@@ -22,6 +22,13 @@ jobs:
   upload:
     name: Build signed AAB & upload to Play Store internal track
     runs-on: ubuntu-latest
+    # packages: read — the bundle build resolves the native AARs from
+    # GH Packages (per-repo scoped, read needs auth); without this the
+    # GITHUB_TOKEN the build env now passes cannot authenticate
+    # (the v0.23.2 upload failure, 2026-11-16).
+    permissions:
+      contents: read
+      packages: read
     needs: nymauth-native
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +57,16 @@ jobs:
         run: echo "${{ secrets.UPLOAD_KEYSTORE_BASE64 }}" | base64 -d > upload.jks
 
       - name: Build signed release AAB
+        # GITHUB_TOKEN into the env: settings.gradle.kts reads
+        # GITHUB_ACTOR/GITHUB_TOKEN for the GH Packages Maven credentials
+        # (the native AARs — siros-wallet-core, siros-dc-matcher,
+        # zk-cred-*, wscd-manager — all live in GH Packages, scoped
+        # per-repo, read needs auth). Without it every GH Packages entry
+        # answers 401 and the wallet-core pin cannot resolve (the
+        # v0.23.2 upload failure, 2026-11-16).
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ./gradlew :sample-app:bundleRelease -x test -x lint \
             -Pandroid.injected.signing.store.file=${{ github.workspace }}/upload.jks \
