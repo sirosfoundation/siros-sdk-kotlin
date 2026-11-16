@@ -37,6 +37,15 @@ data class ConnectionSettings(
     /** Connect attempts per engine provider before failover. */
     val engineConnectRetries: Int = 2,
     val onEngineConnectRetries: (Int) -> Unit = {},
+    /** The TS11 credential-tier catalog (the F.18 baseline-tier mechanism). */
+    val tierCatalogEnabled: Boolean = false,
+    val onTierCatalogEnabled: (Boolean) -> Unit = {},
+    /** The catalog snapshot's TTL, minutes. */
+    val tierCatalogTtlMinutes: Long = 60,
+    val onTierCatalogTtlMinutes: (Long) -> Unit = {},
+    /** How stale a failed refresh may be before Unavailable, hours. */
+    val tierCatalogMaxStaleHours: Long = 24,
+    val onTierCatalogMaxStaleHours: (Long) -> Unit = {},
 )
 
 /** The Credentials section's extra knobs (consumption policy stays separate). */

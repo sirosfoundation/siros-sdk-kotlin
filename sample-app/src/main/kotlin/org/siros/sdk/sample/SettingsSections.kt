@@ -186,6 +186,50 @@ fun ConnectionTuningSection(settings: ConnectionSettings) {
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
+        Spacer(modifier = Modifier.height(16.dp))
+        // The TS11 credential-tier catalog (2026-11-16): the baseline
+        // key-storage tier at issuance - the F.18 tier-forcing mechanism's
+        // driving catalog, previously entirely unexposed
+        // (WalletConfig.credentialTierCatalog). ON builds a
+        // Ts11CredentialTierCatalog over the registry; the cache windows
+        // follow (the snapshot's TTL, and how stale a failed refresh may be
+        // before the answer is Unavailable - never trusted indefinitely).
+        ToggleRow(
+            label = "Credential tier catalog (TS11)",
+            description = "Ask the TS11 registry for each credential type's baseline key-storage tier at issuance.",
+            checked = settings.tierCatalogEnabled,
+            onCheckedChange = settings.onTierCatalogEnabled,
+        )
+        if (settings.tierCatalogEnabled) {
+            var ttl by remember(settings.tierCatalogTtlMinutes) {
+                mutableStateOf(settings.tierCatalogTtlMinutes.toString())
+            }
+            var stale by remember(settings.tierCatalogMaxStaleHours) {
+                mutableStateOf(settings.tierCatalogMaxStaleHours.toString())
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = ttl,
+                onValueChange = {
+                    ttl = it
+                    it.toLongOrNull()?.let(settings.onTierCatalogTtlMinutes)
+                },
+                label = { Text("Snapshot TTL (minutes)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = stale,
+                onValueChange = {
+                    stale = it
+                    it.toLongOrNull()?.let(settings.onTierCatalogMaxStaleHours)
+                },
+                label = { Text("Max stale after failed refresh (hours)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+        }
     }
 }
 
@@ -328,5 +372,72 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
             Spacer(modifier = Modifier.height(12.dp))
             content()
         }
+    }
+}
+/**
+ * The Profiles section (2026-11-16 review): the presentation-behavior
+ * profiles - TS12 transaction data today. Its own sub-menu so the
+ * credential-policy sections stay about credentials, not flows.
+ */
+@Composable
+fun ProfileSection(
+    transactionDataEnabled: Boolean,
+    onTransactionDataEnabled: (Boolean) -> Unit,
+    onShowTransactionLog: (() -> Unit)?,
+) {
+    SectionCard(title = "Profiles") {
+        Text(
+            "How presentations behave per flow - the TS12 transaction-data " +
+                "(SCA) profile today.",
+            style = MaterialTheme.typography.bodySmall,
+            color = SirosDesign.secondaryText,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        ToggleRow(
+            label = "Transaction data (EC TS12 SCA)",
+            description = "Handle transaction_data requests in presentations.",
+            checked = transactionDataEnabled,
+            onCheckedChange = onTransactionDataEnabled,
+        )
+        onShowTransactionLog?.let { showLog ->
+            Spacer(modifier = Modifier.height(8.dp))
+            androidx.compose.material3.OutlinedButton(
+                onClick = showLog,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Transaction log") }
+        }
+    }
+}
+
+/**
+ * The BBS blind-credential types card (2026-11-16 review: moved from the
+ * Credentials section to ZKP & Proofs - which credentials the BBS prover
+ * may present is a ZKP-prover concern).
+ */
+@Composable
+fun BbsCredentialTypesCard(
+    types: List<String>,
+    onTypes: (List<String>) -> Unit,
+) {
+    var text by remember(types) { mutableStateOf(types.joinToString("\n")) }
+    SectionCard(title = "BBS credentials") {
+        Text(
+            "Credential types (vct values) handled as blind BBS credentials - " +
+                "a deployment decision; one per line. Takes effect at the next " +
+                "wallet construction.",
+            style = MaterialTheme.typography.bodySmall,
+            color = SirosDesign.secondaryText,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = text,
+            onValueChange = {
+                text = it
+                onTypes(it.lines().map(String::trim).filter(String::isNotEmpty))
+            },
+            label = { Text("BBS credential types") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = false,
+        )
     }
 }

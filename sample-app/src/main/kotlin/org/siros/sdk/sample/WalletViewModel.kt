@@ -336,6 +336,23 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     val engineConnectRetries: StateFlow<Int> get() = _engineConnectRetries
 
     /**
+     * The TS11 credential-tier catalog (see
+     * [org.siros.sdk.wallet.WalletConfig.credentialTierCatalog]): ON builds
+     * a [org.siros.sdk.credentials.Ts11CredentialTierCatalog] over the TS11
+     * registry (the baseline key-storage tier at issuance - the F.18
+     * demo's driving mechanism, the audit's item the UI never exposed);
+     * OFF (the default) keeps the SDK's issuer-metadata-only behavior.
+     * The catalog's own TTL (1h) and max-stale (24h) windows follow it -
+     * the cache's freshness policy, previously compiled-in.
+     */
+    private val _tierCatalogEnabled: MutableStateFlow<Boolean>
+    val tierCatalogEnabled: StateFlow<Boolean> get() = _tierCatalogEnabled
+    private val _tierCatalogTtlMinutes: MutableStateFlow<Long>
+    val tierCatalogTtlMinutes: StateFlow<Long> get() = _tierCatalogTtlMinutes
+    private val _tierCatalogMaxStaleHours: MutableStateFlow<Long>
+    val tierCatalogMaxStaleHours: StateFlow<Long> get() = _tierCatalogMaxStaleHours
+
+    /**
      * Whether payment confirmation (EC TS12 `transaction_data`) requests are
      * handled. Persisted here and applied to the SDK at runtime by
      * [updateTransactionDataEnabled] - the SDK owns every decision about it.
@@ -486,6 +503,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         )
         _engineConnectRetries = MutableStateFlow(
             (prefs.getString("engine_connect_retries", null)?.toIntOrNull()) ?: 2
+        )
+        // The TS11 tier catalog: OFF = the SDK's issuer-metadata-only
+        // behavior (the null config default); ON = a
+        // Ts11CredentialTierCatalog over the registry, with its cache
+        // windows (TTL/max-stale) alongside.
+        _tierCatalogEnabled = MutableStateFlow(
+            prefs.getBoolean("tier_catalog_enabled", false)
+        )
+        _tierCatalogTtlMinutes = MutableStateFlow(
+            (prefs.getString("tier_catalog_ttl_minutes", null)?.toLongOrNull()) ?: 60L
+        )
+        _tierCatalogMaxStaleHours = MutableStateFlow(
+            (prefs.getString("tier_catalog_max_stale_hours", null)?.toLongOrNull()) ?: 24L
         )
         _transactionDataEnabled = MutableStateFlow(
             activity.getSharedPreferences(SETTINGS_PREFS, android.content.Context.MODE_PRIVATE).getBoolean("transaction_data_enabled", false),
@@ -860,6 +890,27 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _engineConnectRetries.value = retries
         activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
             .edit().putString("engine_connect_retries", retries.toString()).apply()
+    }
+
+    // The TS11 tier catalog (see _tierCatalogEnabled): on/off plus the
+    // cache windows. Applied at the next wallet construction, same as the
+    // other build-time knobs.
+    fun updateTierCatalogEnabled(enabled: Boolean) {
+        _tierCatalogEnabled.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("tier_catalog_enabled", enabled).apply()
+    }
+
+    fun updateTierCatalogTtlMinutes(minutes: Long) {
+        _tierCatalogTtlMinutes.value = minutes
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("tier_catalog_ttl_minutes", minutes.toString()).apply()
+    }
+
+    fun updateTierCatalogMaxStaleHours(hours: Long) {
+        _tierCatalogMaxStaleHours.value = hours
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("tier_catalog_max_stale_hours", hours.toString()).apply()
     }
 
     // ── Plugin / R2PS configuration ──────────────────────────────────
@@ -3857,6 +3908,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     .replace("http://vc-proxy:8443", proxyUrl)
             } else null,
             availableKeystores = availableKeystores,
+            // The TS11 credential-tier catalog (see _tierCatalogEnabled):
+            // ON builds one over the registry with the configured cache
+            // windows; OFF keeps the SDK's issuer-metadata-only default.
+            // Needs availableKeystores (the config constructor enforces
+            // it - the tier is met by one of the registered keystores).
+            credentialTierCatalog = if (_tierCatalogEnabled.value && availableKeystores.isNotEmpty()) {
+                org.siros.sdk.credentials.Ts11CredentialTierCatalog(
+                    ttlMillis = _tierCatalogTtlMinutes.value * 60_000,
+                    maxStaleMillis = _tierCatalogMaxStaleHours.value * 3_600_000,
+                )
+            } else {
+                null
+            },
             // Developer-supplied via WscdScreen's collapsible Developer
             // section ("Default WSCD Mapping" text box) - dev/host-app
             // config, not an end-user setting, so it lives there rather
