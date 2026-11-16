@@ -40,6 +40,11 @@ import org.siros.sdk.wallet.dcapi.ExpectedOriginsMode
  * The wallet's request policy as settings. A thin view over
  * [WalletPolicyOptions]: every decision lives in the SDK, this only edits the
  * data and hands it back. Applied when the wallet is next created.
+ *
+ * 2026-11-16 split: the ZKP-specific decisions (circuit_zk, the fake prover,
+ * the proof system, the verifier-id types) moved to [ZkpPolicyCard] - their
+ * own sub-menu - so this card holds the credential-policy decisions only:
+ * non-disclosure, expected origins, signed requests.
  */
 @Composable
 fun RequestPolicyCard(
@@ -76,6 +81,53 @@ fun RequestPolicyCard(
                 label = { if (it == NonDisclosureMode.DEFAULT) R.string.settings_policy_non_disclosure_default else R.string.settings_policy_non_disclosure_none },
                 enabled = enabled,
             ) { update(policy.copy(nonDisclosure = it)) }
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.settings_policy_applies_next),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * The wallet's ZKP presentation policy (2026-11-16 split from
+ * [RequestPolicyCard]): the circuit-ZK decisions - the circuit_zk switch,
+ * the fake prover, the proof system choice, and the ordered verifier-id
+ * types. All of them are ZKP-prover settings, none of them general request
+ * policy, so they share this one sub-menu. Same thin-view contract:
+ * everything lives in [WalletPolicyOptions], applied when the wallet is
+ * next created.
+ */
+@Composable
+fun ZkpPolicyCard(
+    policy: WalletPolicyOptions,
+    onChange: ((WalletPolicyOptions) -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val enabled = onChange != null
+    fun update(new: WalletPolicyOptions) = onChange?.invoke(new)
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+            Text(
+                "ZKP & proofs",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                stringResource(R.string.settings_policy_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
 
             PolicySwitch(R.string.settings_policy_circuit_zk, R.string.settings_policy_circuit_zk_description, policy.circuitZk, enabled) {
                 update(policy.copy(circuitZk = it))

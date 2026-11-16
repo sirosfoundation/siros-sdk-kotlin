@@ -139,6 +139,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     val backendUrl: StateFlow<String> get() = _backendUrl
 
     /**
+     * The multi-backend registry (Android-only by design - see
+     * [BackendProfile]): every backend the user has registered, and which
+     * one the app currently targets. Seeded from the current settings on
+     * first run (init) so a pre-profiles user starts with their existing
+     * backend as the "Default" profile; managed through the Settings
+     * "Backends" card and the pre-login picker (see [switchBackend]).
+     */
+    private var _knownBackends: MutableStateFlow<List<BackendProfile>>
+    val knownBackends: StateFlow<List<BackendProfile>> get() = _knownBackends
+
+    /** The registry id of the backend the app currently targets. */
+    private var _currentBackendId: MutableStateFlow<String?>
+    val currentBackendId: StateFlow<String?> get() = _currentBackendId
+
+    /**
      * Mirror base URLs for the go-zk-circuits catalog service (see
      * [org.siros.sdk.wallet.WalletConfig.zkCircuitUrls]'s doc comment) -
      * unlike [backendUrl], this persists on every update (see
@@ -246,6 +261,97 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _readerTrustRootCertificatePem: MutableStateFlow<String>
     val readerTrustRootCertificatePem: StateFlow<String> get() = _readerTrustRootCertificatePem
 
+    // ── The 2026-11-16 settings-coverage additions (all persisted in
+    // siros_test_overrides, applied by buildWalletConfig) ────────────
+
+    /**
+     * The TS11 credential-type registry base URL (see
+     * [org.siros.sdk.wallet.WalletConfig.registryUrl]) - blank means the
+     * SDK's derived default (`<backendUrl>/registry`), matching that
+     * config field's null default.
+     */
+    private val _registryUrl: MutableStateFlow<String>
+    val registryUrl: StateFlow<String> get() = _registryUrl
+
+    /**
+     * Validity-window / status-list clock-skew leeway in seconds (see
+     * [org.siros.sdk.wallet.WalletConfig.clockToleranceSeconds]). Persisted
+     * because a demo deployment with deliberately-expired test data needs
+     * it larger than the 60s default.
+     */
+    private val _clockToleranceSeconds: MutableStateFlow<Long>
+    val clockToleranceSeconds: StateFlow<Long> get() = _clockToleranceSeconds
+
+    /**
+     * The reuse window for identical successful remote trust decisions, in
+     * seconds (see [org.siros.sdk.wallet.WalletConfig.trustDecisionCacheTtl]
+     * - a Duration there, a plain long here). 0 disables the cache; the
+     * default 300 matches the SDK's own default.
+     */
+    private val _trustDecisionCacheTtlSeconds: MutableStateFlow<Long>
+    val trustDecisionCacheTtlSeconds: StateFlow<Long> get() = _trustDecisionCacheTtlSeconds
+
+    /**
+     * A single PEM-encoded VICAL root certificate for local issuer-trust
+     * fallback (see [org.siros.sdk.wallet.WalletConfig.issuerTrustRootCertificatesPem]) -
+     * the issuer-side mirror of [readerTrustRootCertificatePem], previously
+     * entirely unexposed.
+     */
+    private val _issuerTrustRootCertificatePem: MutableStateFlow<String>
+    val issuerTrustRootCertificatePem: StateFlow<String> get() = _issuerTrustRootCertificatePem
+
+    /**
+     * Which evaluation path reader (RICAL) trust takes (see
+     * [org.siros.sdk.wallet.WalletConfig.readerTrustEvaluationMode]). The
+     * deprecated boolean toggle covered only a fragment of this; the mode
+     * is the full setting.
+     */
+    private val _readerTrustEvaluationMode: MutableStateFlow<org.siros.sdk.wallet.MdocTrustEvaluationMode>
+    val readerTrustEvaluationMode: StateFlow<org.siros.sdk.wallet.MdocTrustEvaluationMode> get() = _readerTrustEvaluationMode
+
+    /**
+     * The VICAL mirror of [readerTrustEvaluationMode] (see
+     * [org.siros.sdk.wallet.WalletConfig.issuerTrustEvaluationMode]) -
+     * independently configurable, matching the two config fields'
+     * independence.
+     */
+    private val _issuerTrustEvaluationMode: MutableStateFlow<org.siros.sdk.wallet.MdocTrustEvaluationMode>
+    val issuerTrustEvaluationMode: StateFlow<org.siros.sdk.wallet.MdocTrustEvaluationMode> get() = _issuerTrustEvaluationMode
+
+    /**
+     * Credential types (vct values) handled as blind BBS credentials (see
+     * [org.siros.sdk.wallet.WalletConfig.bbsCredentialTypes]) - a
+     * deployment decision surfaced for demo completeness; one vct per
+     * line in the editor.
+     */
+    private val _bbsCredentialTypes: MutableStateFlow<List<String>>
+    val bbsCredentialTypes: StateFlow<List<String>> get() = _bbsCredentialTypes
+
+    /**
+     * Connect attempts per engine provider before failover (see
+     * [org.siros.sdk.wallet.WalletConfig.engineConnectRetries]) -
+     * previously hardcoded at the SDK default of 2.
+     */
+    private val _engineConnectRetries: MutableStateFlow<Int>
+    val engineConnectRetries: StateFlow<Int> get() = _engineConnectRetries
+
+    /**
+     * The TS11 credential-tier catalog (see
+     * [org.siros.sdk.wallet.WalletConfig.credentialTierCatalog]): ON builds
+     * a [org.siros.sdk.credentials.Ts11CredentialTierCatalog] over the TS11
+     * registry (the baseline key-storage tier at issuance - the F.18
+     * demo's driving mechanism, the audit's item the UI never exposed);
+     * OFF (the default) keeps the SDK's issuer-metadata-only behavior.
+     * The catalog's own TTL (1h) and max-stale (24h) windows follow it -
+     * the cache's freshness policy, previously compiled-in.
+     */
+    private val _tierCatalogEnabled: MutableStateFlow<Boolean>
+    val tierCatalogEnabled: StateFlow<Boolean> get() = _tierCatalogEnabled
+    private val _tierCatalogTtlMinutes: MutableStateFlow<Long>
+    val tierCatalogTtlMinutes: StateFlow<Long> get() = _tierCatalogTtlMinutes
+    private val _tierCatalogMaxStaleHours: MutableStateFlow<Long>
+    val tierCatalogMaxStaleHours: StateFlow<Long> get() = _tierCatalogMaxStaleHours
+
     /**
      * Whether payment confirmation (EC TS12 `transaction_data`) requests are
      * handled. Persisted here and applied to the SDK at runtime by
@@ -285,6 +391,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _backendUrl = MutableStateFlow(prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL)
         _engineUrlOverride = MutableStateFlow(prefs.getString("engine_url", null) ?: "")
         _tenantId = MutableStateFlow(prefs.getString("tenant_id", null) ?: DEFAULT_TENANT_ID)
+        // The multi-backend registry (Android-only; see BackendProfiles) -
+        // seeded below once the individual settings exist.
+        _knownBackends = MutableStateFlow(emptyList())
+        _currentBackendId = MutableStateFlow(null)
         // JSON-encoded list (no existing precedent in this prefs store for a
         // List<String> value) - falls back to the single-mirror default
         // when absent or unparseable (e.g. a value written by a future
@@ -361,6 +471,52 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _readerTrustRootCertificatePem = MutableStateFlow(
             prefs.getString("reader_trust_root_certificate_pem", null) ?: ""
         )
+        // The 2026-11-16 additions: same prefs store, same read-once-at-
+        // construction pattern as the settings above.
+        _registryUrl = MutableStateFlow(prefs.getString("registry_url", null) ?: "")
+        _clockToleranceSeconds = MutableStateFlow(
+            (prefs.getString("clock_tolerance_seconds", null)?.toLongOrNull()) ?: 60L
+        )
+        _trustDecisionCacheTtlSeconds = MutableStateFlow(
+            (prefs.getString("trust_decision_cache_ttl_seconds", null)?.toLongOrNull()) ?: 300L
+        )
+        _issuerTrustRootCertificatePem = MutableStateFlow(
+            prefs.getString("issuer_trust_root_certificate_pem", null) ?: ""
+        )
+        // The mode knobs: absent key = the SDK default
+        // (REMOTE_WITH_LOCAL_FALLBACK), not a stored name - so a stored
+        // REMOTE_ONLY from an older build cannot silently narrow.
+        _readerTrustEvaluationMode = MutableStateFlow(
+            prefs.getString("reader_trust_evaluation_mode", null)
+                ?.let { runCatching { org.siros.sdk.wallet.MdocTrustEvaluationMode.valueOf(it) }.getOrNull() }
+                ?: org.siros.sdk.wallet.MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK
+        )
+        _issuerTrustEvaluationMode = MutableStateFlow(
+            prefs.getString("issuer_trust_evaluation_mode", null)
+                ?.let { runCatching { org.siros.sdk.wallet.MdocTrustEvaluationMode.valueOf(it) }.getOrNull() }
+                ?: org.siros.sdk.wallet.MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK
+        )
+        _bbsCredentialTypes = MutableStateFlow(
+            prefs.getString("bbs_credential_types", null)?.let { raw ->
+                runCatching { Json.decodeFromString(ListSerializer(String.serializer()), raw) }.getOrNull()
+            } ?: emptyList()
+        )
+        _engineConnectRetries = MutableStateFlow(
+            (prefs.getString("engine_connect_retries", null)?.toIntOrNull()) ?: 2
+        )
+        // The TS11 tier catalog: OFF = the SDK's issuer-metadata-only
+        // behavior (the null config default); ON = a
+        // Ts11CredentialTierCatalog over the registry, with its cache
+        // windows (TTL/max-stale) alongside.
+        _tierCatalogEnabled = MutableStateFlow(
+            prefs.getBoolean("tier_catalog_enabled", false)
+        )
+        _tierCatalogTtlMinutes = MutableStateFlow(
+            (prefs.getString("tier_catalog_ttl_minutes", null)?.toLongOrNull()) ?: 60L
+        )
+        _tierCatalogMaxStaleHours = MutableStateFlow(
+            (prefs.getString("tier_catalog_max_stale_hours", null)?.toLongOrNull()) ?: 24L
+        )
         _transactionDataEnabled = MutableStateFlow(
             activity.getSharedPreferences(SETTINGS_PREFS, android.content.Context.MODE_PRIVATE).getBoolean("transaction_data_enabled", false),
         )
@@ -372,6 +528,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 org.siros.sdk.wallet.WalletPolicyOptions.fromStored { p.getString("$POLICY_PREFIX$it", null) }
             },
         )
+        // The backend registry: seeded from the current settings on first
+        // run (BackendProfiles.seed), so a user who configured a backend
+        // before profiles existed starts with it as their "Default"
+        // profile rather than an empty picker. The individual flows above
+        // stay the wallet's actual source of truth; the registry is the
+        // user's management layer (see switchBackend).
+        _knownBackends.value = org.siros.sdk.sample.BackendProfiles.seed(
+            activity,
+            _backendUrl.value,
+            _tenantId.value,
+            _engineUrlOverride.value,
+            _zkCircuitUrls.value,
+        )
+        _currentBackendId.value = org.siros.sdk.sample.BackendProfiles.currentId(activity)
     }
 
     // ── Payment confirmation (EC TS12) ──────────────────────────────
@@ -451,6 +621,84 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
     fun updateTenantId(id: String) { _tenantId.value = id }
     fun updateEngineUrl(url: String) { _engineUrlOverride.value = url }
+
+    // ── The backend registry (multi-backend; see BackendProfiles) ────────
+
+    /**
+     * Every backend the user has registered, seeded from the current
+     * settings on first run (BackendProfiles.seed). The individual
+     * `_backendUrl`-style flows stay the single source the wallet reads;
+     * the registry is what the user manages.
+     */
+    /**
+     * Upserts a profile into the registry. The caller hands the complete
+     * profile (an edited copy); the id decides add vs edit.
+     *
+     * Editing the CURRENT backend also materializes the edit into the
+     * individual connection settings (the prefs every reader consumes) -
+     * found in review 2026-11-16: an edit to the active profile previously
+     * changed only the registry, so the app kept running against the OLD
+     * values until the user switched away and back. The materialization is
+     * the same one [switchBackend] performs, minus the logout: the
+     * settings are pre-login by design, and an in-place edit takes effect
+     * at the next wallet construction, exactly like typing into the
+     * pre-login fields does.
+     */
+    fun saveBackendProfile(profile: org.siros.sdk.sample.BackendProfile) {
+        val next = _knownBackends.value.filterNot { it.id == profile.id } + profile
+        _knownBackends.value = next
+        org.siros.sdk.sample.BackendProfiles.save(activity, next)
+        if (profile.id == _currentBackendId.value) {
+            materializeBackendProfile(profile)
+        }
+    }
+
+    /** Writes a profile into the individual connection prefs and flows. */
+    private fun materializeBackendProfile(profile: org.siros.sdk.sample.BackendProfile) {
+        val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+        _backendUrl.value = profile.backendUrl
+        _tenantId.value = profile.tenantId
+        _engineUrlOverride.value = profile.engineUrl
+        if (profile.zkCircuitUrls.isNotEmpty()) {
+            _zkCircuitUrls.value = profile.zkCircuitUrls
+        }
+        prefs.edit()
+            .putString("backend_url", profile.backendUrl)
+            .putString("tenant_id", profile.tenantId)
+            .putString("engine_url", profile.engineUrl)
+            .apply()
+        if (profile.zkCircuitUrls.isNotEmpty()) {
+            prefs.edit().putString(
+                "zk_circuit_urls",
+                Json.encodeToString(ListSerializer(String.serializer()), profile.zkCircuitUrls),
+            ).apply()
+        }
+    }
+
+    fun deleteBackendProfile(id: String) {
+        // The current backend cannot be deleted out from under the active
+        // wallet: switch away first, then delete.
+        if (id == _currentBackendId.value) return
+        val next = _knownBackends.value.filterNot { it.id == id }
+        _knownBackends.value = next
+        org.siros.sdk.sample.BackendProfiles.save(activity, next)
+    }
+
+    /**
+     * Switches the app to a registered backend. Materializes the profile
+     * into the individual connection prefs (the keys every existing reader
+     * consumes), marks it current, and disconnects the active wallet: the
+     * wallet's account, credentials and cached trust are bound to the
+     * backend they came from, so a switch is a logout followed by a login
+     * against the new backend. No silent cross-backend anything.
+     */
+    fun switchBackend(id: String) {
+        val profile = _knownBackends.value.firstOrNull { it.id == id } ?: return
+        materializeBackendProfile(profile)
+        org.siros.sdk.sample.BackendProfiles.saveCurrentId(activity, profile.id)
+        _currentBackendId.value = profile.id
+        disconnect()
+    }
 
     /**
      * Updates and persists the configured zk-circuits mirror list
@@ -608,6 +856,81 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             .apply()
     }
 
+    // ── The 2026-11-16 settings-coverage additions: same store, same
+    // persist-on-every-update pattern; applied at the next wallet
+    // construction (buildWalletConfig) ──────────────────────────────
+
+    fun updateRegistryUrl(url: String) {
+        _registryUrl.value = url
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("registry_url", url).apply()
+    }
+
+    fun updateClockToleranceSeconds(seconds: Long) {
+        _clockToleranceSeconds.value = seconds
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("clock_tolerance_seconds", seconds.toString()).apply()
+    }
+
+    fun updateTrustDecisionCacheTtlSeconds(seconds: Long) {
+        _trustDecisionCacheTtlSeconds.value = seconds
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("trust_decision_cache_ttl_seconds", seconds.toString()).apply()
+    }
+
+    fun updateIssuerTrustRootCertificatePem(pem: String) {
+        _issuerTrustRootCertificatePem.value = pem
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("issuer_trust_root_certificate_pem", pem).apply()
+    }
+
+    fun updateReaderTrustEvaluationMode(mode: org.siros.sdk.wallet.MdocTrustEvaluationMode) {
+        _readerTrustEvaluationMode.value = mode
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("reader_trust_evaluation_mode", mode.name).apply()
+    }
+
+    fun updateIssuerTrustEvaluationMode(mode: org.siros.sdk.wallet.MdocTrustEvaluationMode) {
+        _issuerTrustEvaluationMode.value = mode
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("issuer_trust_evaluation_mode", mode.name).apply()
+    }
+
+    fun updateBbsCredentialTypes(types: List<String>) {
+        _bbsCredentialTypes.value = types
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("bbs_credential_types", Json.encodeToString(ListSerializer(String.serializer()), types))
+            .apply()
+    }
+
+    fun updateEngineConnectRetries(retries: Int) {
+        _engineConnectRetries.value = retries
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("engine_connect_retries", retries.toString()).apply()
+    }
+
+    // The TS11 tier catalog (see _tierCatalogEnabled): on/off plus the
+    // cache windows. Applied at the next wallet construction, same as the
+    // other build-time knobs.
+    fun updateTierCatalogEnabled(enabled: Boolean) {
+        _tierCatalogEnabled.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("tier_catalog_enabled", enabled).apply()
+    }
+
+    fun updateTierCatalogTtlMinutes(minutes: Long) {
+        _tierCatalogTtlMinutes.value = minutes
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("tier_catalog_ttl_minutes", minutes.toString()).apply()
+    }
+
+    fun updateTierCatalogMaxStaleHours(hours: Long) {
+        _tierCatalogMaxStaleHours.value = hours
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("tier_catalog_max_stale_hours", hours.toString()).apply()
+    }
+
     // ── Plugin / R2PS configuration ──────────────────────────────────
 
     /**
@@ -702,7 +1025,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * would supply this as a genuine compile-time config value, not a
      * runtime user setting.
      */
-    private val _defaultWscdMappingText = MutableStateFlow("")
+    private val _defaultWscdMappingText = MutableStateFlow(
+        // The persisted F.18 mapping table (see updateDefaultWscdMappingText
+        // for the 2026-11-16 persistence change); blank = none.
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .getString("default_wscd_mapping_text", null) ?: ""
+    )
     val defaultWscdMappingText: StateFlow<String> = _defaultWscdMappingText
 
     /**
@@ -711,8 +1039,31 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * usable as [WalletConfig.defaultWscdMapping] (same `"issuer|credentialType"`
      * key shape that class documents).
      */
-    private val _defaultWscdMapping = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val _defaultWscdMapping = MutableStateFlow(
+        // Parsed at declaration from the SAME persisted text (not a second
+        // read that could disagree): the wallet's buildWalletConfig reads
+        // this from [wallet]'s initializer, which runs BEFORE any body
+        // statement below - so anything not initialized here is empty-map
+        // at the only moment it matters.
+        _defaultWscdMappingText.value.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it.contains('=') }
+            .associate { line ->
+                val (key, pluginId) = line.split('=', limit = 2)
+                key.trim() to pluginId.trim()
+            }
+    )
 
+    /**
+     * Updates and persists the default WSCD mapping (F.18's
+     * "issuer|credentialType=pluginId" pre-population table). Previously
+     * in-memory only (a restart silently wiped a demo's mapping); the
+     * 2026-11-16 settings restructure moved the editor into the general
+     * settings structure, where a value that survives a restart is the
+     * least a settings field owes its user. The "a real integrator
+     * supplies compile-time config" story is unchanged - the persistence
+     * is host-app prefs, not anything the SDK itself stores.
+     */
     fun updateDefaultWscdMappingText(text: String) {
         _defaultWscdMappingText.value = text
         _defaultWscdMapping.value = text.lineSequence()
@@ -722,6 +1073,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 val (key, pluginId) = line.split('=', limit = 2)
                 key.trim() to pluginId.trim()
             }
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("default_wscd_mapping_text", text)
+            .apply()
     }
 
     // ── TS11 registry discovery (best-effort, see WscdScreen.Ts11DiscoveryCard) ──
@@ -753,7 +1108,24 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _ts11DiscoveryInProgress.value = true
         viewModelScope.launch {
             try {
-                _ts11DiscoveredCredentials.value = Ts11CredentialDiscovery().discover()
+                // The CONFIGURED registry URL feeds the discovery (2026-11-16
+                // registry-dedup): Ts11RegistryClient defaults to the
+                // public registry.siros.org, so the Backends "TS11 registry
+                // URL" setting previously never reached this fetch - two
+                // registry URLs, two fetchers, no wiring. The configured URL
+                // rides first in the sources list (the client tries sources
+                // in order and merges); the public default stays as a
+                // fallback source, so a blank/demo configuration keeps the
+                // public catalog.
+                val configured = _registryUrl.value.trim().trimEnd('/')
+                val sources = buildList {
+                    if (configured.isNotBlank()) add(configured)
+                    add(org.siros.sdk.credentials.Ts11RegistryClient.DEFAULT_REGISTRY_URL)
+                }
+                _ts11DiscoveredCredentials.value =
+                    Ts11CredentialDiscovery(
+                        registryClient = org.siros.sdk.credentials.Ts11RegistryClient(sources = sources),
+                    ).discover()
             } catch (e: Exception) {
                 Log.w(TAG, "TS11 registry discovery failed", e)
             } finally {
@@ -953,15 +1325,36 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     //
     // A snackbar alone auto-dismisses in seconds and loses the failure
     // entirely; the journal keeps the last N (configurable in Settings,
-    // default 5) with a title, a summary and the technical trail the user
+    // default 10) with a title, a summary and the technical trail the user
     // must choose to see. Reachable from the snackbar's "Details" action and
     // the menu's "Recent errors" row.
 
-    /** The journal itself; entries flow to the screen (hard-capped at the last 10 messages, persisted across restarts). */
+    /**
+     * The journal's cap, as a persisted setting (the 2026-11-16 settings
+     * restructure: the hard-coded 10 was the one journal knob the audit
+     * found unexposed). Declared BEFORE [errorJournal] (textual order) so
+     * the journal can be constructed at the persisted cap.
+     */
+    private val _journalMaxEntries: MutableStateFlow<Int> = MutableStateFlow(
+        (activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .getString("journal_max_entries", null)?.toIntOrNull()) ?: 10
+    )
+    val journalMaxEntries: StateFlow<Int> = _journalMaxEntries
+
+    /** The journal itself; entries flow to the screen (capped at the persisted cap, persisted across restarts). */
     private val errorJournal = ErrorJournal(
         java.io.File(activity.filesDir, "message_journal.json")
-    )
+    ).apply { setMaxEntries(_journalMaxEntries.value) }
     val errorJournalEntries: StateFlow<List<ErrorJournalEntry>> = errorJournal.entries
+
+    /** Sets and persists the journal cap; the journal trims immediately. */
+    fun updateJournalMaxEntries(cap: Int) {
+        val clamped = cap.coerceAtLeast(1)
+        _journalMaxEntries.value = clamped
+        errorJournal.setMaxEntries(clamped)
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit().putString("journal_max_entries", clamped.toString()).apply()
+    }
 
     /** The journal screen is open (menu row, snackbar action). */
     private val _showErrorJournal = MutableStateFlow(false)
@@ -1130,6 +1523,30 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     // dropped keystore).
     /** The keystore adapter built for each plugin of the current [WalletConfig.availableKeystores]: the one an issuance with it signs through. */
     private val wscdAdapterByPlugin = java.util.concurrent.ConcurrentHashMap<String, WscdManager>()
+
+    // ── ISO 18045 assurance-scheme editor (DEMO-ONLY) ────────────────
+    //
+    // The scheme's mapping tables are ecosystem POLICY, fixed at
+    // integration time (WalletConfig.wscdAssuranceScheme) in any
+    // production deployment - never a user setting. The sample app
+    // exposes this editor purely as a demonstration tool: override a
+    // label, re-map a plugin, reorder the tiers, then watch the WSCD
+    // selection policy follow on the next issuance. Persisted so a demo
+    // survives a restart; the Reset action returns to the SDK defaults.
+    //
+    // Declared BEFORE [wallet] (same textual-order rule as
+    // [wscdAdapterByPlugin] above): buildWalletConfig() materializes this
+    // into the WalletConfig from [wallet]'s own initializer, so a
+    // declaration below it would be read before initialization (an NPE
+    // that crashed the app at startup, 2026-11-16).
+    private val _iso18045State = MutableStateFlow(
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .getString("iso18045_editor_state", null)
+            ?.let { raw ->
+                runCatching { Json.decodeFromString(org.siros.sdk.sample.Iso18045EditorState.serializer(), raw) }.getOrNull()
+            } ?: org.siros.sdk.sample.Iso18045EditorState(),
+    )
+    val iso18045State: StateFlow<org.siros.sdk.sample.Iso18045EditorState> get() = _iso18045State
 
     // ── Wallet ──────────────────────────────────────────────────────
 
@@ -2288,8 +2705,25 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _presentationHistory.value = wallet.presentationHistory
     }
 
+    /**
+     * The credential-filtered history (2026-11-16): the detail view's
+     * "Recent presentations" opens the same history screen narrowed to one
+     * credential - [PresentationHistoryScreen]'s filterCredentialId,
+     * driven here. The filter does not survive an unfiltered open (null
+     * again), so the menu's History row stays the account-wide view.
+     */
+    private val _historyFilterCredentialId = MutableStateFlow<Long?>(null)
+    val historyFilterCredentialId: StateFlow<Long?> get() = _historyFilterCredentialId
+
+    fun openHistoryForCredential(credentialId: Long) {
+        refreshPresentationHistory()
+        _historyFilterCredentialId.value = credentialId
+        _showHistory.value = true
+    }
+
     fun openHistory() {
         refreshPresentationHistory()
+        _historyFilterCredentialId.value = null
         _showHistory.value = true
     }
 
@@ -2724,7 +3158,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             _walletInstances.value = wallet.listWalletInstances()
         } catch (e: Exception) {
             Log.w(TAG, "listWalletInstances failed", e)
-            _devicesError.value = localizedErrorMessage(e)
+            // Graceful degradation (2026-11-16): a 404 means this backend does
+            // not serve the wallet-instance lifecycle routes (the feature
+            // lives on the backend's wallet-instance-lifecycle release; the
+            // deployed GDC wallet-backend predates it). A plain "not
+            // supported by this backend" beats a raw API error for what is a
+            // deployment fact, not a failure the user can act on - and the
+            // screen stays usable (empty, with the message) rather than an
+            // unexpected-error dead end.
+            if (e is org.siros.sdk.credentials.BackendApiException && e.code == 404) {
+                _devicesError.value = "This backend does not support wallet instances (not deployed)."
+            } else {
+                _devicesError.value = localizedErrorMessage(e)
+            }
         } finally {
             _devicesLoading.value = false
         }
@@ -2734,6 +3180,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     private val _showWscaDeveloper = MutableStateFlow(false)
     val showWscaDeveloper: StateFlow<Boolean> = _showWscaDeveloper
+
+    private val _showIso18045Editor = MutableStateFlow(false)
+    val showIso18045Editor: StateFlow<Boolean> get() = _showIso18045Editor
+
+    /** Updates and persists the editor state (the scheme applies at the next wallet construction). */
+    fun updateIso18045State(state: org.siros.sdk.sample.Iso18045EditorState) {
+        _iso18045State.value = state
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("iso18045_editor_state", Json.encodeToString(org.siros.sdk.sample.Iso18045EditorState.serializer(), state))
+            .apply()
+    }
+
+    fun openIso18045Editor() { _showIso18045Editor.value = true }
+    fun closeIso18045Editor() { _showIso18045Editor.value = false }
 
     private val _wscdKeys = MutableStateFlow<List<DetailedKeyInfo>>(emptyList())
     val wscdKeys: StateFlow<List<DetailedKeyInfo>> = _wscdKeys
@@ -3301,7 +3762,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      */
     private fun buildWscdKeystore(pluginId: String, trackAsDiagnosticSigner: Boolean): org.siros.sdk.keystore.KeystoreManager? =
         try {
-            val wscdConfig = FfiWscdConfig(defaultPlugin = pluginId)
+            // The softkey plugin's OWN durable backing (the security
+            // invariant, 2026-11-15): every generated key is durable BEFORE
+            // generate_key returns - the plugin writes its container through
+            // to this file inside the mutating critical section, so an app
+            // restart can never orphan a stored credential's bound key (the
+            // 2026-11-14 on-device loss). Empty would be the volatile
+            // historic behaviour.
+            val wscdConfig = FfiWscdConfig(
+                defaultPlugin = pluginId,
+                softkeyKeysFile = java.io.File(activity.filesDir, "wscd_softkey_keys.json").absolutePath,
+            )
             val signer = UniFFISigner(
                 wscdConfig,
                 authProvider = object : AuthProvider {
@@ -3416,6 +3887,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             backendUrl = _backendUrl.value,
             tenantId = _tenantId.value,
             zkCircuitUrls = _zkCircuitUrls.value,
+            // The DEMO-ONLY editor's materialized scheme (see _iso18045State):
+            // a production deployment fixes this at integration time and
+            // the editor does not exist; the sample applies the edited
+            // tables so the WSCD selection policy can be demonstrated.
+            wscdAssuranceScheme = _iso18045State.value.toScheme(),
             // Explicit override > derived from backendUrl (see resolvedEngineUrl())
             engineUrl = resolvedEngineUrl(),
             useWmpProtocol = _useWmpProtocol.value,
@@ -3469,7 +3945,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     )
                 }
             },
-            engineConnectRetries = 2,
+            engineConnectRetries = _engineConnectRetries.value,
             wmpTransport = if (_wmpEngineMode.value == org.siros.sdk.wallet.WmpEngineMode.LOCAL) {
                 { asks ->
                     // The local engine over the app's HTTP port, the WALLET's
@@ -3496,6 +3972,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     .replace("http://vc-proxy:8443", proxyUrl)
             } else null,
             availableKeystores = availableKeystores,
+            // The TS11 credential-tier catalog (see _tierCatalogEnabled):
+            // ON builds one over the registry with the configured cache
+            // windows; OFF keeps the SDK's issuer-metadata-only default.
+            // Needs availableKeystores (the config constructor enforces
+            // it - the tier is met by one of the registered keystores).
+            credentialTierCatalog = if (_tierCatalogEnabled.value && availableKeystores.isNotEmpty()) {
+                org.siros.sdk.credentials.Ts11CredentialTierCatalog(
+                    ttlMillis = _tierCatalogTtlMinutes.value * 60_000,
+                    maxStaleMillis = _tierCatalogMaxStaleHours.value * 3_600_000,
+                )
+            } else {
+                null
+            },
             // Developer-supplied via WscdScreen's collapsible Developer
             // section ("Default WSCD Mapping" text box) - dev/host-app
             // config, not an end-user setting, so it lives there rather
@@ -3505,6 +3994,28 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             preferLocalReaderTrustEvaluation = _preferLocalReaderTrustEvaluation.value,
             readerTrustRootCertificatesPem = _readerTrustRootCertificatePem.value.takeIf { it.isNotBlank() }
                 ?.let { listOf(it) } ?: emptyList(),
+            // The 2026-11-16 additions (settings coverage): each reads its
+            // own flow; each takes effect at this, the next wallet
+            // construction.
+            registryUrl = _registryUrl.value.trim().takeIf { it.isNotBlank() },
+            clockToleranceSeconds = _clockToleranceSeconds.value,
+            trustDecisionCacheTtl = java.time.Duration.ofSeconds(_trustDecisionCacheTtlSeconds.value),
+            issuerTrustRootCertificatesPem = _issuerTrustRootCertificatePem.value.takeIf { it.isNotBlank() }
+                ?.let { listOf(it) } ?: emptyList(),
+            // The mode knobs supersede the deprecated booleans: the boolean
+            // is still honored (the deprecated prefs keep their meaning for
+            // upgrades) but the mode is the fuller statement, so the mode
+            // wins where both are non-default.
+            readerTrustEvaluationMode = when {
+                _readerTrustEvaluationMode.value != org.siros.sdk.wallet.MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK ->
+                    _readerTrustEvaluationMode.value
+                _preferLocalReaderTrustEvaluation.value ->
+                    org.siros.sdk.wallet.MdocTrustEvaluationMode.LOCAL_ONLY
+                else -> null
+            },
+            issuerTrustEvaluationMode = _issuerTrustEvaluationMode.value
+                .takeIf { it != org.siros.sdk.wallet.MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK },
+            bbsCredentialTypes = _bbsCredentialTypes.value.toSet(),
             vegaProfilingEnabled = _vegaProfilingEnabled.value,
             // Mirrors enrollWscd/rotateLifecycle's own prefetch-PIN-before-
             // transport pattern (see awaitFido2PinEntry's doc comment) for

@@ -507,6 +507,9 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             wmpSendUrl = wmpSendUrlState,
             wmpSseUrl = wmpSseUrlState,
             zkCircuitUrls = zkCircuitUrlsState,
+            backends = viewModel.knownBackends.collectAsState().value,
+            currentBackendId = viewModel.currentBackendId.collectAsState().value,
+            onSwitchBackend = viewModel::switchBackend,
             preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluationState,
             readerTrustRootCertificatePem = readerTrustRootCertificatePemState,
             engineLocalEnabled = engineLocalEnabledState,
@@ -547,6 +550,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
 
     // WSCA developer sub-screen state (read here so it's available in the `when` below)
     val showWscaDeveloper by viewModel.showWscaDeveloper.collectAsState()
+    val showIso18045Editor by viewModel.showIso18045Editor.collectAsState()
     val showDevices by viewModel.showDevices.collectAsState()
     // Where the user is among the screens the Home / Scan QR / Menu bar and the
     // menu lead to. The view-model's own flags (history, add credential, the
@@ -679,7 +683,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     // (consent, credential detail, settings sub-screens) keep their own Back.
     val chromeVisible = pendingAmbiguity == null && pendingPresentation == null && pendingTransactionConsent == null &&
         pendingPresentationConsent == null && !showTransactionLog && selectedCredential == null &&
-        !showDevices && !showWscaDeveloper && flowStarting == null
+        !showDevices && !showWscaDeveloper && !showIso18045Editor && flowStarting == null
     androidx.activity.compose.BackHandler(
         enabled = chromeVisible && (
             activateMode != null || showIDVPreparation || showAddCredential || showHistory || showErrorJournal ||
@@ -769,12 +773,20 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 onBack = viewModel::closeCredentialDetail,
                 onDelete = { viewModel.deleteCredential(selectedCredential!!.id) },
                 onRenew = { viewModel.renewCredential(selectedCredential!!) },
+                // This credential's own presentation history, filtered
+                // (2026-11-16): the detail view's "Recent presentations".
+                onShowPresentations = viewModel::openHistoryForCredential,
                 credentialStatus = viewModel.credentialStatuses.collectAsState().value[selectedCredential!!.id],
             )
 
-            // Presentation history sub-screen
+            // Presentation history sub-screen - filtered when opened from
+            // a credential's detail view (openHistoryForCredential), the
+            // account-wide list otherwise.
             showHistory -> chrome(null, false, null) {
-                PresentationHistoryScreen(history = presentationHistory)
+                PresentationHistoryScreen(
+                    history = presentationHistory,
+                    filterCredentialId = viewModel.historyFilterCredentialId.collectAsState().value,
+                )
             }
 
             // The error journal ("Recent errors"): the last N failures with
@@ -784,6 +796,12 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 ErrorJournalScreen(
                     entries = errorJournalEntries,
                     onClear = viewModel::clearErrorJournal,
+                    // The presentation history rides the journal surface
+                    // (2026-11-16 review): the journal is the wallet's
+                    // messages-and-activity screen, so this account's
+                    // presentations list below the error entries.
+                    history = presentationHistory,
+                    onShowHistory = viewModel::openHistory,
                 )
             }
 
@@ -835,6 +853,17 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                     onForgetAllWscdTofuMapping = viewModel::forgetAllWscdTofuMappings,
                     onDiscoverTs11Schemas = viewModel::discoverTs11Schemas,
                     onBack = viewModel::closeWscaDeveloper,
+                )
+            }
+
+            // The DEMO-ONLY ISO 18045 assurance-scheme editor (see
+            // Iso18045EditorScreen): full-attention editing of the mapping
+            // tables a production deployment fixes at integration time.
+            viewModel.showIso18045Editor.collectAsState().value -> {
+                Iso18045EditorScreen(
+                    state = viewModel.iso18045State.collectAsState().value,
+                    onUpdate = viewModel::updateIso18045State,
+                    onBack = viewModel::closeIso18045Editor,
                 )
             }
 
@@ -993,9 +1022,46 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             WalletDestination.About -> AboutScreen()
                             WalletDestination.Settings -> SettingsTab(
                             state = state,
+                            // The 2026-11-16 restructure bundles (SettingsSections.kt):
+                            // full trust modes, connection tuning, credential types.
+                            trustSettings = TrustSettings(
+                                readerMode = viewModel.readerTrustEvaluationMode.collectAsState().value,
+                                onReaderMode = viewModel::updateReaderTrustEvaluationMode,
+                                readerRootPem = viewModel.readerTrustRootCertificatePem.collectAsState().value,
+                                onReaderRootPem = viewModel::updateReaderTrustRootCertificatePem,
+                                issuerMode = viewModel.issuerTrustEvaluationMode.collectAsState().value,
+                                onIssuerMode = viewModel::updateIssuerTrustEvaluationMode,
+                                issuerRootPem = viewModel.issuerTrustRootCertificatePem.collectAsState().value,
+                                onIssuerRootPem = viewModel::updateIssuerTrustRootCertificatePem,
+                            ),
+                            connectionSettings = ConnectionSettings(
+                                registryUrl = viewModel.registryUrl.collectAsState().value,
+                                onRegistryUrl = viewModel::updateRegistryUrl,
+                                clockToleranceSeconds = viewModel.clockToleranceSeconds.collectAsState().value,
+                                onClockToleranceSeconds = viewModel::updateClockToleranceSeconds,
+                                trustDecisionCacheTtlSeconds = viewModel.trustDecisionCacheTtlSeconds.collectAsState().value,
+                                onTrustDecisionCacheTtlSeconds = viewModel::updateTrustDecisionCacheTtlSeconds,
+                                engineConnectRetries = viewModel.engineConnectRetries.collectAsState().value,
+                                onEngineConnectRetries = viewModel::updateEngineConnectRetries,
+                                tierCatalogEnabled = viewModel.tierCatalogEnabled.collectAsState().value,
+                                onTierCatalogEnabled = viewModel::updateTierCatalogEnabled,
+                                tierCatalogTtlMinutes = viewModel.tierCatalogTtlMinutes.collectAsState().value,
+                                onTierCatalogTtlMinutes = viewModel::updateTierCatalogTtlMinutes,
+                                tierCatalogMaxStaleHours = viewModel.tierCatalogMaxStaleHours.collectAsState().value,
+                                onTierCatalogMaxStaleHours = viewModel::updateTierCatalogMaxStaleHours,
+                            ),
+                            credentialExtrasSettings = CredentialExtrasSettings(
+                                bbsCredentialTypes = viewModel.bbsCredentialTypes.collectAsState().value,
+                                onBbsCredentialTypes = viewModel::updateBbsCredentialTypes,
+                            ),
                             backendUrl = viewModel.backendUrl.collectAsState().value,
                             tenantId = viewModel.tenantId.collectAsState().value,
                             useWmpProtocol = useWmpProtocol,
+                            backends = viewModel.knownBackends.collectAsState().value,
+                            currentBackendId = viewModel.currentBackendId.collectAsState().value,
+                            onSaveBackend = viewModel::saveBackendProfile,
+                            onDeleteBackend = viewModel::deleteBackendProfile,
+                            onSwitchBackend = viewModel::switchBackend,
                             diipProfile = viewModel.diipProfile,
                             zkCircuitUrls = viewModel.zkCircuitUrls.collectAsState().value,
                             presentationCount = presentationHistory.size,
@@ -1004,29 +1070,32 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
                             onShowWscdSettings = viewModel::openWscaDeveloper,
+                            onShowIso18045Editor = viewModel::openIso18045Editor,
                             onShowDevices = viewModel::openDevices,
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
                             addingPasskey = viewModel.addingPasskey.collectAsState().value,
                             onAddPasskey = viewModel::addPasskey,
-                            showCredentialDetails = showCredentialDetails,
-                            onUpdateShowCredentialDetails = viewModel::updateShowCredentialDetails,
-                            showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
-                            onUpdateShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
                             showPhotoIdOnboarding = viewModel.showPhotoIdOnboarding.collectAsState().value,
                             onUpdateShowPhotoIdOnboarding = viewModel::updateShowPhotoIdOnboarding,
-                            transactionDataEnabled = viewModel.transactionDataEnabled.collectAsState().value,
-                            onUpdateTransactionDataEnabled = viewModel::updateTransactionDataEnabled,
-                            onShowTransactionLog = viewModel::openTransactionLog,
                             credentialConsumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
                             onUpdateCredentialConsumptionPolicy = viewModel::updateCredentialConsumptionPolicy,
+                            // The Diagnostics bundle (moved out of the Account card, 2026-11-16).
+                            diagnosticsSettings = DiagnosticsSettings(
+                                showCredentialDetails = showCredentialDetails,
+                                onShowCredentialDetails = viewModel::updateShowCredentialDetails,
+                                showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
+                                onShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
+                                vegaProfilingEnabled = viewModel.vegaProfilingEnabled.collectAsState().value,
+                                onVegaProfilingEnabled = viewModel::updateVegaProfilingEnabled,
+                                journalMaxEntries = viewModel.journalMaxEntries.collectAsState().value,
+                                onJournalMaxEntries = viewModel::updateJournalMaxEntries,
+                            ),
                             preferLocalReaderTrustEvaluation = viewModel.preferLocalReaderTrustEvaluation.collectAsState().value,
                             onUpdatePreferLocalReaderTrustEvaluation = viewModel::updatePreferLocalReaderTrustEvaluation,
                             readerTrustRootCertificatePem = viewModel.readerTrustRootCertificatePem.collectAsState().value,
                             onUpdateReaderTrustRootCertificatePem = viewModel::updateReaderTrustRootCertificatePem,
-                            vegaProfilingEnabled = viewModel.vegaProfilingEnabled.collectAsState().value,
-                            onUpdateVegaProfilingEnabled = viewModel::updateVegaProfilingEnabled,
                             walletPolicy = viewModel.walletPolicy.collectAsState().value,
                             onUpdateWalletPolicy = viewModel::updateWalletPolicy,
                         )
@@ -1086,6 +1155,11 @@ fun LoginScreen(
     wmpSendUrl: String,
     wmpSseUrl: String,
     zkCircuitUrls: List<String>,
+    // The registered backends to pick between before signing in (the
+    // pre-login picker materializes a profile into the connection fields).
+    backends: List<org.siros.sdk.sample.BackendProfile> = emptyList(),
+    currentBackendId: String? = null,
+    onSwitchBackend: (String) -> Unit = {},
     preferLocalReaderTrustEvaluation: Boolean = false,
     readerTrustRootCertificatePem: String = "",
     engineLocalEnabled: Boolean = true,
@@ -1127,6 +1201,9 @@ fun LoginScreen(
             wmpSendUrl = wmpSendUrl,
             wmpSseUrl = wmpSseUrl,
             zkCircuitUrls = zkCircuitUrls,
+            backends = backends,
+            currentBackendId = currentBackendId,
+            onSwitchBackend = onSwitchBackend,
             preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation,
             readerTrustRootCertificatePem = readerTrustRootCertificatePem,
             engineLocalEnabled = engineLocalEnabled,
@@ -1334,6 +1411,12 @@ fun PreLoginSettingsSheet(
     wmpSendUrl: String,
     wmpSseUrl: String,
     zkCircuitUrls: List<String>,
+    // The registered backends to pick between before signing in (switch
+    // materializes the profile into the fields below and disconnects -
+    // there is no wallet to disconnect yet, so it just sets the target).
+    backends: List<org.siros.sdk.sample.BackendProfile> = emptyList(),
+    currentBackendId: String? = null,
+    onSwitchBackend: (String) -> Unit = {},
     preferLocalReaderTrustEvaluation: Boolean = false,
     readerTrustRootCertificatePem: String = "",
     engineLocalEnabled: Boolean = true,
@@ -1352,9 +1435,9 @@ fun PreLoginSettingsSheet(
     onUpdateEngineTenantTokens: (Boolean) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
-    var editBackendUrl by remember { mutableStateOf(backendUrl) }
-    var editTenantId by remember { mutableStateOf(tenantId) }
-    var editEngineUrl by remember { mutableStateOf(engineUrl) }
+    var editBackendUrl by remember(backendUrl) { mutableStateOf(backendUrl) }
+    var editTenantId by remember(tenantId) { mutableStateOf(tenantId) }
+    var editEngineUrl by remember(engineUrl) { mutableStateOf(engineUrl) }
     // The WMP engine mode and the remote endpoints - edited locally, one
     // update carrying the triple (the mode change re-persists the pair).
     var editWmpEngineMode by remember { mutableStateOf(wmpEngineMode) }
@@ -1364,7 +1447,7 @@ fun PreLoginSettingsSheet(
     // One URL per line for editing - joined/split at the boundary with
     // onUpdateZkCircuitUrls rather than storing List<String> as Compose
     // TextField state directly.
-    var editZkCircuitUrls by remember { mutableStateOf(zkCircuitUrls.joinToString("\n")) }
+    var editZkCircuitUrls by remember(zkCircuitUrls) { mutableStateOf(zkCircuitUrls.joinToString("\n")) }
     var editReaderTrustRootCertificatePem by remember { mutableStateOf(readerTrustRootCertificatePem) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1386,6 +1469,51 @@ fun PreLoginSettingsSheet(
                 style = MaterialTheme.typography.bodySmall,
                 color = SirosDesign.secondaryText,
             )
+
+            // The registered backends first: picking one materializes it
+            // into the fields below (and the prefs they persist), so the
+            // login that follows runs against the picked backend. No
+            // confirmation dialog pre-login - there is no session to lose.
+            if (backends.isNotEmpty()) {
+                Column {
+                    Text(
+                        "Known backends",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SirosDesign.secondaryText,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    backends.forEach { profile ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = profile.id == currentBackendId,
+                                    onClick = { onSwitchBackend(profile.id) },
+                                )
+                                Column {
+                                    Text(
+                                        profile.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                    Text(
+                                        "${profile.backendUrl} · ${profile.tenantId}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = SirosDesign.secondaryText,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             OutlinedTextField(
                 value = editBackendUrl,
@@ -1890,6 +2018,14 @@ fun SettingsTab(
     backendUrl: String,
     tenantId: String,
     useWmpProtocol: Boolean,
+    // The backend registry (multi-backend add/switch; see BackendProfile).
+    // Android-only by design - the Swift sample app keeps a single backend
+    // (iOS registers redirect schemes statically in the Info.plist).
+    backends: List<org.siros.sdk.sample.BackendProfile> = emptyList(),
+    currentBackendId: String? = null,
+    onSaveBackend: (org.siros.sdk.sample.BackendProfile) -> Unit = {},
+    onDeleteBackend: (String) -> Unit = {},
+    onSwitchBackend: (String) -> Unit = {},
     /**
      * The DIIP release this wallet's wire behaviour follows. A build-time
      * choice (`WalletConfig.diipProfile`), so it is shown, not offered.
@@ -1903,25 +2039,29 @@ fun SettingsTab(
     onDeleteAccount: (confirmation: String) -> Unit,
     onShowHistory: () -> Unit,
     onShowWscdSettings: () -> Unit,
+    onShowIso18045Editor: () -> Unit = {},
     onShowDevices: () -> Unit = {},
+    // The login-cached accounts ("Other Accounts" in the Passkeys section).
+    cachedAccounts: List<org.siros.sdk.wallet.CachedAccount> = emptyList(),
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
     addingPasskey: Boolean = false,
     onAddPasskey: ((String) -> Unit)? = null,
     onUpdateUseWmpProtocol: ((Boolean) -> Unit)? = null,
-    showCredentialDetails: Boolean = false,
-    onUpdateShowCredentialDetails: ((Boolean) -> Unit)? = null,
-    showDiagnosticMessages: Boolean = true,
-    onUpdateShowDiagnosticMessages: ((Boolean) -> Unit)? = null,
     showPhotoIdOnboarding: Boolean = false,
     onUpdateShowPhotoIdOnboarding: ((Boolean) -> Unit)? = null,
-    transactionDataEnabled: Boolean = false,
-    onUpdateTransactionDataEnabled: ((Boolean) -> Unit)? = null,
-    onShowTransactionLog: (() -> Unit)? = null,
     credentialConsumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
         org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME,
     onUpdateCredentialConsumptionPolicy: ((org.siros.sdk.credentials.CredentialConsumptionPolicy) -> Unit)? = null,
+    // The Diagnostics bundle (SettingsSections.kt): the diagnostic toggles
+    // + the journal cap, moved out of the Account card 2026-11-16.
+    diagnosticsSettings: DiagnosticsSettings = DiagnosticsSettings(),
+    // The Profiles bundle (2026-11-16 review): TS12 transaction data - the
+    // presentation-behavior profiles, their own sub-menu.
+    transactionDataEnabled: Boolean = false,
+    onUpdateTransactionDataEnabled: ((Boolean) -> Unit)? = null,
+    onShowTransactionLog: (() -> Unit)? = null,
     // RICAL reader-trust local fallback - see PreLoginSettingsSheet's identical
     // controls for why this exists. Duplicated here (not moved) because
     // PreLoginSettingsSheet also configures backendUrl/tenantId, which must
@@ -1932,14 +2072,179 @@ fun SettingsTab(
     onUpdatePreferLocalReaderTrustEvaluation: ((Boolean) -> Unit)? = null,
     readerTrustRootCertificatePem: String = "",
     onUpdateReaderTrustRootCertificatePem: ((String) -> Unit)? = null,
-    vegaProfilingEnabled: Boolean = false,
-    onUpdateVegaProfilingEnabled: ((Boolean) -> Unit)? = null,
+    // The 2026-11-16 restructure: the full Security & Trust, Connection
+    // Tuning and Credential Types sections (SettingsSections.kt). The
+    // deprecated RICAL boolean above stays honored (buildWalletConfig
+    // reconciles) but the mode dropdowns are the real setting now.
+    trustSettings: TrustSettings = TrustSettings(),
+    connectionSettings: ConnectionSettings = ConnectionSettings(),
+    credentialExtrasSettings: CredentialExtrasSettings = CredentialExtrasSettings(),
     walletPolicy: org.siros.sdk.wallet.WalletPolicyOptions = org.siros.sdk.wallet.WalletPolicyOptions(),
     onUpdateWalletPolicy: ((org.siros.sdk.wallet.WalletPolicyOptions) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    // ONE scroll container per screen (2026-11-16): the outer Column does
+    // NOT scroll - the menu is short, and each sub-screen below carries its
+    // own verticalScroll. A nesting of the two crashed Settings on entry
+    // ("vertically scrollable component was measured with an infinity
+    // maximum height").
     Column(
         modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
+        if (section == null) {
+            SettingsMenu(
+                onSelect = { section = it },
+                onDisconnect = onDisconnect,
+            )
+        } else {
+            val selected = section!!
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 0.dp, vertical = 0.dp),
+            ) {
+                Text(
+                    text = selected.title(),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                TextButton(onClick = { section = null }) { Text("← All settings") }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                when (selected) {
+                    SettingsSection.GENERAL -> {
+                        SettingsGeneral(
+                            state = state, backendUrl = backendUrl, tenantId = tenantId,
+                            useWmpProtocol = useWmpProtocol, diipProfile = diipProfile,
+                            zkCircuitUrls = zkCircuitUrls,
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        // Passkeys + other cached accounts: General owns
+                        // them (2026-11-16 review) - account-level facts,
+                        // not their own section.
+                        SettingsPasskeysSection(
+                            passkeys = passkeys,
+                            onRenamePasskey = onRenamePasskey,
+                            addingPasskey = addingPasskey,
+                            onAddPasskey = onAddPasskey,
+                            cachedAccounts = cachedAccounts,
+                            onForgetAccount = onForgetAccount,
+                        )
+                    }
+                    SettingsSection.BACKENDS -> {
+                        BackendRegistryCard(
+                            backends = backends,
+                            currentBackendId = currentBackendId,
+                            onSaveBackend = onSaveBackend,
+                            onDeleteBackend = onDeleteBackend,
+                            onSwitchBackend = onSwitchBackend,
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        ConnectionTuningSection(settings = connectionSettings)
+                    }
+                    SettingsSection.TRUST -> {
+                        TrustSection(settings = trustSettings)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        // Security Keys folded into Security & Trust
+                        // (2026-11-16 review): the key-storage choices are
+                        // part of the trust surface. The WSCD screen and the
+                        // ISO 18045 demo editor stay full screens (their
+                        // entry points land here).
+                        SettingsLinkCard(
+                            title = "Security Keys (WSCD)",
+                            description = "Which secure key storage backs each credential: the plugin tabs (transport, lifecycle, stored keys), the F.18 default mapping, and the ISO 18045 assurance-scheme demo editor.",
+                            button = "WSCD Settings",
+                            secondaryButton = "ISO 18045 assurance scheme",
+                            onButton = onShowWscdSettings,
+                            onSecondaryButton = onShowIso18045Editor,
+                        )
+                    }
+                    SettingsSection.CREDENTIALS -> CredentialConsumptionSection(
+                        credentialConsumptionPolicy = credentialConsumptionPolicy,
+                        onUpdateCredentialConsumptionPolicy = onUpdateCredentialConsumptionPolicy,
+                    )
+                    SettingsSection.PROFILES -> ProfileSection(
+                        transactionDataEnabled = transactionDataEnabled,
+                        onTransactionDataEnabled = onUpdateTransactionDataEnabled ?: {},
+                        onShowTransactionLog = onShowTransactionLog,
+                    )
+                    SettingsSection.REQUEST_POLICY ->
+                        RequestPolicyCard(policy = walletPolicy, onChange = onUpdateWalletPolicy)
+                    SettingsSection.ZKP -> {
+                        ZkpPolicyCard(policy = walletPolicy, onChange = onUpdateWalletPolicy)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        // The BBS blind-credential vct list (2026-11-16: a
+                        // ZKP-prover concern - which credentials the BBS
+                        // prover may present - moved out of the Credentials
+                        // section per the settings review).
+                        BbsCredentialTypesCard(
+                            types = credentialExtrasSettings.bbsCredentialTypes,
+                            onTypes = credentialExtrasSettings.onBbsCredentialTypes,
+                        )
+                    }
+                    SettingsSection.DEVICES -> SettingsLinkCard(
+                        title = "Devices",
+                        description = "This account's wallet instances (SID-AUTH-06).",
+                        button = "Manage devices",
+                        onButton = onShowDevices,
+                    )
+                    SettingsSection.DIAGNOSTICS -> DiagnosticsSection(settings = diagnosticsSettings)
+                    SettingsSection.DANGER -> SettingsDangerSection(
+                        deletingAccount = deletingAccount,
+                        onDeleteAccount = onDeleteAccount,
+                    )
+                }
+                Spacer(modifier = Modifier.height(32.dp))
+            }
+        }
+    }
+}
+
+/**
+ * The settings sections (2026-11-16): a menu of sub-menus, per the
+ * approved structure - "everything is a sub-menu", General first (the
+ * old Account card's facts, Appearance folded in), each other section
+ * its own destination.
+ */
+enum class SettingsSection(val label: String) {
+    GENERAL("General"),
+    BACKENDS("Backends"),
+    TRUST("Security & Trust"),
+    CREDENTIALS("Credentials"),
+    REQUEST_POLICY("Request Policy"),
+    ZKP("ZKP & Proofs"),
+    PROFILES("Profiles"),
+    DEVICES("Devices"),
+    DIAGNOSTICS("Diagnostics"),
+    DANGER("Danger Zone"),
+}
+
+@Composable
+private fun SettingsSection.title() = stringResourceless(label)
+
+/**
+ * The section's display title (the enum's label - the same string, this
+ * stub keeps title() simple above).
+ */
+@Composable
+private fun stringResourceless(text: String): String = text
+
+/**
+ * The menu: one row per section, then the terminal actions (history,
+ * logout, delete). Kept here (not a section) because they are actions,
+ * not settings groups.
+ */
+@Composable
+private fun SettingsMenu(
+    onSelect: (SettingsSection) -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -1951,514 +2256,35 @@ fun SettingsTab(
         )
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Appearance: follow the device, or always light, or always dark.
-        AppearanceSetting()
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Account section
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Text(
-                    text = stringResource(R.string.settings_account_section),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = SirosDesign.secondaryText,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                SettingsRow(stringResource(R.string.settings_signed_in_as), state.displayName ?: state.userId)
-                SettingsRow(stringResource(R.string.settings_backend_url), backendUrl)
-                SettingsRow(stringResource(R.string.settings_zk_circuit_urls), zkCircuitUrls.joinToString(", "))
-                SettingsRow(stringResource(R.string.settings_tenant_id), tenantId)
-                SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
-                SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
-                SettingsRow("Transport", if (useWmpProtocol) "WMP (JSON-RPC 2.0)" else "Legacy")
-
-                // Which interoperability profiles this wallet can speak.
-                // Deliberately a fact, not a control: which one is used is
-                // negotiated per issuer from its advertised
-                // `cryptographic_binding_methods_supported`, so there is
-                // nothing here for a user to choose (and no way they could
-                // reasonably know the answer for an issuer they just scanned).
-                SettingsRow(
-                    stringResource(R.string.settings_interop_profiles),
-                    "HAIP \u00b7 DIIP ${diipProfile.version.uppercase()}",
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_credential_details),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_credential_details_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = showCredentialDetails,
-                        onCheckedChange = onUpdateShowCredentialDetails,
-                        enabled = onUpdateShowCredentialDetails != null,
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_diagnostic_messages),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_diagnostic_messages_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = showDiagnosticMessages,
-                        onCheckedChange = onUpdateShowDiagnosticMessages,
-                        enabled = onUpdateShowDiagnosticMessages != null,
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_photo_id_onboarding),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_photo_id_onboarding_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = showPhotoIdOnboarding,
-                        onCheckedChange = onUpdateShowPhotoIdOnboarding,
-                        enabled = onUpdateShowPhotoIdOnboarding != null,
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_transaction_data),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_transaction_data_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = transactionDataEnabled,
-                        onCheckedChange = onUpdateTransactionDataEnabled,
-                        enabled = onUpdateTransactionDataEnabled != null,
-                    )
-                }
-                TextButton(
-                    onClick = { onShowTransactionLog?.invoke() },
-                    enabled = onShowTransactionLog != null,
-                ) {
-                    Text(stringResource(R.string.settings_transaction_log))
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Reader trust (RICAL) section - see PreLoginSettingsSheet's
-        // identical controls for the full rationale; kept reachable here too
-        // since flipping it mid-session (right before a proximity test) is
-        // the common case, and this tab - unlike the pre-login sheet - is
-        // still reachable once a wallet session is active.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Text(
-                    "Reader Trust (RICAL)",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = SirosDesign.secondaryText,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Evaluate reader trust locally", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "Skip the remote RICAL trust check and validate proximity readers " +
-                                "only against the root certificate below.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = preferLocalReaderTrustEvaluation,
-                        onCheckedChange = onUpdatePreferLocalReaderTrustEvaluation,
-                        enabled = onUpdatePreferLocalReaderTrustEvaluation != null,
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = readerTrustRootCertificatePem,
-                    onValueChange = { onUpdateReaderTrustRootCertificatePem?.invoke(it) },
-                    label = { Text("RICAL root certificate (PEM)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = onUpdateReaderTrustRootCertificatePem != null,
-                    singleLine = false,
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // VEGA ZK proof profiling - see WalletConfig.vegaProfilingEnabled's
-        // doc comment for the file location and why it needs no root to pull.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.settings_vega_profiling),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            stringResource(R.string.settings_vega_profiling_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SirosDesign.secondaryText,
-                        )
-                    }
-                    Switch(
-                        checked = vegaProfilingEnabled,
-                        onCheckedChange = onUpdateVegaProfilingEnabled,
-                        enabled = onUpdateVegaProfilingEnabled != null,
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        RequestPolicyCard(policy = walletPolicy, onChange = onUpdateWalletPolicy)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Credential consumption policy section
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Text(
-                    stringResource(R.string.settings_credential_consumption_title),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = SirosDesign.secondaryText,
-                )
-                Text(
-                    stringResource(R.string.settings_credential_consumption_description),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SirosDesign.secondaryText,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Column(Modifier.selectableGroup()) {
-                    for (policy in org.siros.sdk.credentials.CredentialConsumptionPolicy.entries) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectable(
-                                    selected = policy == credentialConsumptionPolicy,
-                                    onClick = { onUpdateCredentialConsumptionPolicy?.invoke(policy) },
-                                    role = Role.RadioButton,
-                                    enabled = onUpdateCredentialConsumptionPolicy != null,
-                                )
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = policy == credentialConsumptionPolicy,
-                                onClick = { onUpdateCredentialConsumptionPolicy?.invoke(policy) },
-                                enabled = onUpdateCredentialConsumptionPolicy != null,
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(credentialConsumptionPolicyLabelRes(policy)), style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // WSCD settings - a single entry point into the consolidated,
-        // tabbed WscdScreen (one tab per plugin: softkey/r2ps/fido2), which
-        // now owns everything that used to be spread across four separate
-        // cards here (WSCD Choices/TOFU, Preferred WSCD, WSCD Overrides,
-        // WSCD Lifecycle/Enroll) plus the old standalone "WSCA Developer"
-        // screen - see WscdScreen.kt's doc comment for the full
-        // consolidation. Enroll/Rotate/Destroy/Refresh live in that
-        // screen's collapsible Developer section, since they're
-        // diagnostic/test actions, not something an end user taps
-        // routinely.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Text(
-                    "Security Key (WSCD)",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = SirosDesign.secondaryText,
-                )
-                Text(
-                    "Which secure key storage (software, R2PS remote HSM, or a FIDO2 security " +
-                        "key) backs each credential, plus enrollment and developer diagnostics.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SirosDesign.secondaryText,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = onShowWscdSettings,
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text("WSCD Settings")
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Devices (wallet instances, SID-AUTH-06) - one entry point into the
-        // Devices sub-screen, which owns the list and the two actions; this
-        // card stays a link, like the WSCD one above.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Text(
-                    stringResource(R.string.devices_title),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = SirosDesign.secondaryText,
-                )
-                Text(
-                    stringResource(R.string.devices_description),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SirosDesign.secondaryText,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = onShowDevices,
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text(stringResource(R.string.devices_manage_button))
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Passkeys section
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Text("Passkeys", style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold, color = SirosDesign.secondaryText)
-                Spacer(modifier = Modifier.height(8.dp))
-                if (passkeys.isEmpty()) {
-                    Text("No passkeys registered", style = MaterialTheme.typography.bodySmall,
-                        color = SirosDesign.secondaryText)
-                } else {
-                    passkeys.forEach { passkey ->
-                        var editing by remember { mutableStateOf(false) }
-                        var nickname by remember { mutableStateOf(passkey.nickname) }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (editing) {
-                                OutlinedTextField(
-                                    value = nickname,
-                                    onValueChange = { nickname = it },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = true,
-                                    shape = RoundedCornerShape(8.dp),
-                                )
-                                IconButton(onClick = {
-                                    onRenamePasskey?.invoke(passkey.credentialId, nickname)
-                                    editing = false
-                                }) {
-                                    Icon(Icons.Default.Check, contentDescription = "Save",
-                                        modifier = Modifier.size(18.dp))
-                                }
-                                IconButton(onClick = { editing = false; nickname = passkey.nickname }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Cancel",
-                                        modifier = Modifier.size(18.dp))
-                                }
-                            } else {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        passkey.nickname.ifEmpty { "Passkey ${passkey.credentialId.take(8)}..." },
-                                        style = MaterialTheme.typography.bodyMedium,
-                                    )
-                                    Text(
-                                        "ID: ${passkey.credentialId.take(16)}...",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = SirosDesign.secondaryText,
-                                    )
-                                }
-                                IconButton(onClick = { editing = true }) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Rename",
-                                        modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-                if (onAddPasskey != null) {
-                    var showAdd by remember { mutableStateOf(false) }
-                    var newNickname by remember { mutableStateOf("") }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { newNickname = ""; showAdd = true },
-                        enabled = !addingPasskey,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text(stringResource(R.string.add_passkey_button))
-                    }
-                    if (showAdd) {
-                        androidx.compose.material3.AlertDialog(
-                            onDismissRequest = { showAdd = false },
-                            title = { Text(stringResource(R.string.add_passkey_button)) },
-                            text = {
-                                OutlinedTextField(
-                                    value = newNickname,
-                                    onValueChange = { newNickname = it },
-                                    singleLine = true,
-                                    label = { Text(stringResource(R.string.add_passkey_nickname)) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            },
-                            confirmButton = {
-                                TextButton(
-                                    enabled = newNickname.isNotBlank(),
-                                    onClick = { showAdd = false; onAddPasskey(newNickname.trim()) },
-                                ) { Text(stringResource(R.string.add_passkey_confirm)) }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { showAdd = false }) { Text(stringResource(R.string.add_passkey_cancel)) }
-                            },
-                        )
-                    }
-                }
-            }
-        }
-
-        // Other accounts section (if there are cached accounts)
-        if (state.cachedAccounts.size > 1) {
-            Spacer(modifier = Modifier.height(16.dp))
+        SettingsSection.entries.forEach { section ->
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             ) {
-                Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                    Text("Other Accounts", style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold, color = SirosDesign.secondaryText)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    state.cachedAccounts
-                        .filter { it.accountId != "${tenantId}:${state.userId}" }
-                        .forEach { account ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(account.displayName, modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodyMedium)
-                                Text(account.tenantId, style = MaterialTheme.typography.bodySmall,
-                                    color = SirosDesign.secondaryText)
-                                if (onForgetAccount != null) {
-                                    IconButton(onClick = { onForgetAccount(account.accountId) },
-                                        modifier = Modifier.size(32.dp)) {
-                                        Icon(Icons.Default.Close, contentDescription = "Remove",
-                                            modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                            }
-                        }
+                Column(modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelect(section) }
+                    .padding(20.dp),
+                ) {
+                    Text(
+                        text = section.label,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = section.description(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SirosDesign.secondaryText,
+                    )
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-
-        // Presentation history link
-        OutlinedButton(
-            onClick = onShowHistory,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = RoundedCornerShape(12.dp),
-        ) {
-            Text(stringResource(R.string.settings_presentation_history) + " ($presentationCount)")
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
 
         // Logout
         OutlinedButton(
@@ -2469,56 +2295,374 @@ fun SettingsTab(
             Text(stringResource(R.string.settings_logout))
         }
 
-        // Delete account
-        Spacer(modifier = Modifier.height(8.dp))
-        var showDeleteConfirm by remember { mutableStateOf(false) }
-        var typedConfirmation by remember { mutableStateOf("") }
-        OutlinedButton(
-            onClick = { typedConfirmation = ""; showDeleteConfirm = true },
-            enabled = !deletingAccount,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-        ) {
-            Text(stringResource(R.string.delete_account_button))
-        }
-        if (showDeleteConfirm) {
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = { showDeleteConfirm = false },
-                title = { Text(stringResource(R.string.delete_account_title)) },
-                text = {
-                    Column {
-                        Text(stringResource(R.string.delete_account_message))
-                        Spacer(modifier = Modifier.height(12.dp))
-                        androidx.compose.material3.OutlinedTextField(
-                            value = typedConfirmation,
-                            onValueChange = { typedConfirmation = it },
-                            singleLine = true,
-                            label = { Text("DELETE") },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        enabled = typedConfirmation == "DELETE",
-                        onClick = {
-                            showDeleteConfirm = false
-                            onDeleteAccount(typedConfirmation)
-                        },
-                    ) {
-                        Text(stringResource(R.string.delete_account_confirm), color = MaterialTheme.colorScheme.error)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showDeleteConfirm = false }) {
-                        Text(stringResource(R.string.delete_account_cancel))
-                    }
-                },
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun SettingsSection.description(): String = when (this) {
+    SettingsSection.GENERAL -> "This account, this app: facts, appearance, passkeys, other accounts."
+    SettingsSection.BACKENDS -> "Every known backend, the current one, and the connection tuning."
+    SettingsSection.TRUST -> "Reader (RICAL) and issuer (VICAL) trust; the key storages (WSCD)."
+    SettingsSection.CREDENTIALS -> "Consumption policy, BBS types, TS12 transaction data."
+    SettingsSection.REQUEST_POLICY -> "Non-disclosure, expected origins, signed requests."
+    SettingsSection.ZKP -> "Circuit-ZK, the proof system, verifier-id types, BBS credentials."
+    SettingsSection.PROFILES -> "TS12 transaction data; the presentation-behavior profiles."
+    SettingsSection.DEVICES -> "This account's wallet instances."
+    SettingsSection.DIAGNOSTICS -> "Diagnostic messages, profiling, the error journal's cap."
+    SettingsSection.DANGER -> "Irreversible: delete this account on the backend and wipe this device."
+}
+
+/**
+ * The old Account card's facts, retitled General (the 2026-11-16
+ * structure: first section, Appearance folded in - General owns the
+ * app-level facts and the appearance mode).
+ */
+@Composable
+private fun SettingsGeneral(
+    state: WalletState.Ready,
+    backendUrl: String,
+    tenantId: String,
+    useWmpProtocol: Boolean,
+    diipProfile: org.siros.sdk.credentials.interop.DiipProfile,
+    zkCircuitUrls: List<String>,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+            Text(
+                text = "General",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = SirosDesign.secondaryText,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            SettingsRow(stringResource(R.string.settings_signed_in_as), state.displayName ?: state.userId)
+            SettingsRow(stringResource(R.string.settings_backend_url), backendUrl)
+            SettingsRow(stringResource(R.string.settings_zk_circuit_urls), zkCircuitUrls.joinToString(", "))
+            SettingsRow(stringResource(R.string.settings_tenant_id), tenantId)
+            SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
+            SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
+            SettingsRow("Transport", if (useWmpProtocol) "WMP (JSON-RPC 2.0)" else "Legacy")
+            SettingsRow(
+                stringResource(R.string.settings_interop_profiles),
+                "HAIP \u00b7 DIIP ${diipProfile.version.uppercase()}",
             )
         }
+    }
+    Spacer(modifier = Modifier.height(16.dp))
 
-        Spacer(modifier = Modifier.height(16.dp))
+    // Appearance folded into General: follow the device, or always light,
+    // or always dark.
+    AppearanceSetting()
+}
+
+/**
+ * The credential consumption policy radio card (moved into the
+ * Credentials section, 2026-11-16).
+ */
+@Composable
+private fun CredentialConsumptionSection(
+    credentialConsumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy,
+    onUpdateCredentialConsumptionPolicy: ((org.siros.sdk.credentials.CredentialConsumptionPolicy) -> Unit)?,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+            Text(
+                stringResource(R.string.settings_credential_consumption_title),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = SirosDesign.secondaryText,
+            )
+            Text(
+                stringResource(R.string.settings_credential_consumption_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = SirosDesign.secondaryText,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Column(Modifier.selectableGroup()) {
+                for (policy in org.siros.sdk.credentials.CredentialConsumptionPolicy.entries) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = policy == credentialConsumptionPolicy,
+                                onClick = { onUpdateCredentialConsumptionPolicy?.invoke(policy) },
+                                role = Role.RadioButton,
+                                enabled = onUpdateCredentialConsumptionPolicy != null,
+                            )
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = policy == credentialConsumptionPolicy,
+                            onClick = { onUpdateCredentialConsumptionPolicy?.invoke(policy) },
+                            enabled = onUpdateCredentialConsumptionPolicy != null,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(credentialConsumptionPolicyLabelRes(policy)), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A section that is a link out to a full screen (the WSCD settings, the
+ * Devices manager): title, description, one or two entry buttons.
+ */
+@Composable
+private fun SettingsLinkCard(
+    title: String,
+    description: String,
+    button: String,
+    onButton: () -> Unit,
+    secondaryButton: String? = null,
+    onSecondaryButton: (() -> Unit)? = null,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = SirosDesign.secondaryText)
+            Text(description, style = MaterialTheme.typography.bodySmall, color = SirosDesign.secondaryText)
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onButton,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+            ) { Text(button) }
+            if (secondaryButton != null && onSecondaryButton != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onSecondaryButton,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text(secondaryButton) }
+            }
+        }
+    }
+}
+
+/**
+ * The Passkeys section: this account's passkeys (rename/add) and the other
+ * cached accounts (forget). Moved into its own sub-menu 2026-11-16.
+ */
+@Composable
+private fun SettingsPasskeysSection(
+    passkeys: List<org.siros.sdk.wallet.CachedPasskey>,
+    onRenamePasskey: ((String, String) -> Unit)?,
+    addingPasskey: Boolean,
+    onAddPasskey: ((String) -> Unit)?,
+    cachedAccounts: List<org.siros.sdk.wallet.CachedAccount>,
+    onForgetAccount: ((String) -> Unit)?,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+            Text("Passkeys", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = SirosDesign.secondaryText)
+            Spacer(modifier = Modifier.height(8.dp))
+            if (passkeys.isEmpty()) {
+                Text("No passkeys registered", style = MaterialTheme.typography.bodySmall, color = SirosDesign.secondaryText)
+            } else {
+                passkeys.forEach { passkey ->
+                    var editing by remember { mutableStateOf(false) }
+                    var nickname by remember { mutableStateOf(passkey.nickname) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (editing) {
+                            OutlinedTextField(
+                                value = nickname,
+                                onValueChange = { nickname = it },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                shape = RoundedCornerShape(8.dp),
+                            )
+                            IconButton(onClick = {
+                                onRenamePasskey?.invoke(passkey.credentialId, nickname)
+                                editing = false
+                            }) {
+                                Icon(Icons.Default.Check, contentDescription = "Save", modifier = Modifier.size(18.dp))
+                            }
+                            IconButton(onClick = { editing = false; nickname = passkey.nickname }) {
+                                Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(18.dp))
+                            }
+                        } else {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    passkey.nickname.ifEmpty { "Passkey ${passkey.credentialId.take(8)}..." },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    "ID: ${passkey.credentialId.take(16)}...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = SirosDesign.secondaryText,
+                                )
+                            }
+                            IconButton(onClick = { editing = true }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Rename")
+                            }
+                        }
+                    }
+                }
+            }
+            if (onAddPasskey != null) {
+                var showAdd by remember { mutableStateOf(false) }
+                var newNickname by remember { mutableStateOf("") }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { newNickname = ""; showAdd = true },
+                    enabled = !addingPasskey,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                ) { Text(stringResource(R.string.add_passkey_button)) }
+                if (showAdd) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = newNickname,
+                            onValueChange = { newNickname = it },
+                            label = { Text(stringResource(R.string.add_passkey_nickname)) },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(8.dp),
+                        )
+                        TextButton(
+                            onClick = { onAddPasskey(newNickname); showAdd = false },
+                            enabled = newNickname.isNotBlank() && !addingPasskey,
+                        ) { Text(stringResource(R.string.add_passkey_confirm)) }
+                    }
+                }
+            }
+        }
+    }
+    Spacer(modifier = Modifier.height(16.dp))
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+            Text("Other Accounts", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = SirosDesign.secondaryText)
+            Spacer(modifier = Modifier.height(8.dp))
+            if (cachedAccounts.isEmpty()) {
+                Text("No other cached accounts", style = MaterialTheme.typography.bodySmall, color = SirosDesign.secondaryText)
+            } else {
+                cachedAccounts.forEach { account ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(account.displayName.ifEmpty { account.accountId }, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        TextButton(onClick = { onForgetAccount?.invoke(account.accountId) }) {
+                            Text("Forget")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The Danger Zone (2026-11-16 review): the destructive actions, separated
+ * from everything else so they are never adjacent to a setting a user
+ * touches routinely. Delete account today - the one irreversible action
+ * the settings tree holds.
+ */
+@Composable
+private fun SettingsDangerSection(
+    deletingAccount: Boolean,
+    onDeleteAccount: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+            Text(
+                "Danger Zone",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Text(
+                stringResource(R.string.delete_account_message),
+                style = MaterialTheme.typography.bodySmall,
+                color = SirosDesign.secondaryText,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            var showDeleteConfirm by remember { mutableStateOf(false) }
+            var typedConfirmation by remember { mutableStateOf("") }
+            OutlinedButton(
+                onClick = { typedConfirmation = ""; showDeleteConfirm = true },
+                enabled = !deletingAccount,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) {
+                Text(stringResource(R.string.delete_account_button))
+            }
+            if (showDeleteConfirm) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showDeleteConfirm = false },
+                    title = { Text(stringResource(R.string.delete_account_title)) },
+                    text = {
+                        Column {
+                            Text(stringResource(R.string.delete_account_message))
+                            Spacer(modifier = Modifier.height(12.dp))
+                            androidx.compose.material3.OutlinedTextField(
+                                value = typedConfirmation,
+                                onValueChange = { typedConfirmation = it },
+                                singleLine = true,
+                                label = { Text("DELETE") },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            enabled = typedConfirmation == "DELETE",
+                            onClick = {
+                                showDeleteConfirm = false
+                                onDeleteAccount(typedConfirmation)
+                            },
+                        ) {
+                            Text(stringResource(R.string.delete_account_confirm), color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDeleteConfirm = false }) {
+                            Text(stringResource(R.string.delete_account_cancel))
+                        }
+                    },
+                )
+            }
+        }
     }
 }
 

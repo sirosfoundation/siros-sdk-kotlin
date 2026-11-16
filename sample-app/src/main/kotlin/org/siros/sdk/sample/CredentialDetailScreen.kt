@@ -30,6 +30,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Surface
@@ -87,6 +88,13 @@ fun CredentialDetailScreen(
     onBack: () -> Unit,
     onDelete: () -> Unit,
     onRenew: () -> Unit,
+    /**
+     * Opens this credential's own presentation history (the 2026-11-16
+     * "Recent presentations" entry): the history screen filtered on this
+     * credential's id. Null = the entry is hidden (a call site with no
+     * history surface).
+     */
+    onShowPresentations: ((Long) -> Unit)? = null,
     /**
      * Why this credential cannot currently be used, from the SDK's run of
      * DIIP's Validity and Revocation Algorithm (see
@@ -218,7 +226,7 @@ fun CredentialDetailScreen(
             }
 
             when (selectedTab) {
-                0 -> InfoTab(credential)
+                0 -> InfoTab(credential, onShowPresentations)
                 1 -> ClaimsTab(credential)
                 2 -> RawTab(credential)
             }
@@ -227,7 +235,10 @@ fun CredentialDetailScreen(
 }
 
 @Composable
-private fun InfoTab(credential: StoredCredential) {
+private fun InfoTab(
+    credential: StoredCredential,
+    onShowPresentations: ((Long) -> Unit)?,
+) {
     val meta = credential.metadata
     val dateFormatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
 
@@ -292,6 +303,20 @@ private fun InfoTab(credential: StoredCredential) {
                 credential.expiresAt?.let {
                     DetailRow(stringResource(R.string.credential_detail_expires), dateFormatter.format(Date(it * 1000)))
                 }
+            }
+        }
+
+        // This credential's own presentations (2026-11-16): the history
+        // screen filtered on it. A summary link, not the list itself -
+        // the full record (verifiers, dates, claims) lives one tap away.
+        if (onShowPresentations != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { onShowPresentations(credential.id) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text("Recent presentations")
             }
         }
 

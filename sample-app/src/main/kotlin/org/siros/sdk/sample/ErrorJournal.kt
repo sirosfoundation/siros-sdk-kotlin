@@ -43,19 +43,35 @@ enum class JournalSeverity { ERROR, INFO }
  * indistinguishable from any other failure, so the user could never read
  * what happened. The journal keeps them — **persisted across app restarts**
  * (a JSON file in the app's private storage; the ViewModel supplies the
- * [Context] on construction) — hard capped at [JOURNAL_MAX_LENGTH] (the
+ * [Context] on construction) — capped at [maxEntries] (the
  * oldest entry falls out) — and the screen reveals the technical details
  * only on request, with severity filters (errors / info / all).
  *
- * The persistence is fail-soft: a corrupt or unreadable store starts an
+ * The cap is [DEFAULT_MAX_ENTRIES] by default and settable at runtime
+ * ([setMaxEntries] — the 2026-11-16 settings restructure: a hard-coded 10
+ * was the one journal knob the audit found unexposed). The persistence is
+ * fail-soft: a corrupt or unreadable store starts an
  * empty journal (a write failure drops the persist, never the message —
  * the in-memory entry stands whatever the disk does).
  */
 class ErrorJournal(private val store: File? = null) {
     private val _entries = MutableStateFlow<List<ErrorJournalEntry>>(load())
 
+    /** The cap — the newest [maxEntries] entries are kept. */
+    private var maxEntries = DEFAULT_MAX_ENTRIES
+
     /** The kept entries, newest first. */
     val entries: StateFlow<List<ErrorJournalEntry>> = _entries.asStateFlow()
+
+    /**
+     * Sets the cap and trims immediately (a smaller cap drops the oldest
+     * entries past it right away, not lazily at the next record).
+     */
+    fun setMaxEntries(cap: Int) {
+        maxEntries = cap.coerceAtLeast(1)
+        _entries.value = _entries.value.take(maxEntries)
+        persist()
+    }
 
     /**
      * One new entry. [cause], when the failure came from an exception, is
@@ -89,7 +105,7 @@ class ErrorJournal(private val store: File? = null) {
             contact = contact,
             context = context,
         )
-        _entries.value = (listOf(entry) + _entries.value).take(JOURNAL_MAX_LENGTH)
+        _entries.value = (listOf(entry) + _entries.value).take(maxEntries)
         persist()
     }
 
@@ -129,11 +145,11 @@ class ErrorJournal(private val store: File? = null) {
     private fun nextId(): Long = ++lastId
 
     private companion object {
+        /** The default cap (settable at runtime - see setMaxEntries). */
+        const val DEFAULT_MAX_ENTRIES = 10
+
         /** How many stack frames an entry's technical details carry. */
         const val STACK_FRAMES = 12
-
-        /** The hard cap: the last 10 messages, the oldest falls out. */
-        const val JOURNAL_MAX_LENGTH = 10
 
         /** The journal store's JSON codec: member defaults tolerated (an older store's missing fields). */
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
