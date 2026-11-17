@@ -9663,6 +9663,20 @@ class SirosWallet private constructor(
                         withContext(peerJob) { onWmpFlowError(flowId, code, message, lifetime) }
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         if (!currentCoroutineContext().isActive) throw e
+                    } catch (e: Exception) {
+                        Timber.e(e, "WMP error handling for $flowId failed")
+                        // The flow ENDED server-side - the engine's error was
+                        // its terminal message - so the local state must still
+                        // clear or the spinner hangs forever on "initializing"
+                        // and issuanceInFlight blocks every later start with
+                        // "Another issuance is already in progress" (the
+                        // same ladder onComplete already carries; found
+                        // driving an SDK-wallet test round: an error response
+                        // during issuance left the wallet stuck, never
+                        // reaching onWmpFlowError's own resets).
+                        runCatching { resetIssuanceGuards() }
+                        runCatching { returnToReadyState() }
+                        runCatching { eventListener?.onFlowError(flowId, "The flow failed and the wallet could not process its error: ${e.message}") }
                     }
                 },
                 onCancel = { flowId -> onWmpFlowCancel(flowId, lifetime) },
