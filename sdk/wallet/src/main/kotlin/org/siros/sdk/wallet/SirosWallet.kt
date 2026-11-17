@@ -7107,7 +7107,7 @@ class SirosWallet private constructor(
             throw e
         } catch (e: Exception) {
             return (DeliveredMetadataRefusal.MALFORMED to emptyList<String>()) to emptyList()
-        } ?: return null to emptyList<kotlinx.serialization.json.JsonObject>()
+        }
         // An encrypted issuance's credentials and metadata are the wallet's own decrypted response, never the engine's.
         val opened = if (decoded.credentialResponseEncrypted) {
             blindIssuance.take(flowId)
@@ -12383,7 +12383,7 @@ class SirosWallet private constructor(
                 // derived for, else the offer's, else the one the engine states in the completion itself. A replayed or resumed
                 // completion can reach a wallet with no active offer and no preceding sign request, and the credential must
                 // still keep the exact issuer.
-                val flowIssuerId = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier ?: msg.credentialIssuer
+                val flowIssuerId = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier ?: msg.credentialIssuer ?: ""
                 val flowVctmDocument = activeVctmDocument
                 msg.credentials?.forEachIndexed { index, cred ->
                     if (cred.format == "mso_mdoc") {
