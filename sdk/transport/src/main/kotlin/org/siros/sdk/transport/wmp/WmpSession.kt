@@ -53,6 +53,32 @@ class WmpSession(
     fun notifications(): Flow<JsonRpcRequest> = incomingNotifications.receiveAsFlow()
 
     /**
+     * The engine's answers that mean the wallet's session is GONE server-side
+     * (wallet-core#48): `-31000` "Session not found" — the engine restarted or
+     * the store swept it — and `-31001` "Session expired" — the record is
+     * present but its TTL passed. Both are self-healable the same way: a
+     * transparent fresh `create` (the engine session is stateless from the
+     * wallet's perspective; the credentials live in the wallet's store, not
+     * the engine's). Matched on the message text because the error payload
+     * carries the message on every path ([WmpSessionException] embeds it).
+     */
+    fun isSessionGone(message: String?): Boolean {
+        if (message == null) return false
+        return message.contains("Session not found") || message.contains("Session expired")
+    }
+
+    /**
+     * A fresh [create] replaying the saved auth, sender and capabilities —
+     * the self-heal after the engine answered session loss (#48). The same
+     * call the resume-exhaustion fallback makes; safe to run over a
+     * connected transport (`resume` re-`connect`s the same way).
+     */
+    suspend fun recreate() {
+        val token = authToken ?: throw WmpSessionException("No auth token to recreate the session with")
+        create(token, sender, capabilities)
+    }
+
+    /**
      * Create a new WMP session with the given auth token.
      *
      * @param capabilitiesOffered the capabilities this wallet offers
@@ -369,8 +395,10 @@ class WmpSession(
             }
         }
 
-        // The resume exhausted. A "Session not found" means the session
-        // expired or the server restarted - it is GONE, and trying to
+        // The resume exhausted. A session-gone answer ("Session not found"
+        // for a swept/restarted session, "Session expired" for a present
+        // record whose TTL passed — #48: the wallet sat in the background
+        // past the engine's session TTL) means it is GONE, and trying to
         // resume again in 30 seconds is trying to bring back the dead.
         // The wallet's engine session is stateless from its own
         // perspective (the credentials live in the wallet's store, not
@@ -383,7 +411,11 @@ class WmpSession(
         // supported" (the capability gate fires on an unresolvable
         // session before the flow's own matching, so every request
         // failed identically regardless of which credential it named).
-        if (lastError?.message?.contains("Session not found") == true && authToken != null) {
+        // The original cut matched only "Session not found", so the
+        // TTL-expiry answer ("Session expired") fell through to FAILED
+        // and every later flow start surfaced its error - the recovery
+        // the #48 fix re-found on-device.
+        if (isSessionGone(lastError?.message) && authToken != null) {
             Timber.i("Session expired on the server; creating a fresh session")
             try {
                 create(authToken!!, sender, capabilities)
