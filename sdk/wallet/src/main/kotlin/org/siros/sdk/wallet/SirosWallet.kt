@@ -7107,7 +7107,7 @@ class SirosWallet private constructor(
             throw e
         } catch (e: Exception) {
             return (DeliveredMetadataRefusal.MALFORMED to emptyList<String>()) to emptyList()
-        }
+        } ?: return null to emptyList<kotlinx.serialization.json.JsonObject>()
         // An encrypted issuance's credentials and metadata are the wallet's own decrypted response, never the engine's.
         val opened = if (decoded.credentialResponseEncrypted) {
             blindIssuance.take(flowId)
