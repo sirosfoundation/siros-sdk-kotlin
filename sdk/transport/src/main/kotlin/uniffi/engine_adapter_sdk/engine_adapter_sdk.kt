@@ -2930,7 +2930,14 @@ data class MatchParams (
     /**
      * The transaction data entries, raw, for the UI's summary.
      */
-    var `transactionData`: List<kotlin.String>
+    var `transactionData`: List<kotlin.String>, 
+    /**
+     * The request's client metadata as raw JSON text — the verifier's
+     * `vp_formats_supported` (the zkp_req circuit lists the wallet's
+     * planner reads) and the consent's `client_name`/`logo_uri` ride it.
+     * Absent when the request carried none.
+     */
+    var `clientMetadata`: kotlin.String?
 ) {
     
     companion object
@@ -2947,6 +2954,7 @@ public object FfiConverterTypeMatchParams: FfiConverterRustBuffer<MatchParams> {
             FfiConverterString.read(buf),
             FfiConverterTypeVerifierInfo.read(buf),
             FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -2955,7 +2963,8 @@ public object FfiConverterTypeMatchParams: FfiConverterRustBuffer<MatchParams> {
             FfiConverterOptionalString.allocationSize(value.`dcqlQuery`) +
             FfiConverterString.allocationSize(value.`scope`) +
             FfiConverterTypeVerifierInfo.allocationSize(value.`verifier`) +
-            FfiConverterSequenceString.allocationSize(value.`transactionData`)
+            FfiConverterSequenceString.allocationSize(value.`transactionData`) +
+            FfiConverterOptionalString.allocationSize(value.`clientMetadata`)
     )
 
     override fun write(value: MatchParams, buf: ByteBuffer) {
@@ -2964,6 +2973,7 @@ public object FfiConverterTypeMatchParams: FfiConverterRustBuffer<MatchParams> {
             FfiConverterString.write(value.`scope`, buf)
             FfiConverterTypeVerifierInfo.write(value.`verifier`, buf)
             FfiConverterSequenceString.write(value.`transactionData`, buf)
+            FfiConverterOptionalString.write(value.`clientMetadata`, buf)
     }
 }
 
@@ -3343,7 +3353,14 @@ data class VerifierInfo (
     /**
      * Why the decision was made (the PDP's reason).
      */
-    var `reason`: kotlin.String
+    var `reason`: kotlin.String, 
+    /**
+     * The PDP's response context as raw JSON text — go-trust's
+     * `verifier_ids` (the wallet's pseudonym sources read them to scope
+     * a nym_auth pseudonym) and the registry's `display_name` ride it
+     * verbatim. Absent when the PDP answered with no context.
+     */
+    var `trustContext`: kotlin.String?
 ) {
     
     companion object
@@ -3363,6 +3380,7 @@ public object FfiConverterTypeVerifierInfo: FfiConverterRustBuffer<VerifierInfo>
             FfiConverterBoolean.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -3374,7 +3392,8 @@ public object FfiConverterTypeVerifierInfo: FfiConverterRustBuffer<VerifierInfo>
             FfiConverterString.allocationSize(value.`logoUri`) +
             FfiConverterBoolean.allocationSize(value.`trusted`) +
             FfiConverterString.allocationSize(value.`framework`) +
-            FfiConverterString.allocationSize(value.`reason`)
+            FfiConverterString.allocationSize(value.`reason`) +
+            FfiConverterOptionalString.allocationSize(value.`trustContext`)
     )
 
     override fun write(value: VerifierInfo, buf: ByteBuffer) {
@@ -3386,6 +3405,7 @@ public object FfiConverterTypeVerifierInfo: FfiConverterRustBuffer<VerifierInfo>
             FfiConverterBoolean.write(value.`trusted`, buf)
             FfiConverterString.write(value.`framework`, buf)
             FfiConverterString.write(value.`reason`, buf)
+            FfiConverterOptionalString.write(value.`trustContext`, buf)
     }
 }
 
@@ -3434,7 +3454,19 @@ data class VpParams (
      * The transport's selection handle, as the match answer carried
      * it (WMP OpenID4x 3.2.3.1): passed through unchanged.
      */
-    var `selectionHandle`: kotlin.String?
+    var `selectionHandle`: kotlin.String?, 
+    /**
+     * The request as the engine verified it — the wallet's ZK policy
+     * gate and the JARM audience read it. Absent for a request the
+     * engine did not verify. Mirrors `engine_ports::VpVerifiedRequest`.
+     */
+    var `verifiedRequest`: VpVerifiedRequest?, 
+    /**
+     * The verifier's response encryption parameters (the JWK for
+     * direct_post.jwt's JARM). Absent for a plain response mode.
+     * Mirrors `engine_ports::VpResponseEncryption`.
+     */
+    var `responseEncryption`: VpResponseEncryption?
 ) {
     
     companion object
@@ -3455,6 +3487,8 @@ public object FfiConverterTypeVpParams: FfiConverterRustBuffer<VpParams> {
             FfiConverterString.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalTypeVpVerifiedRequest.read(buf),
+            FfiConverterOptionalTypeVpResponseEncryption.read(buf),
         )
     }
 
@@ -3467,7 +3501,9 @@ public object FfiConverterTypeVpParams: FfiConverterRustBuffer<VpParams> {
             FfiConverterString.allocationSize(value.`verifierJwkThumbprint`) +
             FfiConverterString.allocationSize(value.`verifierSessionId`) +
             FfiConverterSequenceString.allocationSize(value.`transactionData`) +
-            FfiConverterOptionalString.allocationSize(value.`selectionHandle`)
+            FfiConverterOptionalString.allocationSize(value.`selectionHandle`) +
+            FfiConverterOptionalTypeVpVerifiedRequest.allocationSize(value.`verifiedRequest`) +
+            FfiConverterOptionalTypeVpResponseEncryption.allocationSize(value.`responseEncryption`)
     )
 
     override fun write(value: VpParams, buf: ByteBuffer) {
@@ -3480,6 +3516,58 @@ public object FfiConverterTypeVpParams: FfiConverterRustBuffer<VpParams> {
             FfiConverterString.write(value.`verifierSessionId`, buf)
             FfiConverterSequenceString.write(value.`transactionData`, buf)
             FfiConverterOptionalString.write(value.`selectionHandle`, buf)
+            FfiConverterOptionalTypeVpVerifiedRequest.write(value.`verifiedRequest`, buf)
+            FfiConverterOptionalTypeVpResponseEncryption.write(value.`responseEncryption`, buf)
+    }
+}
+
+
+
+/**
+ * The verifier's response encryption parameters — the embedded mirror
+ * of `engine_ports::VpResponseEncryption`.
+ */
+data class VpResponseEncryption (
+    /**
+     * The verifier's JWK (the response-encryption key), as raw JSON
+     * text — the uniffi surface carries strings, the wallet parses.
+     */
+    var `jwk`: kotlin.String, 
+    /**
+     * The JARM key wrapping algorithm (RSA-OAEP, ECDH-ES, …).
+     */
+    var `alg`: kotlin.String, 
+    /**
+     * The content encryption algorithm (A128GCM, A256GCM, …).
+     */
+    var `enc`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeVpResponseEncryption: FfiConverterRustBuffer<VpResponseEncryption> {
+    override fun read(buf: ByteBuffer): VpResponseEncryption {
+        return VpResponseEncryption(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: VpResponseEncryption) = (
+            FfiConverterString.allocationSize(value.`jwk`) +
+            FfiConverterString.allocationSize(value.`alg`) +
+            FfiConverterString.allocationSize(value.`enc`)
+    )
+
+    override fun write(value: VpResponseEncryption, buf: ByteBuffer) {
+            FfiConverterString.write(value.`jwk`, buf)
+            FfiConverterString.write(value.`alg`, buf)
+            FfiConverterString.write(value.`enc`, buf)
     }
 }
 
@@ -3573,6 +3661,86 @@ public object FfiConverterTypeVpSelection: FfiConverterRustBuffer<VpSelection> {
             FfiConverterString.write(value.`credentialQueryId`, buf)
             FfiConverterString.write(value.`credentialId`, buf)
             FfiConverterSequenceString.write(value.`disclosedClaims`, buf)
+    }
+}
+
+
+
+/**
+ * The request as the engine VERIFIED it — the embedded mirror of
+ * `engine_ports::VpVerifiedRequest`: the wallet's ZK policy gate reads
+ * `signed` AND `signature_verification == "verified"`, and the JARM
+ * audience is the certificate-authenticated `client_id`.
+ */
+data class VpVerifiedRequest (
+    /**
+     * The client_id the request object's certificate authenticated.
+     */
+    var `clientId`: kotlin.String, 
+    /**
+     * The client_id scheme, as the engine inferred it.
+     */
+    var `clientIdScheme`: kotlin.String, 
+    /**
+     * The response mode's wire name.
+     */
+    var `responseMode`: kotlin.String, 
+    /**
+     * The response URI the engine validated.
+     */
+    var `responseUri`: kotlin.String, 
+    /**
+     * Whether the request object's signature was verified.
+     */
+    var `signed`: kotlin.Boolean, 
+    /**
+     * `verified` or `none` — the engine verifies synchronously at
+     * parse and never defers.
+     */
+    var `signatureVerification`: kotlin.String, 
+    /**
+     * The raw request JWT, when the request object was signed.
+     */
+    var `requestJwt`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeVpVerifiedRequest: FfiConverterRustBuffer<VpVerifiedRequest> {
+    override fun read(buf: ByteBuffer): VpVerifiedRequest {
+        return VpVerifiedRequest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: VpVerifiedRequest) = (
+            FfiConverterString.allocationSize(value.`clientId`) +
+            FfiConverterString.allocationSize(value.`clientIdScheme`) +
+            FfiConverterString.allocationSize(value.`responseMode`) +
+            FfiConverterString.allocationSize(value.`responseUri`) +
+            FfiConverterBoolean.allocationSize(value.`signed`) +
+            FfiConverterString.allocationSize(value.`signatureVerification`) +
+            FfiConverterOptionalString.allocationSize(value.`requestJwt`)
+    )
+
+    override fun write(value: VpVerifiedRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`clientId`, buf)
+            FfiConverterString.write(value.`clientIdScheme`, buf)
+            FfiConverterString.write(value.`responseMode`, buf)
+            FfiConverterString.write(value.`responseUri`, buf)
+            FfiConverterBoolean.write(value.`signed`, buf)
+            FfiConverterString.write(value.`signatureVerification`, buf)
+            FfiConverterOptionalString.write(value.`requestJwt`, buf)
     }
 }
 
@@ -4944,6 +5112,70 @@ public object FfiConverterOptionalTypeSignRefusal: FfiConverterRustBuffer<SignRe
         } else {
             buf.put(1)
             FfiConverterTypeSignRefusal.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeVpResponseEncryption: FfiConverterRustBuffer<VpResponseEncryption?> {
+    override fun read(buf: ByteBuffer): VpResponseEncryption? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeVpResponseEncryption.read(buf)
+    }
+
+    override fun allocationSize(value: VpResponseEncryption?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeVpResponseEncryption.allocationSize(value)
+        }
+    }
+
+    override fun write(value: VpResponseEncryption?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeVpResponseEncryption.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeVpVerifiedRequest: FfiConverterRustBuffer<VpVerifiedRequest?> {
+    override fun read(buf: ByteBuffer): VpVerifiedRequest? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeVpVerifiedRequest.read(buf)
+    }
+
+    override fun allocationSize(value: VpVerifiedRequest?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeVpVerifiedRequest.allocationSize(value)
+        }
+    }
+
+    override fun write(value: VpVerifiedRequest?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeVpVerifiedRequest.write(value, buf)
         }
     }
 }
