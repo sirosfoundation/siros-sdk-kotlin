@@ -191,6 +191,15 @@ jobs:
       # signed with the org's SDK signing key. AUTOMATIC: published as soon
       # as Central's validation passes, no portal step. Runs regardless of
       # the GitHub Packages step's outcome (see that step's comment).
+      #
+      # NON-FATAL by design (the wallet-core release workflow's own rule):
+      # the org's Central quota is monthly and the grace period has already
+      # ended once mid-train (2026-11-14; usage resets 2026-12-01 — the
+      # v0.23.3 run went red on exactly this while GitHub Packages and the
+      # Play Store carried the release). GH Packages serves the artifacts
+      # either way; re-run this job after the quota resets to land the
+      # Central half (already-published components answer 400 and may be
+      # ignored).
       - name: Publish SDK to Maven Central
         run: ./gradlew nmcpPublishAggregationToCentralPortal -PsdkVersion="${GITHUB_REF_NAME#v}" -x test -x lint
         env:
@@ -198,6 +207,7 @@ jobs:
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
           SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        continue-on-error: true
 
       # The `continue-on-error` above must not silently mask a genuine
       # GitHub Packages publish failure - only decouple it from Maven
