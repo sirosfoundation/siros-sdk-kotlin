@@ -7107,7 +7107,7 @@ class SirosWallet private constructor(
             throw e
         } catch (e: Exception) {
             return (DeliveredMetadataRefusal.MALFORMED to emptyList<String>()) to emptyList()
-        } ?: return null to emptyList<kotlinx.serialization.json.JsonObject>()
+        }
         // An encrypted issuance's credentials and metadata are the wallet's own decrypted response, never the engine's.
         val opened = if (decoded.credentialResponseEncrypted) {
             blindIssuance.take(flowId)
@@ -9663,6 +9663,20 @@ class SirosWallet private constructor(
                         withContext(peerJob) { onWmpFlowError(flowId, code, message, lifetime) }
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         if (!currentCoroutineContext().isActive) throw e
+                    } catch (e: Exception) {
+                        Timber.e(e, "WMP error handling for $flowId failed")
+                        // The flow ENDED server-side - the engine's error was
+                        // its terminal message - so the local state must still
+                        // clear or the spinner hangs forever on "initializing"
+                        // and issuanceInFlight blocks every later start with
+                        // "Another issuance is already in progress" (the
+                        // same ladder onComplete already carries; found
+                        // driving an SDK-wallet test round: an error response
+                        // during issuance left the wallet stuck, never
+                        // reaching onWmpFlowError's own resets).
+                        runCatching { resetIssuanceGuards() }
+                        runCatching { returnToReadyState() }
+                        runCatching { eventListener?.onFlowError(flowId, "The flow failed and the wallet could not process its error: ${e.message}") }
                     }
                 },
                 onCancel = { flowId -> onWmpFlowCancel(flowId, lifetime) },
@@ -12369,7 +12383,7 @@ class SirosWallet private constructor(
                 // derived for, else the offer's, else the one the engine states in the completion itself. A replayed or resumed
                 // completion can reach a wallet with no active offer and no preceding sign request, and the credential must
                 // still keep the exact issuer.
-                val flowIssuerId = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier ?: msg.credentialIssuer
+                val flowIssuerId = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier ?: msg.credentialIssuer ?: ""
                 val flowVctmDocument = activeVctmDocument
                 msg.credentials?.forEachIndexed { index, cred ->
                     if (cred.format == "mso_mdoc") {
