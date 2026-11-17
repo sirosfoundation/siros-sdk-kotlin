@@ -126,6 +126,27 @@ class WmpPeer(
 
     /** Start a flow via wmp.flow.start. */
     suspend fun startFlow(flowType: String, flowId: String, params: JsonObject? = null): FlowStartResult {
+        try {
+            return performStart(flowType, flowId, params)
+        } catch (e: WmpSessionException) {
+            // The session-loss self-heal (#48, wallet-core#48): a flow start
+            // that names a session the engine no longer honours - swept by a
+            // restart, or expired while the wallet sat in the background -
+            // answers "Session not found" / "Session expired" instead of
+            // running. The transport-disconnect recovery never fires when no
+            // disconnect was observed (the wallet foregrounded straight into
+            // a scan), so the refusal IS the first notice. A fresh session
+            // (the engine session is stateless from the wallet's side) and
+            // one retry; anything else re-raises.
+            if (!session.isSessionGone(e.message)) throw e
+            Timber.i("flow.start for $flowId answered session loss (${e.message}); recreating the session and retrying once")
+            session.recreate()
+            return performStart(flowType, flowId, params)
+        }
+    }
+
+    /** The flow start itself, without the session-loss recovery. */
+    private suspend fun performStart(flowType: String, flowId: String, params: JsonObject? = null): FlowStartResult {
         val reqParams = codec.encodeParams(
             FlowStartParams(
                 wmp = WmpMeta(),
