@@ -2690,7 +2690,9 @@ public final class org/siros/sdk/transport/wmp/WmpSession {
 	public final fun create (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun create$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun isSessionGone (Ljava/lang/String;)Z
 	public final fun notifications ()Lkotlinx/coroutines/flow/Flow;
+	public final fun recreate (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun resume (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendNotification (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendRequest (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
