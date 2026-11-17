@@ -4373,6 +4373,46 @@ public final class uniffi/engine_adapter_sdk/FfiConverterOptionalTypeSignRefusal
 	public fun write (Luniffi/engine_adapter_sdk/SignRefusal;Ljava/nio/ByteBuffer;)V
 }
 
+public final class uniffi/engine_adapter_sdk/FfiConverterOptionalTypeVpResponseEncryption : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterOptionalTypeVpResponseEncryption;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/VpResponseEncryption;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/VpResponseEncryption;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/VpResponseEncryption;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/VpResponseEncryption;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/VpResponseEncryption;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/VpResponseEncryption;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/VpResponseEncryption;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterOptionalTypeVpVerifiedRequest : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterOptionalTypeVpVerifiedRequest;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/VpVerifiedRequest;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/VpVerifiedRequest;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/VpVerifiedRequest;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/VpVerifiedRequest;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/VpVerifiedRequest;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/VpVerifiedRequest;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/VpVerifiedRequest;Ljava/nio/ByteBuffer;)V
+}
+
 public abstract interface class uniffi/engine_adapter_sdk/FfiConverterRustBuffer : uniffi/engine_adapter_sdk/FfiConverter {
 	public abstract fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
 	public abstract fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
@@ -5276,6 +5316,26 @@ public final class uniffi/engine_adapter_sdk/FfiConverterTypeVpParams : uniffi/e
 	public fun write (Luniffi/engine_adapter_sdk/VpParams;Ljava/nio/ByteBuffer;)V
 }
 
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeVpResponseEncryption : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeVpResponseEncryption;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/VpResponseEncryption;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/VpResponseEncryption;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/VpResponseEncryption;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/VpResponseEncryption;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/VpResponseEncryption;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/VpResponseEncryption;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/VpResponseEncryption;Ljava/nio/ByteBuffer;)V
+}
+
 public final class uniffi/engine_adapter_sdk/FfiConverterTypeVpResult : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
 	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeVpResult;
 	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
@@ -5314,6 +5374,26 @@ public final class uniffi/engine_adapter_sdk/FfiConverterTypeVpSelection : uniff
 	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/VpSelection;
 	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
 	public fun write (Luniffi/engine_adapter_sdk/VpSelection;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeVpVerifiedRequest : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeVpVerifiedRequest;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/VpVerifiedRequest;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/VpVerifiedRequest;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/VpVerifiedRequest;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/VpVerifiedRequest;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/VpVerifiedRequest;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/VpVerifiedRequest;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/VpVerifiedRequest;Ljava/nio/ByteBuffer;)V
 }
 
 public final class uniffi/engine_adapter_sdk/FfiConverterTypeWmpEngine : uniffi/engine_adapter_sdk/FfiConverter {
@@ -5498,21 +5578,24 @@ public final class uniffi/engine_adapter_sdk/InternalException : java/lang/Excep
 
 public final class uniffi/engine_adapter_sdk/MatchParams {
 	public static final field Companion Luniffi/engine_adapter_sdk/MatchParams$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/VerifierInfo;Ljava/util/List;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/VerifierInfo;Ljava/util/List;Ljava/lang/String;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Luniffi/engine_adapter_sdk/VerifierInfo;
 	public final fun component5 ()Ljava/util/List;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/VerifierInfo;Ljava/util/List;)Luniffi/engine_adapter_sdk/MatchParams;
-	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/MatchParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/VerifierInfo;Ljava/util/List;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/MatchParams;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/VerifierInfo;Ljava/util/List;Ljava/lang/String;)Luniffi/engine_adapter_sdk/MatchParams;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/MatchParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/VerifierInfo;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/MatchParams;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClientMetadata ()Ljava/lang/String;
 	public final fun getDcqlQuery ()Ljava/lang/String;
 	public final fun getFlowId ()Ljava/lang/String;
 	public final fun getScope ()Ljava/lang/String;
 	public final fun getTransactionData ()Ljava/util/List;
 	public final fun getVerifier ()Luniffi/engine_adapter_sdk/VerifierInfo;
 	public fun hashCode ()I
+	public final fun setClientMetadata (Ljava/lang/String;)V
 	public final fun setDcqlQuery (Ljava/lang/String;)V
 	public final fun setFlowId (Ljava/lang/String;)V
 	public final fun setScope (Ljava/lang/String;)V
@@ -5802,7 +5885,7 @@ public abstract interface class uniffi/engine_adapter_sdk/UniffiRustCallStatusEr
 
 public final class uniffi/engine_adapter_sdk/VerifierInfo {
 	public static final field Companion Luniffi/engine_adapter_sdk/VerifierInfo$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/ClientIdScheme;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/ClientIdScheme;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Luniffi/engine_adapter_sdk/ClientIdScheme;
@@ -5811,8 +5894,9 @@ public final class uniffi/engine_adapter_sdk/VerifierInfo {
 	public final fun component6 ()Z
 	public final fun component7 ()Ljava/lang/String;
 	public final fun component8 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/ClientIdScheme;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/VerifierInfo;
-	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/VerifierInfo;Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/ClientIdScheme;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/VerifierInfo;
+	public final fun component9 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/ClientIdScheme;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/VerifierInfo;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/VerifierInfo;Ljava/lang/String;Ljava/lang/String;Luniffi/engine_adapter_sdk/ClientIdScheme;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/VerifierInfo;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getClientId ()Ljava/lang/String;
 	public final fun getClientIdScheme ()Luniffi/engine_adapter_sdk/ClientIdScheme;
@@ -5821,6 +5905,7 @@ public final class uniffi/engine_adapter_sdk/VerifierInfo {
 	public final fun getLogoUri ()Ljava/lang/String;
 	public final fun getName ()Ljava/lang/String;
 	public final fun getReason ()Ljava/lang/String;
+	public final fun getTrustContext ()Ljava/lang/String;
 	public final fun getTrusted ()Z
 	public fun hashCode ()I
 	public final fun setClientId (Ljava/lang/String;)V
@@ -5830,6 +5915,7 @@ public final class uniffi/engine_adapter_sdk/VerifierInfo {
 	public final fun setLogoUri (Ljava/lang/String;)V
 	public final fun setName (Ljava/lang/String;)V
 	public final fun setReason (Ljava/lang/String;)V
+	public final fun setTrustContext (Ljava/lang/String;)V
 	public final fun setTrusted (Z)V
 	public fun toString ()Ljava/lang/String;
 }
@@ -5839,8 +5925,10 @@ public final class uniffi/engine_adapter_sdk/VerifierInfo$Companion {
 
 public final class uniffi/engine_adapter_sdk/VpParams {
 	public static final field Companion Luniffi/engine_adapter_sdk/VpParams$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Luniffi/engine_adapter_sdk/VpVerifiedRequest;Luniffi/engine_adapter_sdk/VpResponseEncryption;)V
 	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Luniffi/engine_adapter_sdk/VpVerifiedRequest;
+	public final fun component11 ()Luniffi/engine_adapter_sdk/VpResponseEncryption;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Ljava/util/List;
@@ -5849,32 +5937,58 @@ public final class uniffi/engine_adapter_sdk/VpParams {
 	public final fun component7 ()Ljava/lang/String;
 	public final fun component8 ()Ljava/util/List;
 	public final fun component9 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)Luniffi/engine_adapter_sdk/VpParams;
-	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/VpParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/VpParams;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Luniffi/engine_adapter_sdk/VpVerifiedRequest;Luniffi/engine_adapter_sdk/VpResponseEncryption;)Luniffi/engine_adapter_sdk/VpParams;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/VpParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Luniffi/engine_adapter_sdk/VpVerifiedRequest;Luniffi/engine_adapter_sdk/VpResponseEncryption;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/VpParams;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAudience ()Ljava/lang/String;
 	public final fun getFlowId ()Ljava/lang/String;
 	public final fun getNonce ()Ljava/lang/String;
+	public final fun getResponseEncryption ()Luniffi/engine_adapter_sdk/VpResponseEncryption;
 	public final fun getResponseUri ()Ljava/lang/String;
 	public final fun getSelectionHandle ()Ljava/lang/String;
 	public final fun getSelections ()Ljava/util/List;
 	public final fun getTransactionData ()Ljava/util/List;
+	public final fun getVerifiedRequest ()Luniffi/engine_adapter_sdk/VpVerifiedRequest;
 	public final fun getVerifierJwkThumbprint ()Ljava/lang/String;
 	public final fun getVerifierSessionId ()Ljava/lang/String;
 	public fun hashCode ()I
 	public final fun setAudience (Ljava/lang/String;)V
 	public final fun setFlowId (Ljava/lang/String;)V
 	public final fun setNonce (Ljava/lang/String;)V
+	public final fun setResponseEncryption (Luniffi/engine_adapter_sdk/VpResponseEncryption;)V
 	public final fun setResponseUri (Ljava/lang/String;)V
 	public final fun setSelectionHandle (Ljava/lang/String;)V
 	public final fun setSelections (Ljava/util/List;)V
 	public final fun setTransactionData (Ljava/util/List;)V
+	public final fun setVerifiedRequest (Luniffi/engine_adapter_sdk/VpVerifiedRequest;)V
 	public final fun setVerifierJwkThumbprint (Ljava/lang/String;)V
 	public final fun setVerifierSessionId (Ljava/lang/String;)V
 	public fun toString ()Ljava/lang/String;
 }
 
 public final class uniffi/engine_adapter_sdk/VpParams$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/VpResponseEncryption {
+	public static final field Companion Luniffi/engine_adapter_sdk/VpResponseEncryption$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/VpResponseEncryption;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/VpResponseEncryption;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/VpResponseEncryption;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAlg ()Ljava/lang/String;
+	public final fun getEnc ()Ljava/lang/String;
+	public final fun getJwk ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setAlg (Ljava/lang/String;)V
+	public final fun setEnc (Ljava/lang/String;)V
+	public final fun setJwk (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/VpResponseEncryption$Companion {
 }
 
 public final class uniffi/engine_adapter_sdk/VpResult {
@@ -5916,6 +6030,40 @@ public final class uniffi/engine_adapter_sdk/VpSelection {
 }
 
 public final class uniffi/engine_adapter_sdk/VpSelection$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/VpVerifiedRequest {
+	public static final field Companion Luniffi/engine_adapter_sdk/VpVerifiedRequest$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Z
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/VpVerifiedRequest;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/VpVerifiedRequest;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/VpVerifiedRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClientId ()Ljava/lang/String;
+	public final fun getClientIdScheme ()Ljava/lang/String;
+	public final fun getRequestJwt ()Ljava/lang/String;
+	public final fun getResponseMode ()Ljava/lang/String;
+	public final fun getResponseUri ()Ljava/lang/String;
+	public final fun getSignatureVerification ()Ljava/lang/String;
+	public final fun getSigned ()Z
+	public fun hashCode ()I
+	public final fun setClientId (Ljava/lang/String;)V
+	public final fun setClientIdScheme (Ljava/lang/String;)V
+	public final fun setRequestJwt (Ljava/lang/String;)V
+	public final fun setResponseMode (Ljava/lang/String;)V
+	public final fun setResponseUri (Ljava/lang/String;)V
+	public final fun setSignatureVerification (Ljava/lang/String;)V
+	public final fun setSigned (Z)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/VpVerifiedRequest$Companion {
 }
 
 public class uniffi/engine_adapter_sdk/WmpEngine : java/lang/AutoCloseable, uniffi/engine_adapter_sdk/Disposable, uniffi/engine_adapter_sdk/WmpEngineInterface {
