@@ -9072,13 +9072,47 @@ class SirosWallet private constructor(
      * storage, the §10 notification (the FLOW form on this engine), the guard
      * resets and the state return are the legacy path's, reused one-for-one.
      */
-    private suspend fun handleWmpIssuanceComplete(flowId: String, result: kotlinx.serialization.json.JsonObject) {
+    /**
+     * One entry's context in a batch completion (#28, wallet-core#46): the
+     * engine's completion carries one `credentials[]` entry per selected
+     * configuration, with the flow-level legacy members beside the array.
+     * [completion] is the whole completion object (the renewal relay and
+     * the flow-level notification members live there), [index] the entry's
+     * position (the `instanceId` of its [StoredCredential]), and the id
+     * lists the per-entry members the metadata gate filled.
+     */
+    private data class WmpIssuanceBatchContext(
+        val completion: kotlinx.serialization.json.JsonObject,
+        val index: Int,
+        val entryConfigurationIds: List<String?>,
+        val entryNotificationIds: List<String?>,
+    )
+
+    private suspend fun handleWmpIssuanceComplete(
+        flowId: String,
+        result: kotlinx.serialization.json.JsonObject,
+        batchContext: WmpIssuanceBatchContext? = null,
+    ) {
         fun member(name: String): String? =
             (result[name] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
         val credential = member("credential") ?: ""
-        val refreshToken = member("refresh_token")
-        val dpopJwk = member("dpop_jwk")
+        // The renewal relay (refresh_token, dpop_jwk) and the per-entry
+        // notification id are FLOW-LEVEL members on the engine's batch
+        // completions (#28/#46): per-entry calls read them from the
+        // completion object, not from the entry.
+        val flowLevel = batchContext?.completion ?: result
+        fun flowMember(name: String): String? =
+            (flowLevel[name] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        val refreshToken = flowMember("refresh_token")
+        val dpopJwk = flowMember("dpop_jwk")
         val notificationId = member("notification_id")
+            ?: batchContext?.let { ctx -> ctx.entryNotificationIds.getOrNull(ctx.index) }
+        // The configuration THIS entry issued under (#28): the engine's
+        // per-entry credential_configuration_id, else the offer's (the
+        // single-configuration legacy view).
+        val entryConfigurationId = member("credential_configuration_id")
+            ?: batchContext?.let { ctx -> ctx.entryConfigurationIds.getOrNull(ctx.index) }
+            ?: activeOffer?.credentialConfigurationId
         if (credential.isEmpty()) {
             // deferred=true with no credential is the engine's error path (a
             // deferred credential the issuer never delivered) - reported, not
@@ -9109,8 +9143,10 @@ class SirosWallet private constructor(
         // after a later start replaced the shared state).
         val format = try {
             flowOffer?.let { offer ->
+                // The ENTRY's configuration (#28): a batch entry issues
+                // under its own configuration id, not the offer's single one.
                 getIssuerMetadata(offer.credentialIssuerIdentifier)
-                    .credentialConfigurationsSupported[offer.credentialConfigurationId]?.format
+                    .credentialConfigurationsSupported[entryConfigurationId]?.format
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -9160,9 +9196,9 @@ class SirosWallet private constructor(
                     },
                     notificationId = notificationId,
                     credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
-                    credentialConfigurationId = flowOffer?.credentialConfigurationId,
+                    credentialConfigurationId = entryConfigurationId,
                     batchId = batchId,
-                    instanceId = 0,
+                    instanceId = batchContext?.index ?: 0,
                 )
             }
         } else {
@@ -9203,9 +9239,9 @@ class SirosWallet private constructor(
                                 expiresAt = exp,
                                 notificationId = notificationId,
                                 credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
-                                credentialConfigurationId = flowOffer?.credentialConfigurationId,
+                                credentialConfigurationId = entryConfigurationId,
                                 batchId = batchId,
-                                instanceId = 0,
+                                instanceId = batchContext?.index ?: 0,
                             )
                         }
                     }
@@ -9364,19 +9400,19 @@ class SirosWallet private constructor(
             // Everything else is the presentation completion set
             // ({presented}, {declined}, …), which stores nothing.
             //
-            // siros-wallet-core's single-`credential` completion is stored
-            // FIRST (the original order - the engine decrypted it; the
-            // metadata gate is the batch path's alone).
-            if (result?.containsKey("credential") == true) {
-                handleWmpIssuanceComplete(flowId, result)
-                return
-            }
-            // A `credentials` ARRAY is the BATCH shape (issue #398): the gate
-            // runs first - a plaintext delivery after an offer is the
-            // downgrade refusal, an encrypted one is filled from the wallet's
-            // own decrypted response - and a CLEAN batch is then stored,
-            // entry by entry, never "success with nothing stored" (the
-            // pre-#398 handler validated the entries and discarded them).
+            // A `credentials` ARRAY is the BATCH shape (issue #398, #28):
+            // the engine's completions carry one entry per selected
+            // configuration BESIDE the flow-level legacy `credential`
+            // (the first entry's value) - so the ARRAY is checked FIRST
+            // (the single member is the legacy view and would short-circuit
+            // the batch, storing the first entry and dropping the rest -
+            // found as the >1-credential-in-an-offer gap; the Swift twin
+            // carries the same fix). The gate runs first - a plaintext
+            // delivery after an offer is the downgrade refusal, an
+            // encrypted one is filled from the wallet's own decrypted
+            // response - and a CLEAN batch is then stored, entry by
+            // entry, never "success with nothing stored" (the pre-#398
+            // handler validated the entries and discarded them).
             if (result?.containsKey("credentials") == true) {
                 val (refusal, entries) = wmpDeliveredMetadataCheck(flowId, result)
                 if (refusal != null) {
@@ -9402,9 +9438,45 @@ class SirosWallet private constructor(
                     returnToReadyState()
                     return
                 }
-                for (entry in entries) {
-                    handleWmpIssuanceComplete(flowId, entry)
+                // The per-entry members the gate filled (the wallet's own
+                // decrypted values for an encrypted batch): the ids of the
+                // configurations and the notifications, in entry order.
+                val entryConfigurationIds = entries.map { entry ->
+                    (entry["credential_configuration_id"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
                 }
+                val entryNotificationIds = entries.map { entry ->
+                    (entry["notification_id"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                }
+                val completion = result ?: kotlinx.serialization.json.buildJsonObject { }
+                entries.forEachIndexed { index, entry ->
+                    handleWmpIssuanceComplete(
+                        flowId,
+                        entry,
+                        WmpIssuanceBatchContext(
+                            completion = completion,
+                            index = index,
+                            entryConfigurationIds = entryConfigurationIds,
+                            entryNotificationIds = entryNotificationIds,
+                        ),
+                    )
+                }
+                // The engine's per-configuration failures (#28/#46): a
+                // partial batch reports WHICH configurations did not issue.
+                // The completion still succeeds - the stored entries stand -
+                // so these are logged for the operator, not surfaced as a
+                // flow error over the success.
+                (completion["failures"] as? kotlinx.serialization.json.JsonArray)?.forEach { failure ->
+                    val members = failure as? kotlinx.serialization.json.JsonObject ?: return@forEach
+                    val fid = (members["credential_configuration_id"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    val reason = (members["error"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    Timber.w("WMP issuance flow $flowId: configuration $fid failed: $reason")
+                }
+                return
+            }
+            // The single-`credential` completion (the legacy view, an
+            // engine without the batch): stored whole.
+            if (result?.containsKey("credential") == true) {
+                handleWmpIssuanceComplete(flowId, result)
                 return
             }
             val refusal = wmpDeliveredMetadataRefusal(flowId, result)
