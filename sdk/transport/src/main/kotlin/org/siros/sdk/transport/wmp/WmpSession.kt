@@ -261,10 +261,18 @@ class WmpSession(
             // against the very thread that must render the consent sheet (found:
             // the GDC presentation - the flow hung at the match, the sheet never
             // rendered, the app froze). The blocking send belongs on IO.
-            withContext(kotlinx.coroutines.Dispatchers.IO) {
-                transport.send(message)
+            // The timeout wraps the send AND the await (#417): a request
+            // on a severed pooled connection would otherwise hang in the
+            // send forever - the timeout cancels the transport's in-flight
+            // call (the cancellable form), okhttp evicts the dead
+            // connection, and the error surfaces as a retryable
+            // WmpTimeoutException instead of an indefinite hang.
+            return withTimeout(timeoutMs) {
+                withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    transport.send(message)
+                }
+                deferred.await()
             }
-            return withTimeout(timeoutMs) { deferred.await() }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             Timber.w("sendRequest: $method id=$id TIMED OUT after ${timeoutMs}ms")
             pendingRequests.remove(id)
