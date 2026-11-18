@@ -7683,9 +7683,22 @@ class SirosWallet private constructor(
     }
 
     /**
-     * A start that failed before the engine reported any flow: clear the
-     * pending state so the host is not left on a spinner that nothing will ever
-     * clear. The exception itself is the error; this only restores [WalletState.Ready].
+     * A start that failed before any flow could complete: clear THIS
+     * attempt's state so the host is not left on a spinner that nothing
+     * will ever clear. The exception itself is the error; this only
+     * restores [WalletState.Ready].
+     *
+     * The state may no longer be the pending placeholder: the engine's
+     * own progress events (parsing_offer, the trust report) can arrive
+     * before the start's error and adopt the real flow id, so
+     * [WalletState.FlowActive.isPending] is false by the time the failure
+     * lands (found on the realeyes demo: an issuance error mid-flow left
+     * the wallet on the flow screen forever - the guard skipped the reset
+     * exactly because progress had moved the state forward). The id this
+     * attempt chose ([wmpIssuanceStartFlowId], recorded before the start)
+     * identifies the dead attempt either way; a flow state that is
+     * neither the placeholder nor this attempt's id belongs to something
+     * else (a running presentation) and is left alone.
      */
     private fun failIssuanceStart(epoch: Int) {
         issuanceInFlight = false
@@ -7694,9 +7707,12 @@ class SirosWallet private constructor(
         activeVctm = null
         activeZkIssuanceInput = null
         val current = _state.value
-        if (current is WalletState.FlowActive && current.isPending) {
+        if (current is WalletState.FlowActive &&
+            (current.isPending || current.flowId == wmpIssuanceStartFlowId)
+        ) {
             _state.value = readyState(current.userId, current.displayName, current.credentials)
         }
+        wmpIssuanceStartFlowId = null
     }
 
     /**
@@ -10214,6 +10230,10 @@ class SirosWallet private constructor(
             null
         }
         val flowId = wmpNewFlowId()
+        // On record BEFORE the start (#417's follow-on: a start that fails
+        // after the engine's progress events adopted this id must be
+        // recognisable as THIS attempt's state - see failIssuanceStart).
+        wmpIssuanceStartFlowId = flowId
         val params = kotlinx.serialization.json.buildJsonObject {
             offerObject?.forEach { (key, value) -> put(key, value) }
             credentialOfferUri?.let {

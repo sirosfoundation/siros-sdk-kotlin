@@ -138,9 +138,35 @@ class WmpPeer(
             // a scan), so the refusal IS the first notice. A fresh session
             // (the engine session is stateless from the wallet's side) and
             // one retry; anything else re-raises.
-            if (!session.isSessionGone(e.message)) throw e
-            Timber.i("flow.start for $flowId answered session loss (${e.message}); recreating the session and retrying once")
-            session.recreate()
+            if (session.isSessionGone(e.message)) {
+                Timber.i("flow.start for $flowId answered session loss (${e.message}); recreating the session and retrying once")
+                session.recreate()
+                return performStart(flowType, flowId, params)
+            }
+            // The severed-connection retry (#417): a transport-level
+            // failure - the request timeout firing on a POST that hung on
+            // the engine machine's dead pooled connection (a routine
+            // redeploy), or the socket error that finally surfaced - means
+            // the start NEVER REACHED THE ENGINE: the flow id is unused
+            // server-side, so replaying it is safe. The cancelled call has
+            // already evicted the dead connection; the retry rides a fresh
+            // one, reaches the new machine, and the #48 recovery above
+            // closes the loop from there. A session-loss error is NOT a
+            // transport error (it arrived - the connection was alive), so
+            // the two retries never stack on one failure.
+            if (e.cause is java.io.IOException) {
+                Timber.w("flow.start for $flowId failed on the transport (${e.message}); retrying once on a fresh connection")
+                return performStart(flowType, flowId, params)
+            }
+            throw e
+        } catch (e: WmpTimeoutException) {
+            // #417's own shape: the request timeout on a POST that hung on
+            // the severed connection - the start never reached the engine,
+            // the flow id is unused server-side, the cancelled call has
+            // evicted the dead pooled connection. One retry, fresh
+            // connection; if the fresh POST also times out (a genuinely
+            // slow-but-live flow), the rethrow below surfaces it.
+            Timber.w("flow.start for $flowId timed out on the transport; retrying once on a fresh connection")
             return performStart(flowType, flowId, params)
         }
     }

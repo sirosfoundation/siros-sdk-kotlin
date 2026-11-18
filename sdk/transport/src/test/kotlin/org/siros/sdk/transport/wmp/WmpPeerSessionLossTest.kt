@@ -176,4 +176,43 @@ class WmpPeerSessionLossTest {
         assertEquals(2, transport.sentMessages.size)
         responder.cancel()
     }
+
+    @Test
+    fun startFlowRetriesOnceOnTransportTimeout() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(
+            transport,
+            config = WmpSessionConfig(requestTimeoutMs = 300, reconnectBaseMs = 1, reconnectMaxMs = 1),
+        )
+        val peer = WmpPeer(session)
+
+        // Script: the create answers; the FIRST flow.start is never answered
+        // (the severed connection); the RETRY (a fresh POST) answers.
+        val responder = launch {
+            waitForSentCount(transport, 1)
+            respond(transport, 1, createResponse("s-one"))
+            // The first start: recorded, deliberately never answered.
+            waitForSentCount(transport, 2)
+            // The retry after the timeout.
+            waitForSentCount(transport, 3)
+            respond(transport, 3, startResponse())
+        }
+
+        session.create("token")
+        val result = peer.startFlow("oid4vp", "flow-1")
+
+        assertEquals("flow-1", result.flowId)
+        assertEquals(
+            "the first start went out and hung",
+            "wmp.flow.start",
+            request(transport, 2).method,
+        )
+        assertEquals(
+            "the retry is a fresh POST of the same flow",
+            "wmp.flow.start",
+            request(transport, 3).method,
+        )
+        assertEquals(3, transport.sentMessages.size)
+        responder.cancel()
+    }
 }

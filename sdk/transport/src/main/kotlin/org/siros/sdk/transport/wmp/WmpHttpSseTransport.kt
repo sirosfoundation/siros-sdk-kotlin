@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -265,6 +267,12 @@ class WmpHttpSseTransport(
         return true
     }
 
+    // The in-flight POST calls (#417): cancelled on transport failure so a
+    // request hanging on a severed pooled connection cannot outlive the
+    // transport that carried it.
+    private val inFlightCalls =
+        java.util.concurrent.ConcurrentHashMap.newKeySet<okhttp3.Call>()
+
     override suspend fun send(message: ByteArray) {
         val request = Request.Builder()
             .url(sendUrl)
@@ -272,28 +280,63 @@ class WmpHttpSseTransport(
             .post(message.toRequestBody("application/json".toMediaType()))
             .build()
 
-        // OkHttp's execute() is a blocking call - hop to the IO dispatcher
-        // so a caller on the main thread (the wallet's connect path is
-        // invoked there) doesn't crash with NetworkOnMainThreadException
-        // (found driving the HTTP+SSE mode against a live engine). The SSE
-        // side already runs in [scope] (Dispatchers.IO).
-        withContext(Dispatchers.IO) {
-            client.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    throw WmpSessionException("HTTP POST failed: ${resp.code} ${resp.message}")
+        // Cancellable, off the caller's thread (#417): a flow.start POST
+        // legitimately stays open for the flow's whole synchronous run (a
+        // consent wait can hold it minutes), so a fixed short HTTP timeout
+        // would kill live flows. But a POST sent on a SEVERED pooled
+        // connection (the engine's machine restarted; the half-open TCP
+        // socket accepts the write into the kernel buffer and never reads)
+        // blocks the blocking-execute form FOREVER - the request hangs with
+        // no error, no response, and the flow state spins until a full app
+        // restart (found live on the realeyes demo: the v0.2.21 roll at
+        // 23:53, the scan at 09:08 hung on the zombie connection; the
+        // engine's #48 session-loss answers can never fire - the request
+        // never reaches it). The async enqueue + invokeOnCancellation
+        // (call.cancel) form makes the POST cancellable: the session's
+        // request timeout (which wraps the send AND the await) cancels the
+        // call, okhttp unblocks the socket immediately and evicts the dead
+        // pooled connection, and the next attempt rides a fresh one.
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                val call = client.newCall(request)
+                inFlightCalls.add(call)
+                cont.invokeOnCancellation {
+                    inFlightCalls.remove(call)
+                    call.cancel()
                 }
-                // The binding is request/response OVER SSE: the POST's own
-                // HTTP response is empty (204 No Content); the JSON-RPC
-                // reply rides the SSE stream. Some deployments (proxies,
-                // an early-reply engine) answer the POST body directly - so
-                // deliver it to the incoming channel when there is one,
-                // never discarding a reply (found driving against a live
-                // engine: the session create answered, the transport threw
-                // it away, and every request timed out).
-                val body: ByteArray = resp.body?.bytes() ?: ByteArray(0)
-                if (body.isNotEmpty()) {
-                    incomingChannel.trySend(body)
-                }
+                call.enqueue(object : okhttp3.Callback {
+                    override fun onResponse(call: okhttp3.Call, resp: okhttp3.Response) {
+                        inFlightCalls.remove(call)
+                        resp.use {
+                            if (!it.isSuccessful) {
+                                cont.resumeWithException(
+                                    WmpSessionException("HTTP POST failed: ${it.code} ${it.message}")
+                                )
+                                return
+                            }
+                            // The binding is request/response OVER SSE: the
+                            // POST's own HTTP response is empty (204 No
+                            // Content); the JSON-RPC reply rides the SSE
+                            // stream. Some deployments (proxies, an
+                            // early-reply engine) answer the POST body
+                            // directly - so deliver it to the incoming
+                            // channel when there is one, never discarding a
+                            // reply (found driving against a live engine:
+                            // the session create answered, the transport
+                            // threw it away, and every request timed out).
+                            val body: ByteArray = it.body?.bytes() ?: ByteArray(0)
+                            if (body.isNotEmpty()) {
+                                incomingChannel.trySend(body)
+                            }
+                            cont.resume(Unit)
+                        }
+                    }
+
+                    override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                        inFlightCalls.remove(call)
+                        cont.resumeWithException(e)
+                    }
+                })
             }
         }
     }
@@ -303,6 +346,10 @@ class WmpHttpSseTransport(
     override suspend fun disconnect() {
         sseJob?.cancel()
         sseJob = null
+        // A request hanging on a severed connection cannot outlive the
+        // transport that carried it (#417).
+        inFlightCalls.forEach { it.cancel() }
+        inFlightCalls.clear()
         _state.value = TransportState.DISCONNECTED
     }
 
