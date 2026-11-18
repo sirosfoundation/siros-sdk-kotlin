@@ -2220,14 +2220,20 @@ public object FfiConverterTypeCredentialSelectionParams: FfiConverterRustBuffer<
 
 
 /**
- * The selection answer. Mirrors
- * `engine_ports::CredentialSelectionResult`.
+ * The selection answer: the SET of configurations the user chose
+ * (#28). Mirrors `engine_ports::CredentialSelectionResult`.
  */
 data class CredentialSelectionResult (
     /**
-     * The chosen configuration's id.
+     * The chosen configuration's id (the pre-#28 single-member answer;
+     * a one-element set).
      */
-    var `credentialConfigurationId`: kotlin.String
+    var `credentialConfigurationId`: kotlin.String?, 
+    /**
+     * The chosen configurations' ids: a subset of the offer (one,
+     * several, or all), in any order — the engine applies the offer's.
+     */
+    var `credentialConfigurationIds`: List<kotlin.String>
 ) {
     
     companion object
@@ -2239,16 +2245,19 @@ data class CredentialSelectionResult (
 public object FfiConverterTypeCredentialSelectionResult: FfiConverterRustBuffer<CredentialSelectionResult> {
     override fun read(buf: ByteBuffer): CredentialSelectionResult {
         return CredentialSelectionResult(
-            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceString.read(buf),
         )
     }
 
     override fun allocationSize(value: CredentialSelectionResult) = (
-            FfiConverterString.allocationSize(value.`credentialConfigurationId`)
+            FfiConverterOptionalString.allocationSize(value.`credentialConfigurationId`) +
+            FfiConverterSequenceString.allocationSize(value.`credentialConfigurationIds`)
     )
 
     override fun write(value: CredentialSelectionResult, buf: ByteBuffer) {
-            FfiConverterString.write(value.`credentialConfigurationId`, buf)
+            FfiConverterOptionalString.write(value.`credentialConfigurationId`, buf)
+            FfiConverterSequenceString.write(value.`credentialConfigurationIds`, buf)
     }
 }
 
@@ -3125,7 +3134,12 @@ data class SignParams (
     /**
      * The signing algorithm.
      */
-    var `algorithm`: kotlin.String
+    var `algorithm`: kotlin.String, 
+    /**
+     * The credential configuration this ask belongs to (go-wallet-backend#558's
+     * twin): absent on the asks that are not one configuration's.
+     */
+    var `credentialConfigurationId`: kotlin.String?
 ) {
     
     companion object
@@ -3141,6 +3155,7 @@ public object FfiConverterTypeSignParams: FfiConverterRustBuffer<SignParams> {
             FfiConverterByteArray.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -3148,7 +3163,8 @@ public object FfiConverterTypeSignParams: FfiConverterRustBuffer<SignParams> {
             FfiConverterString.allocationSize(value.`flowId`) +
             FfiConverterByteArray.allocationSize(value.`toSign`) +
             FfiConverterOptionalString.allocationSize(value.`keyId`) +
-            FfiConverterString.allocationSize(value.`algorithm`)
+            FfiConverterString.allocationSize(value.`algorithm`) +
+            FfiConverterOptionalString.allocationSize(value.`credentialConfigurationId`)
     )
 
     override fun write(value: SignParams, buf: ByteBuffer) {
@@ -3156,6 +3172,7 @@ public object FfiConverterTypeSignParams: FfiConverterRustBuffer<SignParams> {
             FfiConverterByteArray.write(value.`toSign`, buf)
             FfiConverterOptionalString.write(value.`keyId`, buf)
             FfiConverterString.write(value.`algorithm`, buf)
+            FfiConverterOptionalString.write(value.`credentialConfigurationId`, buf)
     }
 }
 
@@ -3242,6 +3259,12 @@ data class SigningKeyParams (
      */
     var `flowId`: kotlin.String, 
     /**
+     * The credential configuration this key is for (go-wallet-backend#558's
+     * twin): the client pairs each key with the completion entry carrying
+     * the same id. Absent when the ask is not one configuration's.
+     */
+    var `credentialConfigurationId`: kotlin.String?, 
+    /**
      * The key the engine will sign with, named when the flow knows it.
      */
     var `keyId`: kotlin.String?, 
@@ -3264,18 +3287,21 @@ public object FfiConverterTypeSigningKeyParams: FfiConverterRustBuffer<SigningKe
         return SigningKeyParams(
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
         )
     }
 
     override fun allocationSize(value: SigningKeyParams) = (
             FfiConverterString.allocationSize(value.`flowId`) +
+            FfiConverterOptionalString.allocationSize(value.`credentialConfigurationId`) +
             FfiConverterOptionalString.allocationSize(value.`keyId`) +
             FfiConverterBoolean.allocationSize(value.`fresh`)
     )
 
     override fun write(value: SigningKeyParams, buf: ByteBuffer) {
             FfiConverterString.write(value.`flowId`, buf)
+            FfiConverterOptionalString.write(value.`credentialConfigurationId`, buf)
             FfiConverterOptionalString.write(value.`keyId`, buf)
             FfiConverterBoolean.write(value.`fresh`, buf)
     }
