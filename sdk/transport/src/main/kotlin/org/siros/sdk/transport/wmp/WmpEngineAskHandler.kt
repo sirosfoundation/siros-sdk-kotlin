@@ -258,7 +258,12 @@ class UniFfiEngineAskHost(
                 )
             },
         ) ?: throw uniffi.engine_adapter_sdk.SdkException.Cannot("credential selection is not supported by this wallet")
-        return uniffi.engine_adapter_sdk.CredentialSelectionResult(credentialConfigurationId = chosen)
+        // The one-element set: this handler's ask is single-credential (the
+        // user's pick); the multi-selection shape rides the same answer.
+        return uniffi.engine_adapter_sdk.CredentialSelectionResult(
+            credentialConfigurationId = chosen,
+            credentialConfigurationIds = listOf(chosen),
+        )
     }
 
     override fun progress(flowId: String, step: String, detail: String?) = handler.onProgress(flowId, step, detail)

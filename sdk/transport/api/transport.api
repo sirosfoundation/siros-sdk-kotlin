@@ -3925,14 +3925,17 @@ public final class uniffi/engine_adapter_sdk/CredentialSelectionParams$Companion
 
 public final class uniffi/engine_adapter_sdk/CredentialSelectionResult {
 	public static final field Companion Luniffi/engine_adapter_sdk/CredentialSelectionResult$Companion;
-	public fun <init> (Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;Ljava/util/List;)V
 	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Luniffi/engine_adapter_sdk/CredentialSelectionResult;
-	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/CredentialSelectionResult;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/CredentialSelectionResult;
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;)Luniffi/engine_adapter_sdk/CredentialSelectionResult;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/CredentialSelectionResult;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/CredentialSelectionResult;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCredentialConfigurationId ()Ljava/lang/String;
+	public final fun getCredentialConfigurationIds ()Ljava/util/List;
 	public fun hashCode ()I
 	public final fun setCredentialConfigurationId (Ljava/lang/String;)V
+	public final fun setCredentialConfigurationIds (Ljava/util/List;)V
 	public fun toString ()Ljava/lang/String;
 }
 
@@ -5770,20 +5773,23 @@ public final class uniffi/engine_adapter_sdk/SdkException$Transport : uniffi/eng
 
 public final class uniffi/engine_adapter_sdk/SignParams {
 	public static final field Companion Luniffi/engine_adapter_sdk/SignParams$Companion;
-	public fun <init> (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()[B
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/SignParams;
-	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/SignParams;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/SignParams;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/SignParams;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/SignParams;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/SignParams;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAlgorithm ()Ljava/lang/String;
+	public final fun getCredentialConfigurationId ()Ljava/lang/String;
 	public final fun getFlowId ()Ljava/lang/String;
 	public final fun getKeyId ()Ljava/lang/String;
 	public final fun getToSign ()[B
 	public fun hashCode ()I
 	public final fun setAlgorithm (Ljava/lang/String;)V
+	public final fun setCredentialConfigurationId (Ljava/lang/String;)V
 	public final fun setFlowId (Ljava/lang/String;)V
 	public final fun setKeyId (Ljava/lang/String;)V
 	public final fun setToSign ([B)V
@@ -5827,17 +5833,20 @@ public final class uniffi/engine_adapter_sdk/SignResult$Companion {
 
 public final class uniffi/engine_adapter_sdk/SigningKeyParams {
 	public static final field Companion Luniffi/engine_adapter_sdk/SigningKeyParams$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Z)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
-	public final fun component3 ()Z
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Z)Luniffi/engine_adapter_sdk/SigningKeyParams;
-	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/SigningKeyParams;Ljava/lang/String;Ljava/lang/String;ZILjava/lang/Object;)Luniffi/engine_adapter_sdk/SigningKeyParams;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Z
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Luniffi/engine_adapter_sdk/SigningKeyParams;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/SigningKeyParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZILjava/lang/Object;)Luniffi/engine_adapter_sdk/SigningKeyParams;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialConfigurationId ()Ljava/lang/String;
 	public final fun getFlowId ()Ljava/lang/String;
 	public final fun getFresh ()Z
 	public final fun getKeyId ()Ljava/lang/String;
 	public fun hashCode ()I
+	public final fun setCredentialConfigurationId (Ljava/lang/String;)V
 	public final fun setFlowId (Ljava/lang/String;)V
 	public final fun setFresh (Z)V
 	public final fun setKeyId (Ljava/lang/String;)V
