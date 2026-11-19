@@ -944,7 +944,11 @@ class OpenID4xProfile(
             throw e
         } catch (e: Exception) {
             // The reason stays local: a sign failure's text can name keys or credentials.
-            Timber.e("Proof signing failed (${e.javaClass.simpleName})")
+            // wallet-core #72's diagnostics: the exception's own MESSAGE rides the log
+            // (it names the failing step — "no signing key", "keystore locked" — not a
+            // key or a credential; the message is the only way the device-side failure
+            // is tellable from the logs).
+            Timber.e(e, "Proof signing failed (${e.javaClass.simpleName}): ${e.message}")
             answerError(sub, WMP_ERR_FLOW_ERROR, "proof signing failed", null)
         }
     }
