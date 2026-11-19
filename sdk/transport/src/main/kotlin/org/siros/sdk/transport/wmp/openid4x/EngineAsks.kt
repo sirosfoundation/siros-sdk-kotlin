@@ -67,6 +67,52 @@ data class EngineSigningKeyResult(
 )
 
 /**
+ * Issue #59 (wallet-core): the `response_encryption_key` ask — the HOST
+ * generates the P-256 pair for one credential request's encryption offer
+ * and answers with the PUBLIC JWK only. The private half stays on the
+ * wallet; the issuer's encrypted response opens through the
+ * [EngineDecryptCredentialResponseParams] ask. Refusing (null handler)
+ * keeps the engine-held legacy path.
+ */
+@Serializable
+data class EngineResponseEncryptionKeyParams(
+    @SerialName("flow_id") val flowId: String? = null,
+    /** The configuration this key encrypts the response of (#558's pairing). */
+    @SerialName("credential_configuration_id") val credentialConfigurationId: String = "",
+    /** The negotiated key-agreement algorithm (§7.3 — the engine resolved it). */
+    @SerialName("alg") val alg: String = "",
+    /** The negotiated content-encryption method. */
+    @SerialName("enc") val enc: String = "",
+)
+
+/** The answer to an [EngineResponseEncryptionKeyParams]: the public JWK of the wallet-held pair. */
+data class EngineResponseEncryptionKeyResult(
+    val publicJwk: JsonObject,
+)
+
+/**
+ * Issue #59 (wallet-core): the `decrypt_credential_response` ask — the
+ * engine relays the issuer's JWE (compact, five dot-separated parts) and
+ * the HOST opens it with the private half of its held pair. The plaintext
+ * response JSON travels back; the engine parses it, nothing else.
+ */
+@Serializable
+data class EngineDecryptCredentialResponseParams(
+    @SerialName("flow_id") val flowId: String? = null,
+    /** The configuration this response is for (#558's pairing). */
+    @SerialName("credential_configuration_id") val credentialConfigurationId: String = "",
+    /** True when the JWE answers a Deferred Credential Request (the Go engine's shape). */
+    @SerialName("deferred") val deferred: Boolean = false,
+    /** The compact JWE the issuer answered. */
+    @SerialName("jwe") val jwe: String = "",
+)
+
+/** The answer to an [EngineDecryptCredentialResponseParams]: the plaintext response JSON. */
+data class EngineDecryptCredentialResponseResult(
+    val response: JsonObject,
+)
+
+/**
  * The `consent` ask (engine-ports `ConsentParams`): the engine asks the
  * wallet's USER whether this presentation may proceed — the OID4VP
  * consent-check, with the purpose (scope) and the claims the query would

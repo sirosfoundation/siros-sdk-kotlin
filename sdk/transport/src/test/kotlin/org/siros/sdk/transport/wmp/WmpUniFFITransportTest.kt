@@ -135,6 +135,18 @@ class WmpUniFFITransportTest {
         ): uniffi.engine_adapter_sdk.CredentialSelectionResult =
             throw SdkException.Cannot("no selection")
 
+        // Issue #59 (wallet-core): the refusing defaults — the engine-held
+        // legacy pair and the in-process decrypt answer these refusals.
+        override suspend fun requestResponseEncryptionKey(
+            params: uniffi.engine_adapter_sdk.ResponseEncryptionKeyParams,
+        ): uniffi.engine_adapter_sdk.ResponseEncryptionKeyResult =
+            throw SdkException.Cannot("engine-held keys")
+
+        override suspend fun requestDecryptCredentialResponse(
+            params: uniffi.engine_adapter_sdk.DecryptCredentialResponseParams,
+        ): uniffi.engine_adapter_sdk.DecryptCredentialResponseResult =
+            throw SdkException.Cannot("engine-decrypted responses")
+
         override fun progress(flowId: String, step: String, detail: String?) {}
     }
 }

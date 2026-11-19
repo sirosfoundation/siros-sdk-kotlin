@@ -9819,6 +9819,16 @@ class SirosWallet private constructor(
                     requireLive()
                     withContext(peerJob) { handleWmpAttestation(parent, params) }
                 },
+                // Issue #59 (wallet-core): the client-held response keys —
+                // the WALLET generates the pair and opens the relayed JWE.
+                onResponseEncryptionKey = { parent, params ->
+                    requireLive()
+                    withContext(peerJob) { handleWmpResponseEncryptionKey(parent, params) }
+                },
+                onDecryptCredentialResponse = { parent, params ->
+                    requireLive()
+                    withContext(peerJob) { handleWmpDecryptCredentialResponse(parent, params) }
+                },
             )
         )
     }
@@ -10015,6 +10025,69 @@ class SirosWallet private constructor(
             return org.siros.sdk.transport.wmp.openid4x.EngineSigningKeyResult(jwk = null)
         }
         return org.siros.sdk.transport.wmp.openid4x.EngineSigningKeyResult(jwk = key.publicKeyJWK)
+    }
+
+    /**
+     * Issue #59 (wallet-core): the `response_encryption_key` ask — the WALLET
+     * generates the pair for the engine's encryption offer and answers with
+     * the public JWK; the private half stays here (the issuer's JWE opens
+     * through [handleWmpDecryptCredentialResponse], nowhere else). The
+     * engine's ask carries the negotiated §7.3 pair, so the wallet generates
+     * FOR IT — [BlindIssuance.offer] holds the per-flow key, the same
+     * machinery the legacy sign-sub-flow path uses.
+     */
+    private suspend fun handleWmpResponseEncryptionKey(
+        parentFlowId: String,
+        params: org.siros.sdk.transport.wmp.openid4x.EngineResponseEncryptionKeyParams,
+    ): org.siros.sdk.transport.wmp.openid4x.EngineResponseEncryptionKeyResult {
+        val request = org.siros.sdk.transport.CredentialResponseEncryptionRequest(
+            alg = params.alg,
+            enc = params.enc,
+            required = true,
+        )
+        // The parent flow's key state (the ask rides the issuance flow's
+        // child): the public JWK goes to the engine for the request's offer;
+        // blindIssuance holds the pair for the decrypt ask.
+        val publicJwk = blindIssuance.offer(parentFlowId, request, epoch = blindIssuance.epoch)
+            ?: throw IllegalStateException("The wallet cannot decrypt the negotiated pair (${params.alg}/${params.enc})")
+        return org.siros.sdk.transport.wmp.openid4x.EngineResponseEncryptionKeyResult(
+            publicJwk = publicJwk,
+        )
+    }
+
+    /**
+     * Issue #59 (wallet-core): the `decrypt_credential_response` ask — the
+     * engine relays the issuer's JWE whole, and the WALLET opens it with its
+     * held private half ([BlindIssuance.open], the same machinery the
+     * legacy decrypt path uses). The plaintext response JSON goes back to
+     * the engine; the key and the plaintext never travel together.
+     */
+    private suspend fun handleWmpDecryptCredentialResponse(
+        parentFlowId: String,
+        params: org.siros.sdk.transport.wmp.openid4x.EngineDecryptCredentialResponseParams,
+    ): org.siros.sdk.transport.wmp.openid4x.EngineDecryptCredentialResponseResult {
+        try {
+            // Issue #59: the SAME validated decrypt as the legacy path —
+            // openBody returns the response body it opened AND the
+            // control; the engine gets the body (it parses the response),
+            // the wallet keeps the key and the retained state.
+            val (body, _) = blindIssuance.openBody(parentFlowId, params.jwe, params.deferred)
+            return org.siros.sdk.transport.wmp.openid4x.EngineDecryptCredentialResponseResult(
+                response = body,
+            )
+        } catch (e: org.siros.sdk.wallet.BlindIssuanceException) {
+            // A response the wallet read but rejected is still reported to
+            // the issuer, before the flow ends — the legacy path's rule.
+            e.notificationId?.let {
+                wmpPeer?.sendCredentialNotification(
+                    flowId = parentFlowId,
+                    notificationId = it,
+                    event = CredentialNotificationEvent.FAILURE,
+                    eventDescription = "credential_response_rejected",
+                )
+            }
+            throw e
+        }
     }
 
     /**
