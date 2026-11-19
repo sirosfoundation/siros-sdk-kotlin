@@ -71,9 +71,12 @@ fun HomeScreen(
     attentionCount: Int,
     onShowAttention: () -> Unit,
     /**
-     * Long-press the greeting to edit the "Welcome back, <name>" text -
-     * the local override (blank = back to the account-derived greeting).
+     * The Home greeting's LOCAL override: the FULL greeting text
+     * ("Welcome back, <name>"), shown verbatim - blank/absent = derive
+     * from the account's display name as before. Long-press the greeting
+     * to edit it ([onEditGreeting]).
      */
+    greetingOverride: String? = null,
     onEditGreeting: () -> Unit = {},
     onManageCredentials: () -> Unit,
     onShareInPerson: () -> Unit,
@@ -94,11 +97,16 @@ fun HomeScreen(
                 .padding(top = 28.dp, bottom = 28.dp),
         ) {
             Text(
-                text = if (displayName.isNullOrBlank()) {
-                    stringResource(R.string.home_welcome_back)
-                } else {
-                    stringResource(R.string.home_welcome_back_name, displayName)
-                },
+                // The override is the FULL greeting text ("Welcome back,
+                // <name>"), shown verbatim - the header's wallet-name
+                // override pattern (WalletChrome's WalletHeader); blank/
+                // absent = derive from the account's own display name.
+                text = greetingOverride?.takeIf { it.isNotBlank() }
+                    ?: if (displayName.isNullOrBlank()) {
+                        stringResource(R.string.home_welcome_back)
+                    } else {
+                        stringResource(R.string.home_welcome_back_name, displayName)
+                    },
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 // Long-press: edit the greeting text - the local override,

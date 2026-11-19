@@ -614,9 +614,21 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     // the same local-override pattern the header's wallet name carries.
     val welcomeBackOverride by viewModel.welcomeBackOverride.collectAsState()
     var editGreeting by remember { mutableStateOf<Boolean?>(null) }
+    // The dialog edits the FULL greeting text (the override's own shape):
+    // the current override verbatim, else the account-derived greeting -
+    // computed in THIS scope because stringResource cannot run inside
+    // the onEditGreeting callback.
+    val accountGreetingString = if ((readyDisplayName ?: lastDisplayName).isNullOrBlank()) {
+        androidx.compose.ui.res.stringResource(R.string.home_welcome_back)
+    } else {
+        androidx.compose.ui.res.stringResource(
+            R.string.home_welcome_back_name,
+            (readyDisplayName ?: lastDisplayName).orEmpty(),
+        )
+    }
     if (editGreeting != null) {
         var greetingField by remember(welcomeBackOverride, editGreeting) {
-            mutableStateOf(welcomeBackOverride ?: "")
+            mutableStateOf(welcomeBackOverride ?: accountGreetingString)
         }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { editGreeting = null },
@@ -1004,9 +1016,10 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                                         .count { it.needsAttention(credentialStatuses, keyInventoryKnown, attentionNow, copiesReusable) }
                                 }
                                 HomeScreen(
-                                    // The greeting's name: the local override
-                                    // first, else the account's display name.
-                                    displayName = welcomeBackOverride ?: state.displayName,
+                                    displayName = state.displayName,
+                                    // The greeting's local override: the FULL
+                                    // text, verbatim (the header-name pattern).
+                                    greetingOverride = welcomeBackOverride,
                                     attentionCount = attentionCount,
                                     onEditGreeting = { editGreeting = true },
                                     onShowAttention = {
