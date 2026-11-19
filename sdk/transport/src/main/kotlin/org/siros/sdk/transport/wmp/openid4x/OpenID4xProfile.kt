@@ -614,6 +614,13 @@ class OpenID4xProfile(
         OID4FlowTypes.SIGNING_KEY, OID4FlowTypes.CONSENT, OID4FlowTypes.TX_CODE,
         OID4FlowTypes.AUTHORIZATION, OID4FlowTypes.PRESENTATION,
         OID4FlowTypes.DPOP_PROOF, OID4FlowTypes.ATTESTATION,
+        // wallet-core #59's client-held response keys: the
+        // `response_encryption_key` and `decrypt_credential_response`
+        // asks ride the same sub-flow mechanics (issue #424's miss: the
+        // answerers existed, the REGISTRATION did not — the dispatch found
+        // no handler and dropped the ask silently; the engine timed out
+        // every time).
+        OID4FlowTypes.RESPONSE_ENCRYPTION_KEY, OID4FlowTypes.DECRYPT_CREDENTIAL_RESPONSE,
     )
 
     override suspend fun startFlow(params: FlowStartParams): FlowStartResult {
@@ -623,6 +630,9 @@ class OpenID4xProfile(
             OID4FlowTypes.SIGNING_KEY, OID4FlowTypes.CONSENT, OID4FlowTypes.TX_CODE,
             OID4FlowTypes.AUTHORIZATION, OID4FlowTypes.PRESENTATION,
             OID4FlowTypes.DPOP_PROOF, OID4FlowTypes.ATTESTATION,
+            // #59's ask types (issue #424's miss — the start must BEGIN the
+            // sub-flow or the answerer never launches).
+            OID4FlowTypes.RESPONSE_ENCRYPTION_KEY, OID4FlowTypes.DECRYPT_CREDENTIAL_RESPONSE,
             -> beginSubFlow(params)
         }
         return FlowStartResult(flowId = params.flowId, flowType = params.flowType)
