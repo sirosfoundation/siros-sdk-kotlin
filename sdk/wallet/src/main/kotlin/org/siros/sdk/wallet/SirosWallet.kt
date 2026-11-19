@@ -9841,6 +9841,18 @@ class SirosWallet private constructor(
         // same lock clearPerFlowAuthorizationState/recordIfCurrent use (issue #345's finding #5: a bare isLive() check
         // here, then a separate clearFlowMatchState call, leaves a window for a racing bump+clear or a racing write).
         clearFlowMatchStateIfLive(flowId, lifetime)
+        // Issue #62: the CANCEL path is the engine's flow-abort for an issuance
+        // refusal (the 400s of the Spherity chain arrive as flow cancels, not
+        // flow errors) - and this handler had NO UI reset. The spinner stayed
+        // "Initializing..." forever, the flow dead on both sides, nothing to
+        // cancel (onWmpFlowError's reset never runs - no error event exists).
+        // The cancel of the wallet's OWN issuance flow ends it here exactly as
+        // the error path does (#9847's comment): the guards reset, the state
+        // returns ready. A non-issuance flow's cancel touches nothing. The
+        // ready-state return is suspend (the evented path) - launched on the
+        // wallet scope, the class's own eventing pattern.
+        resetIssuanceGuards()
+        scope.launch { returnToReadyState() }
     }
 
     /** A WMP flow failed: the listener is told, and the flow's response key, opened response and match/consent state are released. */
@@ -10006,11 +10018,23 @@ class SirosWallet private constructor(
         parentFlowId: String,
         params: org.siros.sdk.transport.wmp.openid4x.EngineSignParams,
     ): ByteArray {
-        val keyId = params.keyId ?: keystore.publicKeyJwk(null)?.keyId
-            ?: throw WalletException("This keystore cannot name its default proof key for an unnamed sign ask")
+        // The engine's client-auth key is a VIRTUAL name (wallet-core's
+        // token.rs `CLIENT_AUTH_KEY_ID` = "client-auth", the fallback when
+        // the flow carries no explicit `client_key_kid`): the wallet maps it
+        // to its OAuth Client Attestation instance key — the very key
+        // `sign_client_auth` signs with internally (Spherity's token step
+        // asked sign::5 with it, the keystore has no key of that literal
+        // name, and the ask refused — found in the 2026-11-19 20:13 scan,
+        // wallet-core #72).
+        val requestedKey = params.keyId
+        val keyId = when (requestedKey) {
+            "client-auth" -> ensureInstanceKeyId()
+            else -> requestedKey ?: keystore.publicKeyJwk(null)?.keyId
+                ?: throw WalletException("This keystore cannot name its default proof key for an unnamed sign ask")
+        }
         val signature = keystore.signJwsSignature(keyId, params.toSignBytes, params.algorithm ?: "ES256")
             ?: throw WalletException("This keystore cannot sign an engine proof's signing input")
-        Timber.i("Proof signed for flow $parentFlowId (key=${params.keyId ?: "default"})")
+        Timber.i("Proof signed for flow $parentFlowId (key=$keyId)")
         return signature
     }
 

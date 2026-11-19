@@ -364,6 +364,12 @@ class WscdKeystoreAdapter private constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            // wallet-core #72's diagnostics: the CAUSE rides the log - the
+            // fail-closed null was untellable (key missing? locked? the
+            // signer's own refusal?), and the phone's issuance stall named
+            // only the wrapper. The message names the step and the key id,
+            // never key material.
+            Timber.e(e, "signJwsSignature cannot sign for key $keyId (algorithm $algorithm): ${e.message}")
             null
         }
     }
