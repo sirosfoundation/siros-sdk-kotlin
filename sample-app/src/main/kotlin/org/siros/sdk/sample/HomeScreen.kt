@@ -1,8 +1,10 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.sample
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,11 +64,17 @@ const val HOME_SHARE_TAG = "home_share_in_person"
  * caller decides when (a sample-app setting, combined with the wallet not
  * already holding a Photo ID; see [WalletViewModel.showPhotoIdOnboarding]).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     displayName: String?,
     attentionCount: Int,
     onShowAttention: () -> Unit,
+    /**
+     * Long-press the greeting to edit the "Welcome back, <name>" text -
+     * the local override (blank = back to the account-derived greeting).
+     */
+    onEditGreeting: () -> Unit = {},
     onManageCredentials: () -> Unit,
     onShareInPerson: () -> Unit,
     showAddCredentials: Boolean,
@@ -93,6 +101,15 @@ fun HomeScreen(
                 },
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
+                // Long-press: edit the greeting text - the local override,
+                // the same gesture the wallet header's name carries.
+                modifier = Modifier
+                    .combinedClickable(
+                        role = androidx.compose.ui.semantics.Role.Button,
+                        onClick = {},
+                        onLongClick = onEditGreeting,
+                    )
+                    .padding(vertical = 4.dp),
             )
             if (attentionCount > 0) {
                 Spacer(modifier = Modifier.height(28.dp))

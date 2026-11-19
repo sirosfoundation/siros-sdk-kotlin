@@ -436,5 +436,6 @@
 
     <!-- The wallet rename (2026-11-15) -->
     <string name="settings_wallet_display_name">Byt namn på plånbok</string>
+    <string name="settings_edit_greeting">Redigera hälsning</string>
     <string name="header_rename_save">Spara</string>
 </resources>

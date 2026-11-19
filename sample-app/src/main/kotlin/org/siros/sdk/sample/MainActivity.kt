@@ -609,6 +609,39 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             WalletDestination.Home, WalletDestination.Menu -> null
         }
     }
+    // The Home greeting's local override: long-press the "Welcome back"
+    // text to edit it (blank = back to the account-derived greeting) -
+    // the same local-override pattern the header's wallet name carries.
+    val welcomeBackOverride by viewModel.welcomeBackOverride.collectAsState()
+    var editGreeting by remember { mutableStateOf<Boolean?>(null) }
+    if (editGreeting != null) {
+        var greetingField by remember(welcomeBackOverride, editGreeting) {
+            mutableStateOf(welcomeBackOverride ?: "")
+        }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { editGreeting = null },
+            title = { Text(androidx.compose.ui.res.stringResource(R.string.settings_edit_greeting)) },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = greetingField,
+                    onValueChange = { greetingField = it },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    viewModel.updateWelcomeBackOverride(greetingField.takeIf { it.isNotBlank() })
+                    editGreeting = null
+                }) { Text(androidx.compose.ui.res.stringResource(R.string.header_rename_save)) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { editGreeting = null }) {
+                    Text(androidx.compose.ui.res.stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
     // The header long-press rename dialog: the FULL header string
     // ("demo's Wallet") is editable; blank = back to the
     // account-derived string. The initial value is computed in THIS
@@ -971,8 +1004,11 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                                         .count { it.needsAttention(credentialStatuses, keyInventoryKnown, attentionNow, copiesReusable) }
                                 }
                                 HomeScreen(
-                                    displayName = state.displayName,
+                                    // The greeting's name: the local override
+                                    // first, else the account's display name.
+                                    displayName = welcomeBackOverride ?: state.displayName,
                                     attentionCount = attentionCount,
+                                    onEditGreeting = { editGreeting = true },
                                     onShowAttention = {
                                         needsAttentionOnly = true
                                         go(WalletDestination.Credentials)

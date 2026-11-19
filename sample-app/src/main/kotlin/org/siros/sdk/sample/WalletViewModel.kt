@@ -235,6 +235,26 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     }
 
     /**
+     * The Home greeting's LOCAL override: "Welcome back, <name>" shows the
+     * account's display name unless the user edits the text here (long-press
+     * the greeting). Persisted, null = derive from the account name as before.
+     */
+    private val _welcomeBackOverride: MutableStateFlow<String?> = MutableStateFlow(
+        activity.getSharedPreferences(SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
+            .getString("welcome_back_override", null)
+    )
+    val welcomeBackOverride: StateFlow<String?> get() = _welcomeBackOverride
+
+    /** Sets (or clears, null/blank) the greeting override; persisted. */
+    fun updateWelcomeBackOverride(value: String?) {
+        val trimmed = value?.trim()
+        val effective = trimmed.takeUnless { it.isNullOrEmpty() }
+        _welcomeBackOverride.value = effective
+        activity.getSharedPreferences(SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
+            .edit().putString("welcome_back_override", effective).apply()
+    }
+
+    /**
      * Sample-app-local setting gating Home's "Get your PhotoID" onboarding
      * CTA (see [HomeScreen]). Deliberately NOT derived from any real
      * per-tenant server capability yet - `facetec-api`'s availability isn't

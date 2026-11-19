@@ -436,5 +436,6 @@
 
     <!-- The wallet rename (2026-11-15) -->
     <string name="settings_wallet_display_name">Nimeä lompakko uudelleen</string>
+    <string name="settings_edit_greeting">Muokkaa tervehdystä</string>
     <string name="header_rename_save">Tallenna</string>
 </resources>
