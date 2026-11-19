@@ -753,6 +753,13 @@ class OpenID4xProfile(
                 // Issue #59 (wallet-core): the client-held response keys.
                 OID4FlowTypes.RESPONSE_ENCRYPTION_KEY -> answerResponseEncryptionKeySubFlow(sub, start)
                 OID4FlowTypes.DECRYPT_CREDENTIAL_RESPONSE -> answerDecryptCredentialResponseSubFlow(sub, start)
+                else -> {
+                    // wallet-core #72's diagnostics: an unmatched child ask
+                    // is SILENTLY ignored without this line (the phone's
+                    // stall showed "was unknown" forgets - nothing answered,
+                    // nothing logged).
+                    Timber.w("WMP sub-flow: no ask handler for type '${start.flowType}' (flow ${start.flowId}) - ignored")
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -1033,6 +1040,7 @@ class OpenID4xProfile(
      */
     private suspend fun answerResponseEncryptionKeySubFlow(sub: SubFlow, start: FlowStartParams) {
         val ctx = peer ?: return
+        Timber.d("WMP sub-flow: response_encryption_key ask arrived (flow ${start.flowId})")
         val handler = config.onResponseEncryptionKey
         if (handler == null) {
             answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "response-encryption keys are engine-held on this wallet", null)
@@ -1070,6 +1078,7 @@ class OpenID4xProfile(
      */
     private suspend fun answerDecryptCredentialResponseSubFlow(sub: SubFlow, start: FlowStartParams) {
         val ctx = peer ?: return
+        Timber.d("WMP sub-flow: decrypt_credential_response ask arrived (flow ${start.flowId})")
         val handler = config.onDecryptCredentialResponse
         if (handler == null) {
             answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "credential responses are engine-decrypted on this wallet", null)

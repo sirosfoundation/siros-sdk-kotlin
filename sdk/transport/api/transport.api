@@ -2444,8 +2444,10 @@ public final class org/siros/sdk/transport/wmp/UniFfiEngineAskHost : uniffi/engi
 	public fun requestAttestation (Luniffi/engine_adapter_sdk/AttestationParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun requestConsent (Luniffi/engine_adapter_sdk/ConsentParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun requestCredentialSelection (Luniffi/engine_adapter_sdk/CredentialSelectionParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestDecryptCredentialResponse (Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun requestDpopProof (Luniffi/engine_adapter_sdk/DpopProofParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun requestMatch (Luniffi/engine_adapter_sdk/MatchParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun requestResponseEncryptionKey (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun requestSign (Luniffi/engine_adapter_sdk/SignParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun requestSigningKey (Luniffi/engine_adapter_sdk/SigningKeyParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun requestTxCode (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -2471,8 +2473,10 @@ public abstract interface class org/siros/sdk/transport/wmp/WmpEngineAskHandler 
 	public abstract fun requestAttestation (Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineAttestationParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestConsent (Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineConsentParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestCredentialSelection (Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestDecryptCredentialResponse (Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestDpopProof (Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestMatch (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestResponseEncryptionKey (Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestSign (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestSigningKey (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestTxCode (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -2482,6 +2486,8 @@ public abstract interface class org/siros/sdk/transport/wmp/WmpEngineAskHandler 
 public final class org/siros/sdk/transport/wmp/WmpEngineAskHandler$DefaultImpls {
 	public static fun onProgress (Lorg/siros/sdk/transport/wmp/WmpEngineAskHandler;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public static fun requestCredentialSelection (Lorg/siros/sdk/transport/wmp/WmpEngineAskHandler;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun requestDecryptCredentialResponse (Lorg/siros/sdk/transport/wmp/WmpEngineAskHandler;Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun requestResponseEncryptionKey (Lorg/siros/sdk/transport/wmp/WmpEngineAskHandler;Ljava/lang/String;Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class org/siros/sdk/transport/wmp/WmpErrorCodes {
@@ -3117,6 +3123,52 @@ public final class org/siros/sdk/transport/wmp/openid4x/EngineConsentParams$Comp
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class org/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Z
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialConfigurationId ()Ljava/lang/String;
+	public final fun getDeferred ()Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getJwe ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseResult {
+	public fun <init> (Lkotlinx/serialization/json/JsonObject;)V
+	public final fun component1 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseResult;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDecryptCredentialResponseResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getResponse ()Lkotlinx/serialization/json/JsonObject;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class org/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofParams$Companion;
 	public fun <init> ()V
@@ -3165,6 +3217,52 @@ public final class org/siros/sdk/transport/wmp/openid4x/EngineDpopProofResult {
 	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofResult;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineDpopProofResult;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getProof ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAlg ()Ljava/lang/String;
+	public final fun getCredentialConfigurationId ()Ljava/lang/String;
+	public final fun getEnc ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyResult {
+	public fun <init> (Lkotlinx/serialization/json/JsonObject;)V
+	public final fun component1 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyResult;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/EngineResponseEncryptionKeyResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPublicJwk ()Lkotlinx/serialization/json/JsonObject;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -3426,12 +3524,14 @@ public final class org/siros/sdk/transport/wmp/openid4x/OID4FlowTypes {
 	public static final field ATTESTATION Ljava/lang/String;
 	public static final field AUTHORIZATION Ljava/lang/String;
 	public static final field CONSENT Ljava/lang/String;
+	public static final field DECRYPT_CREDENTIAL_RESPONSE Ljava/lang/String;
 	public static final field DPOP_PROOF Ljava/lang/String;
 	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/OID4FlowTypes;
 	public static final field MATCH Ljava/lang/String;
 	public static final field OID4VCI Ljava/lang/String;
 	public static final field OID4VP Ljava/lang/String;
 	public static final field PRESENTATION Ljava/lang/String;
+	public static final field RESPONSE_ENCRYPTION_KEY Ljava/lang/String;
 	public static final field SIGN Ljava/lang/String;
 	public static final field SIGNING_KEY Ljava/lang/String;
 	public static final field TX_CODE Ljava/lang/String;
@@ -3439,8 +3539,8 @@ public final class org/siros/sdk/transport/wmp/openid4x/OID4FlowTypes {
 
 public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xConfig {
 	public fun <init> ()V
-	public fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;)V
-	public synthetic fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;)V
+	public synthetic fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lkotlin/jvm/functions/Function4;
 	public final fun component10 ()Lkotlin/jvm/functions/Function3;
 	public final fun component11 ()Lkotlin/jvm/functions/Function3;
@@ -3449,6 +3549,8 @@ public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xConfig {
 	public final fun component14 ()Lkotlin/jvm/functions/Function3;
 	public final fun component15 ()Lkotlin/jvm/functions/Function3;
 	public final fun component16 ()Lkotlin/jvm/functions/Function3;
+	public final fun component17 ()Lkotlin/jvm/functions/Function3;
+	public final fun component18 ()Lkotlin/jvm/functions/Function3;
 	public final fun component2 ()Lkotlin/jvm/functions/Function3;
 	public final fun component3 ()Lkotlin/jvm/functions/Function3;
 	public final fun component4 ()Lkotlin/jvm/functions/Function3;
@@ -3457,8 +3559,8 @@ public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xConfig {
 	public final fun component7 ()Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;
 	public final fun component8 ()Lkotlin/jvm/functions/Function2;
 	public final fun component9 ()Lkotlin/jvm/functions/Function3;
-	public final fun copy (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
+	public final fun copy (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAttestationProvider ()Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;
 	public final fun getOnAttestation ()Lkotlin/jvm/functions/Function3;
@@ -3466,11 +3568,13 @@ public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xConfig {
 	public final fun getOnCancel ()Lkotlin/jvm/functions/Function2;
 	public final fun getOnComplete ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnConsent ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnDecryptCredentialResponse ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnDpopProof ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnError ()Lkotlin/jvm/functions/Function4;
 	public final fun getOnMatchRequest ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnProgress ()Lkotlin/jvm/functions/Function4;
 	public final fun getOnProofSign ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnResponseEncryptionKey ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnSignRequest ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnSigningKey ()Lkotlin/jvm/functions/Function3;
 	public final fun getOnTrustEvaluation ()Lkotlin/jvm/functions/Function3;
@@ -3940,6 +4044,47 @@ public final class uniffi/engine_adapter_sdk/CredentialSelectionResult {
 }
 
 public final class uniffi/engine_adapter_sdk/CredentialSelectionResult$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/DecryptCredentialResponseParams {
+	public static final field Companion Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Z
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialConfigurationId ()Ljava/lang/String;
+	public final fun getDeferred ()Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getJwe ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setCredentialConfigurationId (Ljava/lang/String;)V
+	public final fun setDeferred (Z)V
+	public final fun setFlowId (Ljava/lang/String;)V
+	public final fun setJwe (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/DecryptCredentialResponseParams$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/DecryptCredentialResponseResult {
+	public static final field Companion Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getResponse ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setResponse (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/DecryptCredentialResponseResult$Companion {
 }
 
 public abstract interface class uniffi/engine_adapter_sdk/Disposable {
@@ -4749,6 +4894,46 @@ public final class uniffi/engine_adapter_sdk/FfiConverterTypeCredentialSelection
 	public fun write (Luniffi/engine_adapter_sdk/CredentialSelectionResult;Ljava/nio/ByteBuffer;)V
 }
 
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeDecryptCredentialResponseParams : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeDecryptCredentialResponseParams;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeDecryptCredentialResponseResult : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeDecryptCredentialResponseResult;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/DecryptCredentialResponseResult;Ljava/nio/ByteBuffer;)V
+}
+
 public final class uniffi/engine_adapter_sdk/FfiConverterTypeDpopProofParams : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
 	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeDpopProofParams;
 	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
@@ -5161,6 +5346,46 @@ public final class uniffi/engine_adapter_sdk/FfiConverterTypeResolveResponse : u
 	public fun write (Luniffi/engine_adapter_sdk/ResolveResponse;Ljava/nio/ByteBuffer;)V
 }
 
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeResponseEncryptionKeyParams : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeResponseEncryptionKeyParams;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeResponseEncryptionKeyResult : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeResponseEncryptionKeyResult;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;Ljava/nio/ByteBuffer;)V
+}
+
 public final class uniffi/engine_adapter_sdk/FfiConverterTypeSdkError : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
 	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeSdkError;
 	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
@@ -5499,8 +5724,10 @@ public abstract interface class uniffi/engine_adapter_sdk/Host {
 	public abstract fun requestAttestation (Luniffi/engine_adapter_sdk/AttestationParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestConsent (Luniffi/engine_adapter_sdk/ConsentParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestCredentialSelection (Luniffi/engine_adapter_sdk/CredentialSelectionParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestDecryptCredentialResponse (Luniffi/engine_adapter_sdk/DecryptCredentialResponseParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestDpopProof (Luniffi/engine_adapter_sdk/DpopProofParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestMatch (Luniffi/engine_adapter_sdk/MatchParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun requestResponseEncryptionKey (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestSign (Luniffi/engine_adapter_sdk/SignParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestSigningKey (Luniffi/engine_adapter_sdk/SigningKeyParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun requestTxCode (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -5707,6 +5934,47 @@ public final class uniffi/engine_adapter_sdk/ResolveResponse {
 }
 
 public final class uniffi/engine_adapter_sdk/ResolveResponse$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/ResponseEncryptionKeyParams {
+	public static final field Companion Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAlg ()Ljava/lang/String;
+	public final fun getCredentialConfigurationId ()Ljava/lang/String;
+	public final fun getEnc ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setAlg (Ljava/lang/String;)V
+	public final fun setCredentialConfigurationId (Ljava/lang/String;)V
+	public final fun setEnc (Ljava/lang/String;)V
+	public final fun setFlowId (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/ResponseEncryptionKeyParams$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/ResponseEncryptionKeyResult {
+	public static final field Companion Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/ResponseEncryptionKeyResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPublicJwk ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setPublicJwk (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/ResponseEncryptionKeyResult$Companion {
 }
 
 public class uniffi/engine_adapter_sdk/RustBuffer : com/sun/jna/Structure {
