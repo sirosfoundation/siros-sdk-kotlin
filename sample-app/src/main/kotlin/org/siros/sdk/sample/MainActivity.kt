@@ -961,12 +961,13 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                     when (val state = walletState) {
                         is WalletState.Ready -> when (destination) {
                             WalletDestination.Home -> {
+                                val homeConsumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value
                                 val attentionCount = remember(
                                     state.credentials, presentationHistory, credentialsTabAvailableKeyIds,
-                                    credentialStatuses, keyInventoryKnown, attentionNow, copiesReusable,
+                                    credentialStatuses, keyInventoryKnown, attentionNow, copiesReusable, homeConsumptionPolicy,
                                 ) {
                                     org.siros.sdk.credentials.CredentialUtils
-                                        .groupForDisplay(state.credentials, presentationHistory, credentialsTabAvailableKeyIds)
+                                        .groupForDisplay(state.credentials, presentationHistory, credentialsTabAvailableKeyIds, homeConsumptionPolicy)
                                         .count { it.needsAttention(credentialStatuses, keyInventoryKnown, attentionNow, copiesReusable) }
                                 }
                                 HomeScreen(
@@ -1112,6 +1113,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             onNeedsAttentionOnlyChange = { needsAttentionOnly = it },
                             keyInventoryKnown = keyInventoryKnown,
                             copiesReusable = copiesReusable,
+                            consumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
                             nowMillis = attentionNow,
                         )
                         }
@@ -1756,6 +1758,16 @@ fun CredentialsTab(
     keyInventoryKnown: Boolean = true,
     /** Whether a presented copy can be presented again - see [needsAttention]'s `copiesReusable`. */
     copiesReusable: Boolean = false,
+    /**
+     * The wallet's consumption policy - the usage counts (the "remaining
+     * copies" ribbon) honour it exactly as eligibility does: under
+     * [org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME]
+     * nothing consumes, so the count stays whole however often it was
+     * presented (the accredify report: the PID badge read 0 after every
+     * presentation while the gate kept presenting it).
+     */
+    consumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
+        org.siros.sdk.credentials.CredentialConsumptionPolicy.CONSUME_ALL,
     /** The time "needs attention" is judged at; the caller advances it as credentials expire. */
     nowMillis: Long = System.currentTimeMillis(),
     /**
@@ -1770,8 +1782,8 @@ fun CredentialsTab(
     // issued copy - mirrors wallet-frontend's fetchVcData grouping so a
     // 5-copy batch issuance shows as a single card with a remaining-copies
     // ribbon, not five swipeable duplicates.
-    val grouped = remember(state.credentials, presentationHistory, availableKeyIds) {
-        org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory, availableKeyIds)
+    val grouped = remember(state.credentials, presentationHistory, availableKeyIds, consumptionPolicy) {
+        org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory, availableKeyIds, consumptionPolicy)
     }
 
     var pendingDeleteFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }

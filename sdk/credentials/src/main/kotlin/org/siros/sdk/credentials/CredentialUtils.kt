@@ -799,14 +799,37 @@ object CredentialUtils {
      * [eligibleInstances] alone would do.
      * A credential with no [StoredCredential.batchId] (single-copy issuance)
      * is returned as its own one-instance family.
+     *
+     * The per-instance `sigCount` honours [policy] exactly as
+     * [eligibleInstances]'s consumption gate does (its own doc demands the
+     * two "never disagree"): under [CredentialConsumptionPolicy.NEVER_CONSUME]
+     * nothing consumes, so the count stays 0 and the badge shows the full
+     * batch however often it was presented (found via live testing: an
+     * accredify user's PID showed "0 remaining" after every presentation
+     * under never-consume - the eligibility gate honored the policy, the
+     * display count did not); under
+     * [CredentialConsumptionPolicy.CONSUME_NON_ZKP] only a presentation that
+     * was a RAW disclosure ([PresentationRecord.zkProof] false) counts - a
+     * ZK proof leaves the instance fresh; under CONSUME_ALL every
+     * presentation counts. Callers pass the wallet's policy, never the
+     * default.
      */
     fun groupForDisplay(
         credentials: List<StoredCredential>,
         presentationHistory: List<PresentationRecord>,
         availableKeyIds: Set<String>,
+        policy: CredentialConsumptionPolicy = CredentialConsumptionPolicy.CONSUME_ALL,
     ): List<CredentialWithInstances> {
-        fun sigCountFor(credentialId: Long) =
-            presentationHistory.count { credentialId in it.credentialIds }
+        // Only the presentations that CONSUME under [policy] count against an
+        // instance - mirroring [eligibleInstances]'s gate exactly.
+        fun sigCountFor(credentialId: Long) = presentationHistory.count { record ->
+            credentialId in record.credentialIds &&
+                when (policy) {
+                    CredentialConsumptionPolicy.NEVER_CONSUME -> false
+                    CredentialConsumptionPolicy.CONSUME_ALL -> true
+                    CredentialConsumptionPolicy.CONSUME_NON_ZKP -> !record.zkProof
+                }
+        }
 
         // Every issuance response - batch of one or of many - shares one
         // batchId (see StoredCredential.batchId), so grouping is uniform:

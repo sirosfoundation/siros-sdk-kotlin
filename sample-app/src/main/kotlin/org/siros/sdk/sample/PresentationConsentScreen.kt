@@ -229,6 +229,7 @@ fun PresentationConsentScreen(
                         availableKeyIds = availableKeyIds,
                         exclusiveGroups = exclusiveGroups,
                         chosenOptionIndex = chosenOptionIndex,
+                        consumptionPolicy = consumptionPolicy,
                         onChoose = { credentialSetIndex, optionIndex -> chosenOptionIndex[credentialSetIndex] = optionIndex },
                     )
                     !request.disclosesNoClaims && currentStep <= activeResults.size -> {
@@ -413,6 +414,8 @@ private fun PreviewStep(
     availableKeyIds: Set<String> = emptySet(),
     exclusiveGroups: List<PresentationRequest.ExclusiveChoiceGroup> = emptyList(),
     chosenOptionIndex: Map<Int, Int> = emptyMap(),
+    // The wallet's consumption policy - the summaries' usage counts honour it.
+    consumptionPolicy: CredentialConsumptionPolicy = CredentialConsumptionPolicy.CONSUME_ALL,
     onChoose: (credentialSetIndex: Int, optionIndex: Int) -> Unit = { _, _ -> },
 ) {
     // Every query id that belongs to some option of an ambiguous group - rendered inside that
@@ -506,6 +509,7 @@ private fun PreviewStep(
                 matchResult = matchResult,
                 presentationHistory = presentationHistory,
                 availableKeyIds = availableKeyIds,
+                consumptionPolicy = consumptionPolicy,
                 isExhausted = matchResult.queryId in exhaustedQueryIds,
             )
         }
@@ -530,6 +534,7 @@ private fun PreviewStep(
                 exhaustedQueryIds = exhaustedQueryIds,
                 presentationHistory = presentationHistory,
                 availableKeyIds = availableKeyIds,
+                consumptionPolicy = consumptionPolicy,
             )
         }
     }
@@ -581,9 +586,11 @@ internal fun credentialDisplayMode(
     matchResult: CredentialMatcher.MatchResult,
     presentationHistory: List<PresentationRecord>,
     availableKeyIds: Set<String>,
+    consumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
+        org.siros.sdk.credentials.CredentialConsumptionPolicy.CONSUME_ALL,
 ): CredentialDisplayMode = when {
     matchResult.candidates.isEmpty() -> CredentialDisplayMode.HIDDEN
-    CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).isEmpty() -> CredentialDisplayMode.FALLBACK_LABEL
+    CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds, consumptionPolicy).isEmpty() -> CredentialDisplayMode.FALLBACK_LABEL
     else -> CredentialDisplayMode.CARD
 }
 
@@ -607,10 +614,14 @@ private fun CredentialMatchSummary(
     matchResult: CredentialMatcher.MatchResult,
     presentationHistory: List<PresentationRecord> = emptyList(),
     availableKeyIds: Set<String> = emptySet(),
+    // The wallet's consumption policy - see CredentialUtils.groupForDisplay's
+    // own doc: the usage count honours it exactly as eligibility does (the
+    // accredify NEVER_CONSUME report: the badge said 0, the gate said usable).
+    consumptionPolicy: CredentialConsumptionPolicy = CredentialConsumptionPolicy.CONSUME_ALL,
     isExhausted: Boolean = false,
     showFormatLabel: Boolean = false,
 ) {
-    when (credentialDisplayMode(matchResult, presentationHistory, availableKeyIds)) {
+    when (credentialDisplayMode(matchResult, presentationHistory, availableKeyIds, consumptionPolicy)) {
         CredentialDisplayMode.HIDDEN -> return
         CredentialDisplayMode.FALLBACK_LABEL -> {
             Text(
@@ -805,6 +816,8 @@ private fun ExclusiveChoiceSection(
     exhaustedQueryIds: Set<String> = emptySet(),
     presentationHistory: List<PresentationRecord> = emptyList(),
     availableKeyIds: Set<String> = emptySet(),
+    // The wallet's consumption policy - the summaries' usage counts honour it.
+    consumptionPolicy: CredentialConsumptionPolicy = CredentialConsumptionPolicy.CONSUME_ALL,
 ) {
     Text(
         text = "Choose which credential to share:",
@@ -854,6 +867,7 @@ private fun ExclusiveChoiceSection(
                                 matchResult = matchResult,
                                 presentationHistory = presentationHistory,
                                 availableKeyIds = availableKeyIds,
+                                consumptionPolicy = consumptionPolicy,
                                 isExhausted = queryId in exhaustedQueryIds,
                                 showFormatLabel = true,
                             )
