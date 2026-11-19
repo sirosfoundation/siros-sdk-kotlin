@@ -65,6 +65,17 @@ dependencies {
     // separate `zstd-jni.aar` artifact for Android 5.0+.
     // 1.5.7-12 is the newest SDK-36-compatible release with 16 KB-aligned
     // native libraries; 1.5.7-13 and later require compileSdk 37.
+    //
+    // 16 KB page size (measured 2026-11-19, the Play Console diagnostic
+    // "compiled using an older Android NDK version"): both of -12's ABIs
+    // ship p_align = 0x4000 (16 KB) — arm64-v8a and x86_64 — and the crash
+    // class (4 KB-aligned segments) ended at 1.5.7-2 (zstd-jni #354, fixed
+    // in -3). zstd uses no PAGE_SIZE macro, so the diagnostic's other risk
+    // does not apply either; the Play warning is the not-NDK-r28 build
+    // heuristic and may be acknowledged in Play Console. -13…-20 (NDK
+    // r28-built) all carry minCompileSdk=37 (read from their
+    // aar-metadata.properties) — unreachable at compileSdk 36; when the
+    // SDK tree moves to 37, bump to the then-newest measured-aligned line.
     implementation("com.github.luben:zstd-jni:1.5.7-12@aar")
 
     testImplementation(libs.junit)

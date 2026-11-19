@@ -185,7 +185,21 @@ internal class BlindIssuance(
      * @throws BlindIssuanceException when there is no key for the flow, the JWE does not decrypt, or what it
      *   decrypts to is not a Credential Response.
      */
-    fun open(flowId: String, jwe: String, deferred: Boolean): BlindIssuanceControl {
+    fun open(flowId: String, jwe: String, deferred: Boolean): BlindIssuanceControl =
+        openBody(flowId, jwe, deferred).second
+
+    /**
+     * Issue #59 (wallet-core): the SAME decrypt with the plaintext body
+     * returned — the engine's `decrypt_credential_response` ask hands the
+     * relayed JWE to the wallet, and the wallet answers with the response
+     * JSON it opened (the engine parses it; the key and the plaintext
+     * never travel together). The same key, the same validation, the same
+     * retention as [open].
+     *
+     * @return the decrypted response body and [open]'s control answer.
+     * @throws BlindIssuanceException as [open]'s.
+     */
+    fun openBody(flowId: String, jwe: String, deferred: Boolean): Pair<JsonObject, BlindIssuanceControl> {
         val state = flows[flowId]
         val key = state?.key ?: throw BlindIssuanceException("No credential response key exists for this flow")
         val plaintext = try {
@@ -252,11 +266,12 @@ internal class BlindIssuance(
                 state.opened += OpenedIssuance(credentials, metadata, notificationId, deferred)
             }
         }
-        return if (transactionId != null) {
+        val control = if (transactionId != null) {
             BlindIssuanceControl(credentialCount = null, transactionId = transactionId, interval = interval)
         } else {
             BlindIssuanceControl(credentialCount = credentials.size, transactionId = null, interval = null)
         }
+        return Pair(body, control)
     }
 
     /**

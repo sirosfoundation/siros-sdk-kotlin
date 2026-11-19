@@ -7,8 +7,12 @@ import org.siros.sdk.transport.wmp.openid4x.EngineAttestationParams
 import org.siros.sdk.transport.wmp.openid4x.EngineAttestationResult
 import org.siros.sdk.transport.wmp.openid4x.EngineAvailableCredential
 import org.siros.sdk.transport.wmp.openid4x.EngineConsentParams
+import org.siros.sdk.transport.wmp.openid4x.EngineDecryptCredentialResponseParams
+import org.siros.sdk.transport.wmp.openid4x.EngineDecryptCredentialResponseResult
 import org.siros.sdk.transport.wmp.openid4x.EngineDpopProofParams
 import org.siros.sdk.transport.wmp.openid4x.EngineDpopProofResult
+import org.siros.sdk.transport.wmp.openid4x.EngineResponseEncryptionKeyParams
+import org.siros.sdk.transport.wmp.openid4x.EngineResponseEncryptionKeyResult
 import org.siros.sdk.transport.wmp.openid4x.EngineSignParams
 import org.siros.sdk.transport.wmp.openid4x.EngineSigningKeyResult
 import org.siros.sdk.transport.wmp.openid4x.EngineVpParams
@@ -76,6 +80,30 @@ interface WmpEngineAskHandler {
      * refuse (the engine-ports default: the flow fails closed rather than guessing).
      */
     suspend fun requestCredentialSelection(flowId: String, available: List<EngineAvailableCredential>): String? = null
+
+    /**
+     * Issue #59 (wallet-core): the `response_encryption_key` ask — generate a fresh
+     * P-256 pair for the credential request's encryption offer and answer with the
+     * PUBLIC JWK. The wallet holds the private half; the issuer's JWE comes back
+     * through [requestDecryptCredentialResponse]. Returning null (the default)
+     * keeps the engine-held legacy pair — the engine falls back on the refusal.
+     */
+    suspend fun requestResponseEncryptionKey(
+        flowId: String,
+        params: EngineResponseEncryptionKeyParams,
+    ): EngineResponseEncryptionKeyResult? = null
+
+    /**
+     * Issue #59 (wallet-core): the `decrypt_credential_response` ask — open the
+     * engine-relayed JWE with the wallet-held private half of the pair
+     * [requestResponseEncryptionKey] generated. Returning null (the default)
+     * keeps the engine's in-process decrypt — the engine falls back on the
+     * refusal.
+     */
+    suspend fun requestDecryptCredentialResponse(
+        flowId: String,
+        params: EngineDecryptCredentialResponseParams,
+    ): EngineDecryptCredentialResponseResult? = null
 
     /**
      * The engine's progress relay (the local carrier has no SSE stream for the wallet's
@@ -263,6 +291,48 @@ class UniFfiEngineAskHost(
         return uniffi.engine_adapter_sdk.CredentialSelectionResult(
             credentialConfigurationId = chosen,
             credentialConfigurationIds = listOf(chosen),
+        )
+    }
+
+    override suspend fun requestResponseEncryptionKey(
+        params: uniffi.engine_adapter_sdk.ResponseEncryptionKeyParams,
+    ): uniffi.engine_adapter_sdk.ResponseEncryptionKeyResult {
+        // Issue #59: the null answer (the handler's default) maps to the
+        // engine-ports refusal — negotiate_with_host falls back to the
+        // engine-held ephemeral pair. A JsonObject answer's wire form is a
+        // JSON string (the uniffi-Record text shape).
+        val result = handler.requestResponseEncryptionKey(
+            params.flowId,
+            org.siros.sdk.transport.wmp.openid4x.EngineResponseEncryptionKeyParams(
+                flowId = params.flowId,
+                credentialConfigurationId = params.credentialConfigurationId,
+                alg = params.alg,
+                enc = params.enc,
+            ),
+        ) ?: throw uniffi.engine_adapter_sdk.SdkException.Cannot(
+            "response-encryption keys are engine-held on this wallet",
+        )
+        return uniffi.engine_adapter_sdk.ResponseEncryptionKeyResult(
+            publicJwk = result.publicJwk.toString(),
+        )
+    }
+
+    override suspend fun requestDecryptCredentialResponse(
+        params: uniffi.engine_adapter_sdk.DecryptCredentialResponseParams,
+    ): uniffi.engine_adapter_sdk.DecryptCredentialResponseResult {
+        val result = handler.requestDecryptCredentialResponse(
+            params.flowId,
+            org.siros.sdk.transport.wmp.openid4x.EngineDecryptCredentialResponseParams(
+                flowId = params.flowId,
+                credentialConfigurationId = params.credentialConfigurationId,
+                deferred = params.deferred,
+                jwe = params.jwe,
+            ),
+        ) ?: throw uniffi.engine_adapter_sdk.SdkException.Cannot(
+            "credential responses are engine-decrypted on this wallet",
+        )
+        return uniffi.engine_adapter_sdk.DecryptCredentialResponseResult(
+            response = result.response.toString(),
         )
     }
 

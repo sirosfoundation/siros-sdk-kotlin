@@ -59,6 +59,14 @@ object OID4FlowTypes {
     const val PRESENTATION = "presentation"
     const val DPOP_PROOF = "dpop_proof"
     const val ATTESTATION = "attestation"
+    // Issue #59 (wallet-core): the client-held response-encryption pair. The
+    // `response_encryption_key` ask: the HOST generates the pair and answers
+    // with the public JWK (the private half never leaves the wallet); the
+    // `decrypt_credential_response` ask: the engine relays the issuer's JWE
+    // and the HOST opens it. Refusing either keeps the engine-held legacy
+    // path (the trait defaults).
+    const val RESPONSE_ENCRYPTION_KEY = "response_encryption_key"
+    const val DECRYPT_CREDENTIAL_RESPONSE = "decrypt_credential_response"
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +428,14 @@ data class OpenID4xConfig(
     val onDpopProof: (suspend (parentFlowId: String, params: EngineDpopProofParams) -> EngineDpopProofResult)? = null,
     /** The `attestation` ask: the WIA + PoP pair, or nulls for "no attestation". */
     val onAttestation: (suspend (parentFlowId: String, params: EngineAttestationParams) -> EngineAttestationResult)? = null,
+    // ── Issue #59 (wallet-core): the client-held response keys. Null (the
+    // default) answers its ask with capability-not-supported — the engine's
+    // negotiate_with_host falls back to the ENGINE-held ephemeral pair, the
+    // legacy path, and nothing else changes.
+    /** The `response_encryption_key` ask: generate the pair on the wallet, answer the public JWK. */
+    val onResponseEncryptionKey: (suspend (parentFlowId: String, params: EngineResponseEncryptionKeyParams) -> EngineResponseEncryptionKeyResult)? = null,
+    /** The `decrypt_credential_response` ask: open the engine-relayed JWE with the wallet-held private half. */
+    val onDecryptCredentialResponse: (suspend (parentFlowId: String, params: EngineDecryptCredentialResponseParams) -> EngineDecryptCredentialResponseResult)? = null,
 )
 
 /** Result of a sign sub-flow request. */
@@ -734,6 +750,16 @@ class OpenID4xProfile(
                 OID4FlowTypes.PRESENTATION -> answerPresentationSubFlow(sub, start)
                 OID4FlowTypes.DPOP_PROOF -> answerDpopProofSubFlow(sub, start)
                 OID4FlowTypes.ATTESTATION -> answerAttestationSubFlow(sub, start)
+                // Issue #59 (wallet-core): the client-held response keys.
+                OID4FlowTypes.RESPONSE_ENCRYPTION_KEY -> answerResponseEncryptionKeySubFlow(sub, start)
+                OID4FlowTypes.DECRYPT_CREDENTIAL_RESPONSE -> answerDecryptCredentialResponseSubFlow(sub, start)
+                else -> {
+                    // wallet-core #72's diagnostics: an unmatched child ask
+                    // is SILENTLY ignored without this line (the phone's
+                    // stall showed "was unknown" forgets - nothing answered,
+                    // nothing logged).
+                    Timber.w("WMP sub-flow: no ask handler for type '${start.flowType}' (flow ${start.flowId}) - ignored")
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -1002,6 +1028,83 @@ class OpenID4xProfile(
         } catch (e: Exception) {
             Timber.e("Signing key request failed (${e.javaClass.simpleName})")
             answerError(sub, WMP_ERR_FLOW_ERROR, "signing key request failed", null)
+        }
+    }
+
+    /**
+     * Issue #59 (wallet-core): the `response_encryption_key` ask — the wallet
+     * generates the P-256 pair and answers with the PUBLIC JWK; the private
+     * half stays on the wallet. A null handler answers
+     * capability-not-supported, and the engine keeps its own ephemeral pair
+     * (the legacy path).
+     */
+    private suspend fun answerResponseEncryptionKeySubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
+        Timber.d("WMP sub-flow: response_encryption_key ask arrived (flow ${start.flowId})")
+        val handler = config.onResponseEncryptionKey
+        if (handler == null) {
+            answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "response-encryption keys are engine-held on this wallet", null)
+            return
+        }
+        val params = try {
+            start.params?.let { ctx.codec.json.decodeFromJsonElement(EngineResponseEncryptionKeyParams.serializer(), it) }
+        } catch (e: Exception) {
+            Timber.e("Failed to decode the response_encryption_key ask (${e.javaClass.simpleName})")
+            null
+        }
+        val parentFlowId = extractParentFlowId(start)
+        if (params == null || parentFlowId.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid response-encryption key request", null)
+            return
+        }
+        try {
+            val result = handler.invoke(parentFlowId, params)
+            answerComplete(sub, buildJsonObject {
+                put("public_jwk", result.publicJwk)
+            })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e("Response-encryption key request failed (${e.javaClass.simpleName})")
+            answerError(sub, WMP_ERR_FLOW_ERROR, "response-encryption key request failed", null)
+        }
+    }
+
+    /**
+     * Issue #59 (wallet-core): the `decrypt_credential_response` ask — the
+     * engine relays the issuer's JWE and the WALLET opens it with its held
+     * private half. A null handler answers capability-not-supported, and the
+     * engine decrypts in-process (the legacy path).
+     */
+    private suspend fun answerDecryptCredentialResponseSubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
+        Timber.d("WMP sub-flow: decrypt_credential_response ask arrived (flow ${start.flowId})")
+        val handler = config.onDecryptCredentialResponse
+        if (handler == null) {
+            answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "credential responses are engine-decrypted on this wallet", null)
+            return
+        }
+        val params = try {
+            start.params?.let { ctx.codec.json.decodeFromJsonElement(EngineDecryptCredentialResponseParams.serializer(), it) }
+        } catch (e: Exception) {
+            Timber.e("Failed to decode the decrypt_credential_response ask (${e.javaClass.simpleName})")
+            null
+        }
+        val parentFlowId = extractParentFlowId(start)
+        if (params == null || parentFlowId.isNullOrBlank()) {
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid decrypt request", null)
+            return
+        }
+        try {
+            val result = handler.invoke(parentFlowId, params)
+            answerComplete(sub, buildJsonObject {
+                put("response", result.response)
+            })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e("Decrypt request failed (${e.javaClass.simpleName})")
+            answerError(sub, WMP_ERR_FLOW_ERROR, "decrypt request failed", null)
         }
     }
 
