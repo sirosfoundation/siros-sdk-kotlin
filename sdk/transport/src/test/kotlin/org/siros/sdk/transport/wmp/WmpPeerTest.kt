@@ -520,4 +520,49 @@ class WmpPeerTest {
         assertEquals("first and second sent; the skipped one never was", 2, sent.size)
         assertTrue(sent.none { it.contains("test.skipped") })
     }
+
+    /**
+     * wallet-core #62: a transport-level retry of a start whose FIRST
+     * attempt reached the engine (OkHttp re-sending a POST whose keep-alive
+     * broke mid-response, or #417's severed-connection retry after the 30s
+     * timeout) answers `flow_id in use` for the wallet's OWN flow id - the
+     * retry landing second while the first runs. The historic branch logged
+     * "the flow is running" and then fell through to `missing result`: the
+     * engine answered an ERROR, there was no result, and the throw left the
+     * wallet's issuance state set up with no flow to complete it - the
+     * spinner stuck on "initializing..." until a hard restart, every routine
+     * redeploy (the 2026-11-19 09:30 capture: timeout -> fresh-connection
+     * retry -> `flow_id in use` -> `missing result` -> stuck). The start
+     * re-attaches instead: the tracked id and type are the wallet's own
+     * choice, the running flow's asks and completion drive on as if the
+     * first start's response had arrived.
+     */
+    @Test
+    fun aRetriedStartOfTheWalletsOwnFlowIdReAttachesInsteadOfRefusing() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
+        val peer = WmpPeer(session)
+        peer.use(StubProfile())
+
+        setupConnectedPeer(transport, peer)
+
+        // The engine answers the retried start: the error, not a result.
+        val start = async { peer.startFlow(flowType = "oid4vci", flowId = "f-retry-1") }
+        withTimeout(TEST_TIMEOUT_MS) {
+            while (transport.sentMessages.size < 2) delay(10)
+        }
+        val startReq = codec.decodeRequest(transport.sentMessages.last())
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","id":"${startReq.id}","error":{"code":-31005,"message":"flow_id in use","data":{"reason":"flow_id in use"}}}"""
+                .toByteArray()
+        )
+
+        // The re-attach: the start RETURNS (the flow is running), and the
+        // returned result names the wallet's own id and type.
+        val result = withTimeout(TEST_TIMEOUT_MS) { start.await() }
+        assertEquals("f-retry-1", result.flowId)
+        assertEquals("oid4vci", result.flowType)
+
+        peer.close()
+    }
 }

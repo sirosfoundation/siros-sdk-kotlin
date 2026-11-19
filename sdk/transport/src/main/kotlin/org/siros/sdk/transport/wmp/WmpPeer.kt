@@ -199,7 +199,29 @@ class WmpPeer(
             // driving the GDC issuance (the frame-8/frame-14 duplicate).
             val reason = (response.error.data as? JsonObject)?.get("reason")?.let { r -> (r as? JsonPrimitive)?.contentOrNull }
             if (reason == "flow_id in use") {
-                Timber.i("flow.start for $flowId answered 'flow_id in use' - a retried start of this wallet's own flow id; the flow is running")
+                // The wallet's OWN id, running server-side (issue #62,
+                // wallet-core#62): the transport-level retry - OkHttp
+                // re-sending a POST whose keep-alive broke mid-response, or
+                // #417's severed-connection retry after a 30s timeout -
+                // lands second. The FIRST start reached the engine and is
+                // running: the asks stream, the completion arrives, the
+                // flow is alive. The historic branch logged "the flow is
+                // running" and then fell through to `missing result`
+                // below - the engine answered an ERROR, there IS no
+                // result - and the throw left the wallet's issuance state
+                // set up with no flow to complete it: the spinner stuck
+                // on "initializing..." until a hard restart, every
+                // routine redeploy. Re-attach instead: synthesize the
+                // start result for the wallet's own tracked id (the type
+                // was tracked before the call, the id is the wallet's
+                // choice) and let the running flow's asks and completion
+                // drive on as if the first start's response had arrived.
+                Timber.i("flow.start for $flowId answered 'flow_id in use' - a retried start of this wallet's own flow id; the flow is running; re-attaching")
+                return FlowStartResult(
+                    wmp = null,
+                    flowId = flowId,
+                    flowType = flowType,
+                )
             } else {
                 // The engine's data.reason carries the WHY (the family's
                 // own refusal text - an unparseable offer, an unreachable
