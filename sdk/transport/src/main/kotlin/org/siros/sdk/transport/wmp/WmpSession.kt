@@ -38,6 +38,10 @@ class WmpSession(
     val state: StateFlow<WmpSessionState> = _state
 
     private var sessionId: String? = null
+
+    /** The current session's id, when one is live (the join invitation's group name, issue #77). */
+    val currentSessionId: String?
+        get() = sessionId
     private var resumptionToken: String? = null
     private var lastReceivedId: String? = null
     // Saved from the create() call so the fresh-create fallback after a

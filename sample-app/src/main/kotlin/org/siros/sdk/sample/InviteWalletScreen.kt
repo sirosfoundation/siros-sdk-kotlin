@@ -70,16 +70,26 @@ fun InviteWalletScreen(
     // One create action: the first entry (LaunchedEffect) and the Retry
     // button both drive it. Retry was dead before - LaunchedEffect(Unit)
     // never re-runs, so the button's launch alone did nothing visible
-    // while the transport was mid-reconnect.
-    val create: () -> Unit = {
+    // while the transport was mid-reconnect. The `group` form (issue #77)
+    // is the join invitation: purpose "join" naming THIS wallet's live
+    // session - the counterparty's consume joins it into the group.
+    val create: (group: Boolean) -> Unit = { group ->
         if (!creating) {
             creating = true
             error = null
             invitation = null
             scope.launch {
                 try {
-                    android.util.Log.e("InviteWallet", "create start")
-                    invitation = wallet.createInvitation()
+                    android.util.Log.e("InviteWallet", "create start (group=$group)")
+                    invitation = if (group) {
+                        val sid = wallet.currentWmpSessionId
+                            ?: throw org.siros.sdk.credentials.WalletException(
+                                "No live WMP session to invite into - connect first",
+                            )
+                        wallet.createInvitation(purpose = "join", sessionId = sid)
+                    } else {
+                        wallet.createInvitation()
+                    }
                     android.util.Log.i("InviteWallet", "create ok: uri=${invitation?.uri?.take(40)}")
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     // Leaving the page cancels the create (the scope's cancel
@@ -97,7 +107,7 @@ fun InviteWalletScreen(
         }
     }
 
-    LaunchedEffect(Unit) { create() }
+    LaunchedEffect(Unit) { create(false) }
 
     // The failure's text (issue #77's diagnostics): the screen's
     // UI text alone left three blind rounds today.
@@ -138,7 +148,7 @@ fun InviteWalletScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
-                    OutlinedButton(onClick = create, enabled = !creating) {
+                    OutlinedButton(onClick = { create(false) }, enabled = !creating) {
                         Text(stringResource(R.string.retry))
                     }
                 }
@@ -207,6 +217,16 @@ fun InviteWalletScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline,
                         )
+                    }
+                    // The group form (issue #77): a join invitation naming THIS
+                    // wallet's live session - the MCP endpoint's consume joins
+                    // it into the group (the acceptance test's shape).
+                    OutlinedButton(
+                        onClick = { create(true) },
+                        enabled = !creating,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.invite_wallet_group))
                     }
                 }
             }

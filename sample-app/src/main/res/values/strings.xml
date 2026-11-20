@@ -141,6 +141,7 @@
     <string name="invite_wallet_qr_failed">The QR could not be generated.</string>
     <string name="invite_wallet_share">Share link</string>
     <string name="invite_wallet_expires">Expires %1$s</string>
+    <string name="invite_wallet_group">Create a group invite (join my session)</string>
 <string name="qr_scanner_title">Scan QR Code</string>
     <string name="qr_scanner_hint">Point camera at a credential or presentation QR code</string>
     <string name="qr_scanner_permission_required">Camera permission is required to scan QR codes</string>

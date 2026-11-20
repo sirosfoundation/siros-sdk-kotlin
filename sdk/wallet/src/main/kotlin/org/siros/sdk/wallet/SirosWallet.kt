@@ -8061,6 +8061,14 @@ class SirosWallet private constructor(
     private var wmpPeer: org.siros.sdk.transport.wmp.WmpPeer? = null
 
     /**
+     * The wallet's current WMP session id (issue #77): its OWN session — the
+     * group a `join` invitation names (`createInvitation(purpose = "join",
+     * sessionId = ...)`). Null when no session is live.
+     */
+    val currentWmpSessionId: String?
+        get() = wmpPeer?.currentSessionId
+
+    /**
      * The WMP transport's app token (issue #77): the same bearer the
      * session create carried — the invitation endpoint authenticates with
      * it. Set at [connectViaWmp]; null before the first connect or after
@@ -10632,6 +10640,8 @@ class SirosWallet private constructor(
         val nonce: String,
         val provider: String,
         val sender: String,
+        val purpose: String,
+        val sessionId: String?,
         val expiresAt: String?,
     )
 
@@ -10643,15 +10653,33 @@ class SirosWallet private constructor(
      * transport POSTs `/wmp` to (the send URL's base), with this wallet's
      * bearer token (the same one the session create carried). The [ttl]
      * caps at the engine's configured default.
+     *
+     * @param purpose The invitation's purpose: `join` names the group session
+     *   ([sessionId]) its consume joins — the acceptance test's shape (a
+     *   wallet invites the MCP endpoint into its group); the default (`null`)
+     *   is the engine's `session` (the 1:1 bootstrap).
+     * @param sessionId The group session a `join` invitation names (required
+     *   when [purpose] is `join`; ignored otherwise).
      */
-    suspend fun createInvitation(ttl: Int? = null): WalletInvitation {
+    suspend fun createInvitation(
+        ttl: Int? = null,
+        purpose: String? = null,
+        sessionId: String? = null,
+    ): WalletInvitation {
         val token = wmpAppToken
             ?: throw WalletException("The wallet is not connected to an engine")
         val base = wmpInvitationEndpointBase()
             ?: throw WalletException("The wallet's engine endpoint is not configured")
+        if (purpose == "join" && sessionId.isNullOrEmpty()) {
+            throw WalletException("A join invitation names the session it joins")
+        }
         val url = base.trimEnd('/') + "/wmp/invitation"
         val body = kotlinx.serialization.json.buildJsonObject {
             ttl?.let { put("ttl_secs", kotlinx.serialization.json.JsonPrimitive(it)) }
+            purpose?.let { put("purpose", kotlinx.serialization.json.JsonPrimitive(it)) }
+            if (purpose == "join") {
+                put("session_id", kotlinx.serialization.json.JsonPrimitive(sessionId))
+            }
         }
         val request = okhttp3.Request.Builder()
             .url(url)
@@ -10738,6 +10766,8 @@ class SirosWallet private constructor(
             nonce = member("nonce"),
             provider = member("provider"),
             sender = member("sender"),
+            purpose = member("purpose").ifEmpty { "session" },
+            sessionId = member("session_id").takeIf { it.isNotEmpty() },
             expiresAt = member("expires_at").takeIf { it.isNotEmpty() },
         )
     }

@@ -41,6 +41,10 @@ class WmpPeer(
     private val session: WmpSession,
 ) : WmpPeerContext {
 
+    /** The current session's id, when one is live (the join invitation's group name, issue #77). */
+    val currentSessionId: String?
+        get() = session.currentSessionId
+
     private val registry = WmpRegistry()
     override val codec: WmpCodec get() = session.codec
 
