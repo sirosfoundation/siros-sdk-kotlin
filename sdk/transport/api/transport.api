@@ -2297,19 +2297,21 @@ public final class org/siros/sdk/transport/wmp/SessionCloseParams$Companion {
 
 public final class org/siros/sdk/transport/wmp/SessionCreateParams {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/SessionCreateParams$Companion;
-	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;)V
-	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;Ljava/lang/String;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
 	public final fun component2 ()Ljava/util/List;
 	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
 	public final fun component4 ()Lkotlinx/serialization/json/JsonObject;
 	public final fun component5 ()Ljava/lang/Integer;
 	public final fun component6 ()Lorg/siros/sdk/transport/wmp/SessionAuth;
-	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;)Lorg/siros/sdk/transport/wmp/SessionCreateParams;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/SessionCreateParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/SessionCreateParams;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/SessionCreateParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/SessionCreateParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/SessionCreateParams;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAuth ()Lorg/siros/sdk/transport/wmp/SessionAuth;
 	public final fun getCapabilitiesOffered ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getInvitationNonce ()Ljava/lang/String;
 	public final fun getParticipants ()Ljava/util/List;
 	public final fun getSecurity ()Lkotlinx/serialization/json/JsonObject;
 	public final fun getTtl ()Ljava/lang/Integer;
@@ -2633,6 +2635,7 @@ public final class org/siros/sdk/transport/wmp/WmpMethods {
 	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/WmpMethods;
 	public static final field MESSAGE_ACK Ljava/lang/String;
 	public static final field MESSAGE_DELIVER Ljava/lang/String;
+	public static final field MESSAGE_POLL Ljava/lang/String;
 	public static final field RESOLVE Ljava/lang/String;
 	public static final field SESSION_AUTHENTICATE Ljava/lang/String;
 	public static final field SESSION_CLOSE Ljava/lang/String;
@@ -2655,6 +2658,9 @@ public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun notify (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun notifyIf (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun recreateSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun recreateSession$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun send (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendCredentialNotification (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun sendCredentialNotification$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun sendFlowAction (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -2693,12 +2699,13 @@ public final class org/siros/sdk/transport/wmp/WmpSession {
 	public synthetic fun <init> (Lorg/siros/sdk/transport/Transport;Lorg/siros/sdk/transport/wmp/WmpCodec;Lorg/siros/sdk/transport/wmp/WmpSessionConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun close (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun close$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public final fun create (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun create$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun create (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun create$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun isSessionGone (Ljava/lang/String;)Z
 	public final fun notifications ()Lkotlinx/coroutines/flow/Flow;
-	public final fun recreate (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun recreate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun recreate$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun resume (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendNotification (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendRequest (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.VerifiedUser
@@ -41,7 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /** Where a [MenuScreen] row leads. */
-enum class MenuItem { ManageCredentials, ShareInPerson, History, AddCredentials, RecentErrors, Settings, About, Verify, Logout }
+enum class MenuItem { ManageCredentials, InviteWallet, ShareInPerson, History, AddCredentials, RecentErrors, Settings, About, Verify, Logout }
 
 fun menuItemTestTag(item: MenuItem) = "menu_${item.name}"
 
@@ -63,6 +64,9 @@ fun MenuScreen(current: MenuItem?, onSelect: (MenuItem) -> Unit, modifier: Modif
     ) {
         Spacer(modifier = Modifier.height(20.dp))
         MenuRow(MenuItem.ManageCredentials, ImageVector.vectorResource(R.drawable.ic_wallet), R.string.home_manage_credentials, current, onSelect)
+        // Issue #77: the wallet-to-wallet invitation QR — menu-only (the
+        // Home hero was too crowded for a third tile).
+        MenuRow(MenuItem.InviteWallet, Icons.Outlined.PersonAdd, R.string.home_invite_wallet, current, onSelect)
         MenuRow(MenuItem.ShareInPerson, Icons.Outlined.PeopleAlt, R.string.home_share_in_person, current, onSelect)
         MenuRow(MenuItem.History, Icons.Outlined.History, R.string.menu_history, current, onSelect)
         MenuRow(MenuItem.AddCredentials, Icons.Outlined.AddCircleOutline, R.string.add_credential_title, current, onSelect)

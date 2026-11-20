@@ -1570,6 +1570,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     // ── Wallet ──────────────────────────────────────────────────────
 
+    /**
+     * The live [SirosWallet] (issue #77): the sample's invite screen drives
+     * `createInvitation` directly. Read-only view of the private field —
+     * the rebuild paths (`rebuildWalletIfNeeded`) swap the instance.
+     */
+    val currentWallet: SirosWallet get() = wallet
+
     private var wallet: SirosWallet = SirosWallet.create(
         activity,
         buildWalletConfig(),
@@ -2466,6 +2473,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * Open the add-credential screen. The SDK keeps a stale-while-revalidate catalog of the issuers' offers: a cached list is shown at
      * once (also after a cold start) and replaced when the background refresh finishes; only a first-ever load shows the spinner.
      */
+    // Issue #77: the invite-a-wallet screen (the invitation QR).
+    private val _showInviteWallet = MutableStateFlow(false)
+    val showInviteWallet: StateFlow<Boolean> = _showInviteWallet
+
+    /** Issue #77: open the invite-a-wallet screen (the invitation QR). */
+    fun openInviteWallet() {
+        _showInviteWallet.value = true
+    }
+
+    /** Issue #77: close it. */
+    fun closeInviteWallet() {
+        _showInviteWallet.value = false
+    }
+
     fun openAddCredential() {
         _showAddCredential.value = true
         // Filter out the plain "siros_id" offer: the "Scan Physical ID card" row above the list (onStartIDV/startIDV()) is the one,
@@ -3698,6 +3719,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val link = classifyDeepLink(uri, REDIRECT_SCHEME)
         _flowStarting.value = when (link) {
             is DeepLinkType.CredentialOffer -> "issuance"
+            // Issue #77: the invitation consume (a session bootstrap, not a
+            // flow — but the same "working…" indicator reads).
+            is DeepLinkType.Invitation -> "invitation"
             // PresentationRequest, Unknown (fallback below treats it as a
             // presentation attempt), and AuthCallback (not reachable from a QR
             // scan in practice) all get the same generic "verifier" copy.
@@ -3724,6 +3748,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         // false: the SDK ignored a redelivered duplicate of a request already started; nothing will come through
                         // the wallet state for this attempt, so its "contacting the verifier" indicator must not stay up.
                         if (wallet.startPresentation(link.uri)) startedPresentationLinks.add(link.uri) else _flowStarting.value = null
+                    }
+                    // Issue #77: the wallet-to-wallet invitation — the
+                    // scanned QR bootstraps a session (the engine consumes
+                    // the nonce single-use). No flow state: the consume
+                    // answer IS the session, ready for whatever follows.
+                    is DeepLinkType.Invitation -> {
+                        Log.i(TAG, "Routing to invitation consume")
+                        wallet.consumeInvitation(link.uri)
+                        _flowStarting.value = null
                     }
                     else -> {
                         // Fallback: treat unclassified URIs as presentation requests

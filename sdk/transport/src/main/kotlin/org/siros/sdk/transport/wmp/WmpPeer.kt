@@ -69,6 +69,17 @@ class WmpPeer(
 
     // ---- Lifecycle ----
 
+    /**
+     * Recreates the session (issue #77): a fresh `wmp.session.create` —
+     * optionally consuming an invitation's single-use nonce (the engine
+     * validates it expiry-and-signature, `-31002` on any failure).
+     * [WmpSession.recreate]'s public bridge (the session itself is
+     * private).
+     */
+    suspend fun recreateSession(invitationNonce: String? = null) {
+        session.recreate(invitationNonce)
+    }
+
     /** Connect and create a WMP session. Starts the dispatch loop. */
     suspend fun connect(
         authToken: String,
@@ -98,6 +109,15 @@ class WmpPeer(
     }
 
     // ---- PeerContext (outgoing) ----
+
+    /**
+     * One JSON-RPC notification to the engine (issue #77's message
+     * surface): `wmp.message.deliver`/`ack` ride here. [notify]'s public
+     * bridge (the override is the profile's PeerContext surface).
+     */
+    suspend fun send(method: String, params: JsonObject?) {
+        notify(method, params)
+    }
 
     override suspend fun notify(method: String, params: JsonObject?) {
         session.sendNotification(method, params)
