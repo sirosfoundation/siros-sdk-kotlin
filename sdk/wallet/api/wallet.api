@@ -519,6 +519,17 @@ public final class org/siros/sdk/wallet/DeepLinkType$CredentialOffer : org/siros
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class org/siros/sdk/wallet/DeepLinkType$Invitation : org/siros/sdk/wallet/DeepLinkType {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeepLinkType$Invitation;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeepLinkType$Invitation;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeepLinkType$Invitation;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getUri ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class org/siros/sdk/wallet/DeepLinkType$PresentationRequest : org/siros/sdk/wallet/DeepLinkType {
 	public fun <init> (Ljava/lang/String;)V
 	public final fun component1 ()Ljava/lang/String;
@@ -948,6 +959,9 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun clearUserOverride (Ljava/lang/String;Ljava/lang/String;)V
 	public final fun clearWscdTofuMapping (Ljava/lang/String;Ljava/lang/String;)V
 	public final fun completeAuthorization (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun consumeInvitation (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun createInvitation (Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun createInvitation$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/Integer;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun credentialStatus (Lorg/siros/sdk/credentials/StoredCredential;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun currentGlobalUserOverride ()Ljava/lang/String;
 	public final fun currentUserOverrides ()Ljava/util/Map;
@@ -970,6 +984,7 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun getCredentialConsumptionPolicy ()Lorg/siros/sdk/credentials/CredentialConsumptionPolicy;
 	public final fun getCredentials (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun getCredentials$default (Lorg/siros/sdk/wallet/SirosWallet;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getCurrentWmpSessionId ()Ljava/lang/String;
 	public final fun getDidResolver ()Lorg/siros/sdk/credentials/interop/DidResolver;
 	public final fun getDiipProfile ()Lorg/siros/sdk/credentials/interop/DiipProfile;
 	public final fun getIssuerMetadata (Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -1014,6 +1029,7 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun resumeSession (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun retryInstanceKeyAttestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun saveWscdCredentials (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun sendMessage (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun setCredentialConsumptionPolicy (Lorg/siros/sdk/credentials/CredentialConsumptionPolicy;)V
 	public final fun setEventListener (Lorg/siros/sdk/wallet/WalletEventListener;)V
 	public final fun setGlobalUserOverride (Ljava/lang/String;)V
@@ -1067,6 +1083,29 @@ public final class org/siros/sdk/wallet/SirosWallet$ResolvedIssuerMetadata {
 	public final fun getMetadata ()Lorg/siros/sdk/credentials/IssuerMetadata;
 	public final fun getRegisteredClientId ()Ljava/lang/String;
 	public final fun getTrusted ()Ljava/lang/Boolean;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/SirosWallet$WalletInvitation {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/wallet/SirosWallet$WalletInvitation;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/SirosWallet$WalletInvitation;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/SirosWallet$WalletInvitation;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getExpiresAt ()Ljava/lang/String;
+	public final fun getNonce ()Ljava/lang/String;
+	public final fun getProvider ()Ljava/lang/String;
+	public final fun getPurpose ()Ljava/lang/String;
+	public final fun getSender ()Ljava/lang/String;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getUri ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

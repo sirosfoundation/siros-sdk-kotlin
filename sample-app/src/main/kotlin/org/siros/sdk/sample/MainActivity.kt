@@ -132,6 +132,9 @@ class MainActivity : ComponentActivity() {
             is DeepLinkType.AuthCallback -> viewModel.handleAuthRedirect(link.code, link.state)
             is DeepLinkType.CredentialOffer -> viewModel.handleQrResult(link.uri)
             is DeepLinkType.PresentationRequest -> viewModel.handleQrResult(link.uri)
+            // Issue #77: the invitation QR/deep-link - the same consume path
+            // the scanner's result takes.
+            is DeepLinkType.Invitation -> viewModel.handleQrResult(link.uri)
             is DeepLinkType.Unknown -> Log.d(tag, "Ignoring non-wallet URI: ${uri.scheme}://${uri.host}")
         }
     }
@@ -311,6 +314,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val walletState by viewModel.state.collectAsState()
     val r2psServerUrl by viewModel.r2psServerUrl.collectAsState()
     val showAddCredential by viewModel.showAddCredential.collectAsState()
+    val showInviteWallet by viewModel.showInviteWallet.collectAsState()
     val showIDVPreparation by viewModel.showIDVPreparation.collectAsState()
     val availableCredentials by viewModel.availableCredentials.collectAsState()
     val isRefreshingOffers by viewModel.isRefreshingOffers.collectAsState()
@@ -948,6 +952,16 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 )
             }
 
+            // Invite a Wallet (issue #77): the invitation QR — create +
+            // show + share; the counterparty scans it with the same wallet
+            // scanner every other flow uses.
+            showInviteWallet -> chrome(null, false, null) {
+                InviteWalletScreen(
+                    wallet = viewModel.currentWallet,
+                    onBack = viewModel::closeInviteWallet,
+                )
+            }
+
             // Add Credentials
             showAddCredential -> chrome(null, false, null) {
                 val pendingOffer by viewModel.pendingIssuanceOffer.collectAsState()
@@ -1047,6 +1061,9 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                                             needsAttentionOnly = false
                                             go(WalletDestination.Credentials)
                                         }
+                                        // Issue #77: the invitation QR —
+                                        // menu-only (Home was too crowded).
+                                        MenuItem.InviteWallet -> viewModel.openInviteWallet()
                                         MenuItem.ShareInPerson -> go(WalletDestination.Share)
                                         MenuItem.History -> viewModel.openHistory()
                                         MenuItem.RecentErrors -> viewModel.openErrorJournal()

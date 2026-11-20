@@ -10,6 +10,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -7162,16 +7163,27 @@ class SirosWallet private constructor(
             // the engine never saw it, and a frame-supplied id must not stand in for a missing one.
             engineCreds.mapIndexed { i, c -> c.copy(credential = opened.credentials[i], notificationId = opened.notificationId) }
         }
-        // The WMP completion names no configuration: the one of the offer this wallet started for that very issuer.
-        val wmpConfigurationId = activeOffer?.takeIf { it.credentialIssuerIdentifier == decoded.credentialIssuer }?.credentialConfigurationId
+        // The completion's advertisement lookup: the wallet's OWN start keys it
+        // — never a completion member. The engine's batch completions carry
+        // NO credential_issuer (the entry objects name their
+        // credential_configuration_id alone), so keying on
+        // decoded.credentialIssuer answered null and the lookup missed EVERY
+        // clean seed delivery — NAMESPACE_ABSENT, "the delivered secret
+        // does not match what the issuer advertised" (the realeyes wall,
+        // 2026-11-20 23:46Z). The wallet's activeOffer IS the record of
+        // what it started — the same (issuer, configuration) the start path
+        // recorded the advertisement under; the completion's flow id (the
+        // caller's) is this check's own scope.
+        val wmpIssuer = activeOffer?.credentialIssuerIdentifier
+        val wmpConfigurationId = activeOffer?.credentialConfigurationId
         val sentCommitments = takeHolderCommitments(flowId)
         val verdict = DeliveredCredentialMetadata.check(
             response = opened ?: PlainDeliveredResponse(decoded.credentialMetadata),
             credentials = creds.map { DeliveredCredential(it.format, it.credential, it.notificationId) },
             canStoreSecret = keystoreCanHoldCredentialMetadata(),
-            advertised = isSecretSeedAdvertised(decoded.credentialIssuer, wmpConfigurationId),
-            shape = auxiliarySelection(decoded.credentialIssuer, wmpConfigurationId)?.shape ?: org.siros.sdk.credentials.AuxiliaryDataV01,
-            advertisement = auxiliarySelection(decoded.credentialIssuer, wmpConfigurationId)?.advertisement,
+            advertised = isSecretSeedAdvertised(wmpIssuer, wmpConfigurationId),
+            shape = auxiliarySelection(wmpIssuer, wmpConfigurationId)?.shape ?: org.siros.sdk.credentials.AuxiliaryDataV01,
+            advertisement = auxiliarySelection(wmpIssuer, wmpConfigurationId)?.advertisement,
             holderCommitments = sentCommitments,
         )
         sentCommitments.forEach { it.commitment.fill(0) }
@@ -8049,6 +8061,38 @@ class SirosWallet private constructor(
     private var wmpPeer: org.siros.sdk.transport.wmp.WmpPeer? = null
 
     /**
+     * The wallet's current WMP session id (issue #77): its OWN session — the
+     * group a `join` invitation names (`createInvitation(purpose = "join",
+     * sessionId = ...)`). Null when no session is live.
+     */
+    val currentWmpSessionId: String?
+        get() = wmpPeer?.currentSessionId
+
+    /**
+     * The WMP transport's app token (issue #77): the same bearer the
+     * session create carried — the invitation endpoint authenticates with
+     * it. Set at [connectViaWmp]; null before the first connect or after
+     * a teardown.
+     */
+    @Volatile
+    private var wmpAppToken: String? = null
+
+    /**
+     * The invitation create's client (issue #77): a dedicated OkHttpClient
+     * with a hard `callTimeout` — [INVITE_CREATE_TIMEOUT_MILLIS]'s coroutine
+     * timeout cancels the call, but a cancelled coroutine whose socket lingers
+     * (a slow-dripping answer past the timeout's uncancel) still parks an
+     * OkHttp dispatcher thread until the call timeout kills the socket.
+     * Never `OkHttpClient()` bare: a new client per call means a new
+     * connection pool and a new thread pool per create.
+     */
+    private val inviteHttpClient: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .callTimeout(INVITE_CREATE_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .build()
+    }
+
+    /**
      * The connection generation of the CURRENT WMP peer - connectViaWmp's own epoch
      * for it, the exact counterpart of a legacy engine session's
      * `connectionGeneration` (the presentation-link ledger keys on it). A peer
@@ -8177,6 +8221,10 @@ class SirosWallet private constructor(
     }
 
     private suspend fun connectViaWmp(appToken: String) {
+        // Issue #77: the invitation endpoint's bearer (createInvitation)
+        // — the same token the transport's session create carries.
+        wmpAppToken = appToken
+
         // Same leaked-connection hazard as connectEngine's engineSession -
         // tear down any prior live peer before replacing the reference (its callbacks end with it). Bumping the epoch
         // BEFORE closing the old peer (rather than after) leaves no window where a callback of the peer being replaced
@@ -10569,7 +10617,260 @@ class SirosWallet private constructor(
         )
     }
 
+    // ── Issue #77: the wallet-to-wallet invitation API ─────────────────
+    //
+    // The bootstrap of a session between two wallets: create answers the
+    // `wmp://invite?data=` QR the counterparty scans (or shares by any
+    // out-of-band channel); consume takes the scanned URI into the
+    // session bootstrap (the engine validates the nonce single-use —
+    // expiry, signature — and answers the session it names).
+
     /**
+     * One issued invitation (issue #77): the engine's answer to the create.
+     *
+     * @property uri The `wmp://invite?data=` form — the QR text the
+     *   counterparty scans.
+     * @property nonce The single-use nonce (the consume's key).
+     * @property provider The provider whose session this bootstraps.
+     * @property sender The sender (this wallet's principal).
+     * @property expiresAt The RFC 3339 expiry, when the engine named one.
+     */
+    data class WalletInvitation(
+        val uri: String,
+        val nonce: String,
+        val provider: String,
+        val sender: String,
+        val purpose: String,
+        val sessionId: String?,
+        val expiresAt: String?,
+    )
+
+    /**
+     * Creates one invitation (issue #77): the QR / deep-link the
+     * counterparty scans to bootstrap a session with this wallet.
+     *
+     * The engine endpoint: `POST /wmp/invitation` — the same origin the WMP
+     * transport POSTs `/wmp` to (the send URL's base), with this wallet's
+     * bearer token (the same one the session create carried). The [ttl]
+     * caps at the engine's configured default.
+     *
+     * @param purpose The invitation's purpose: `join` names the group session
+     *   ([sessionId]) its consume joins — the acceptance test's shape (a
+     *   wallet invites the MCP endpoint into its group); the default (`null`)
+     *   is the engine's `session` (the 1:1 bootstrap).
+     * @param sessionId The group session a `join` invitation names (required
+     *   when [purpose] is `join`; ignored otherwise).
+     */
+    suspend fun createInvitation(
+        ttl: Int? = null,
+        purpose: String? = null,
+        sessionId: String? = null,
+    ): WalletInvitation {
+        val token = wmpAppToken
+            ?: throw WalletException("The wallet is not connected to an engine")
+        val base = wmpInvitationEndpointBase()
+            ?: throw WalletException("The wallet's engine endpoint is not configured")
+        if (purpose == "join" && sessionId.isNullOrEmpty()) {
+            throw WalletException("A join invitation names the session it joins")
+        }
+        val url = base.trimEnd('/') + "/wmp/invitation"
+        val body = kotlinx.serialization.json.buildJsonObject {
+            ttl?.let { put("ttl_secs", kotlinx.serialization.json.JsonPrimitive(it)) }
+            purpose?.let { put("purpose", kotlinx.serialization.json.JsonPrimitive(it)) }
+            if (purpose == "join") {
+                put("session_id", kotlinx.serialization.json.JsonPrimitive(sessionId))
+            }
+        }
+        val request = okhttp3.Request.Builder()
+            .url(url)
+            .header("authorization", "Bearer $token")
+            .header("content-type", "application/json")
+            .post(
+                okhttp3.RequestBody.create(
+                    "application/json".toMediaType(),
+                    body.toString(),
+                ),
+            )
+            .build()
+        val client = config.httpClient ?: inviteHttpClient
+        // The create is cancellation-responsive (issue #77): `enqueue` +
+        // `call.cancel()` on cancellation — `execute()` inside `withContext`
+        // IGNORES coroutine cancellation (the blocking socket call ran on
+        // after the invite page was left, and a create hung mid-reconnect
+        // held the wallet's connection resources the issuance flows needed).
+        // With this, leaving the page (the screen scope's cancel) kills the
+        // call outright — and [withTimeout] bounds the whole create
+        // regardless ([INVITE_CREATE_TIMEOUT_MILLIS]), so a slow-dripping
+        // response (OkHttp's per-read timeout never fires on a live
+        // trickle) cannot hang the flow either.
+        return try {
+            kotlinx.coroutines.withTimeout(INVITE_CREATE_TIMEOUT_MILLIS) {
+                kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                    val call = client.newCall(request)
+                    cont.invokeOnCancellation { runCatching { call.cancel() } }
+                    call.enqueue(object : okhttp3.Callback {
+                        override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                            if (cont.isActive) {
+                                cont.resumeWithException(
+                                    WalletException("The invitation create failed: ${e.message}"),
+                                )
+                            }
+                        }
+
+                        override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                            val text = response.body?.string().orEmpty()
+                            if (!response.isSuccessful) {
+                                // The body rides the error (issue #77's diagnostics: the
+                                // engine's refusal text names the reason — the same
+                                // convention as the credential path's refusal-body log).
+                                if (cont.isActive) {
+                                    cont.resumeWithException(
+                                        WalletException(
+                                            "The invitation create failed: HTTP ${response.code}: ${text.take(200)}",
+                                        ),
+                                    )
+                                }
+                                return
+                            }
+                            cont.resume(invitationFromAnswer(text), null)
+                        }
+                    })
+                }
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            throw WalletException(
+                "The invitation create timed out after ${INVITE_CREATE_TIMEOUT_MILLIS / 1000}s",
+                e,
+            )
+        }
+    }
+
+    /**
+     * Parses the invitation create's answer (issue #77): the `invitation`
+     * object's members plus the top-level `uri` (the `wmp://invite?data=`
+     * QR payload). Exposed as its own function so the timeout/cancellation
+     * wrapping stays readable.
+     */
+    private fun invitationFromAnswer(text: String): WalletInvitation {
+        val answer = kotlinx.serialization.json.Json.parseToJsonElement(text)
+            as? kotlinx.serialization.json.JsonObject
+            ?: throw WalletException("The invitation answer is not JSON")
+        val invitation = answer["invitation"] as? kotlinx.serialization.json.JsonObject
+            ?: throw WalletException("The invitation answer carries no invitation")
+        fun member(name: String): String =
+            (invitation[name] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+        val uri = (answer["uri"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            ?: throw WalletException("The invitation answer carries no URI")
+        return WalletInvitation(
+            uri = uri,
+            nonce = member("nonce"),
+            provider = member("provider"),
+            sender = member("sender"),
+            purpose = member("purpose").ifEmpty { "session" },
+            sessionId = member("session_id").takeIf { it.isNotEmpty() },
+            expiresAt = member("expires_at").takeIf { it.isNotEmpty() },
+        )
+    }
+
+    /**
+     * Consumes a scanned invitation (issue #77): the engine's session
+     * bootstrap validates the nonce single-use (expiry, signature — every
+     * failure `-31002`) and answers the session the invitation names.
+     *
+     * The URI forms: `wmp://invite?data=<base64url>` (the QR) or the
+     * `https://<provider>/wmp/invite#<base64url>` fallback — the same forms
+     * [classifyDeepLink] recognizes as [DeepLinkType.Invitation].
+     */
+    suspend fun consumeInvitation(uri: String) {
+        val data = parseInvitationData(uri)
+            ?: throw WalletException("The invitation URI carries no data")
+        val invitation = kotlinx.serialization.json.Json.parseToJsonElement(
+            String(
+                android.util.Base64.decode(
+                    data,
+                    android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP,
+                ),
+                Charsets.UTF_8,
+            ),
+        ) as? kotlinx.serialization.json.JsonObject
+            ?: throw WalletException("The invitation data does not parse")
+        val nonce = (invitation["nonce"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            ?: throw WalletException("The invitation carries no nonce")
+        val peer = wmpPeer ?: throw WalletException("The wallet is not connected to an engine")
+        peer.recreateSession(invitationNonce = nonce)
+    }
+
+    /**
+     * Sends one message to a peer session (issue #77): the
+     * `wmp.message.deliver` notification — the engine writes it into the
+     * recipient's mailbox (its poll answers) and onto its outbox (the SSE
+     * stream delivers it live).
+     *
+     * @param to The recipient's session id (the session the invitation
+     *   bootstrapped on their side).
+     * @param text The message text (the plain-body form; the envelope's
+     *   `content_type: text/plain`).
+     */
+    suspend fun sendMessage(to: String, text: String) {
+        val peer = wmpPeer ?: throw WalletException("The wallet is not connected to an engine")
+        peer.send(
+            org.siros.sdk.transport.wmp.WmpMethods.MESSAGE_DELIVER,
+            kotlinx.serialization.json.buildJsonObject {
+                put("wmp", kotlinx.serialization.json.buildJsonObject {
+                    put("version", kotlinx.serialization.json.JsonPrimitive("0.1"))
+                })
+                put("to", kotlinx.serialization.json.buildJsonArray {
+                    add(kotlinx.serialization.json.JsonPrimitive(to))
+                })
+                put("content_type", kotlinx.serialization.json.JsonPrimitive("text/plain"))
+                put("body", kotlinx.serialization.json.buildJsonObject {
+                    put("text", kotlinx.serialization.json.JsonPrimitive(text))
+                })
+            },
+        )
+    }
+
+        /** The invitation `data` parameter: the query form's, else the fragment's. */
+    private fun parseInvitationData(uri: String): String? = try {
+        val parsed = java.net.URI(uri)
+        val queryData = parsed.rawQuery?.split('&')?.firstNotNullOfOrNull { member ->
+            val idx = member.indexOf('=')
+            if (idx > 0 && java.net.URLDecoder.decode(member.substring(0, idx), "UTF-8") == "data") {
+                java.net.URLDecoder.decode(member.substring(idx + 1), "UTF-8")
+            } else {
+                null
+            }
+        }
+        queryData ?: parsed.fragment?.takeIf { it.isNotEmpty() }
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * The engine endpoint base: the send URL's origin (the invitation
+     * endpoint rides the same engine the transport POSTs `/wmp` to).
+     * Null when no HTTP provider is configured (the LOCAL engine has no
+     * endpoint; the invitation is a remote-engine service).
+     *
+     * The derivation strips the send URL's trailing `/wmp` segment ONLY —
+     * `.substringBefore("/wmp")` splits at the FIRST occurrence, which on
+     * the deployed shape (`…/wmp-engine/wmp`) is the start of
+     * `/wmp-engine` itself, leaving the bare backend URL: the invitation
+     * POST then hit the wallet-proxy's nginx (404), never the engine
+     * (found live 2026-11-20, three blind rounds).
+     */
+    private fun wmpInvitationEndpointBase(): String? {
+        val provider = config.engineProviders
+            .filterIsInstance<WmpEngineProvider.RemoteHttpSse>()
+            .firstOrNull()
+        val sendUrl = provider?.sendUrl ?: config.wmpSendUrl ?: config.engineUrl
+        return sendUrl
+            ?.trimEnd('/')
+            ?.removeSuffix("/wmp")
+            ?.ifEmpty { null }
+    }
+
+        /**
      * A credential lifecycle notification as a FLOW - siros-wallet-core's
      * `credential_notification` (OpenID4x 3.4; the legacy
      * `wmp.credential.notification` METHOD is go-wmp's and does not exist on
@@ -14864,6 +15165,16 @@ class SirosWallet private constructor(
 
         /** The SDK-side time limit for the user's answer to a `circuit_zk` presentation consent. */
         private const val PRESENTATION_CONSENT_TIMEOUT_MILLIS = 120L * 1000
+
+        /**
+         * The invitation create's whole-call time limit (issue #77): the
+         * `scope.launch`ed create a hung engine answer would otherwise park
+         * forever — OkHttp's per-read timeout never fires on a live-dripping
+         * response, and the uncancellable `execute()` held the wallet's WMP
+         * surface until a hard stop. 30s: generous over a mobile round trip,
+         * short enough that the Retry on the invite page is a real option.
+         */
+        internal const val INVITE_CREATE_TIMEOUT_MILLIS = 30_000L
 
         /** Thrown wherever a call needs the backend and the wallet has no session yet. */
         private const val NOT_CONNECTED = "Not connected"

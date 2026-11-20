@@ -38,6 +38,10 @@ class WmpSession(
     val state: StateFlow<WmpSessionState> = _state
 
     private var sessionId: String? = null
+
+    /** The current session's id, when one is live (the join invitation's group name, issue #77). */
+    val currentSessionId: String?
+        get() = sessionId
     private var resumptionToken: String? = null
     private var lastReceivedId: String? = null
     // Saved from the create() call so the fresh-create fallback after a
@@ -73,9 +77,13 @@ class WmpSession(
      * call the resume-exhaustion fallback makes; safe to run over a
      * connected transport (`resume` re-`connect`s the same way).
      */
-    suspend fun recreate() {
+    suspend fun recreate(
+        // Issue #77: the invitation this recreate consumes (the session
+        // bootstrap after a scan).
+        invitationNonce: String? = null,
+    ) {
         val token = authToken ?: throw WmpSessionException("No auth token to recreate the session with")
-        create(token, sender, capabilities)
+        create(token, sender, capabilities, invitationNonce)
     }
 
     /**
@@ -90,6 +98,9 @@ class WmpSession(
         authToken: String,
         sender: String? = null,
         capabilitiesOffered: JsonObject? = null,
+        // Issue #77: the invitation nonce this create consumes — the
+        // engine's session bootstrap validates it single-use.
+        invitationNonce: String? = null,
     ) {
         // Saved for the fresh-create fallback (see handleDisconnect).
         this.authToken = authToken
@@ -105,6 +116,7 @@ class WmpSession(
                 capabilitiesOffered = capabilitiesOffered,
                 auth = SessionAuth(type = "bearer", token = authToken),
                 ttl = config.sessionTtlSeconds,
+                invitationNonce = invitationNonce,
             )
         )
 

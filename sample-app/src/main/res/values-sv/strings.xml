@@ -438,4 +438,16 @@
     <string name="settings_wallet_display_name">Byt namn på plånbok</string>
     <string name="settings_edit_greeting">Redigera hälsning</string>
     <string name="header_rename_save">Spara</string>
+
+    <!-- W2W invitations (issue #77) -->
+    <string name="retry">Försök igen</string>
+    <string name="home_invite_wallet">Bjud in en plånbok</string>
+    <string name="invite_wallet_title">Bjud in en plånbok</string>
+    <string name="invite_wallet_creating">Skapar inbjudan…</string>
+    <string name="invite_wallet_instructions">Låt den andra plånboken skanna denna QR — den startar en session mellan de två plånböckerna (engångs).</string>
+    <string name="invite_wallet_qr_description">Inbjudningens QR-kod</string>
+    <string name="invite_wallet_qr_failed">QR-koden kunde inte skapas.</string>
+    <string name="invite_wallet_share">Dela länk</string>
+    <string name="invite_wallet_expires">Upphör %1</string>
+    <string name="invite_wallet_group">Skapa en gruppinbjudan (gå med i min session)</string>
 </resources>

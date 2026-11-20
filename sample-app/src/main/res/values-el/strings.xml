@@ -438,4 +438,16 @@
     <string name="settings_wallet_display_name">Μετονομασία πορτοφολιού</string>
     <string name="settings_edit_greeting">Επεξεργασία χαιρετισμού</string>
     <string name="header_rename_save">Αποθήκευση</string>
+
+    <!-- W2W invitations (issue #77) -->
+    <string name="retry">Δοκιμάστε ξανά</string>
+    <string name="home_invite_wallet">Πρόσκληση πορτοφολιού</string>
+    <string name="invite_wallet_title">Πρόσκληση Πορτοφολιού</string>
+    <string name="invite_wallet_creating">Δημιουργία πρόσκλησης…</string>
+    <string name="invite_wallet_instructions">Αφήστε το άλλο πορτοφόλι να σκανάρει αυτό το QR — ξεκινά μια συνεδρία ανάμεσα στα δύο πορτοφόλια (χωρίς επανάληψη).</string>
+    <string name="invite_wallet_qr_description">Ο κωδικός QR της πρόσκλησης</string>
+    <string name="invite_wallet_qr_failed">Δεν ήταν δυνατή η δημιουργία του κωδικού QR.</string>
+    <string name="invite_wallet_share">Κοινοποίηση συνδέσμου</string>
+    <string name="invite_wallet_expires">Λήγει %1</string>
+    <string name="invite_wallet_group">Δημιουργία πρόσκλησης ομάδας (συμμετοχή στη συνεδρία μου)</string>
 </resources>

@@ -19,6 +19,15 @@ sealed class DeepLinkType {
     /** OID4VP presentation request. */
     data class PresentationRequest(val uri: String) : DeepLinkType()
 
+    /**
+     * A WMP invitation (issue #77): the out-of-band bootstrap for a
+     * wallet-to-wallet session — the `wmp://invite?data=<base64url>` QR /
+     * deep-link form, or the `https://<provider>/wmp/invite#<base64url>`
+     * fallback. The wallet consumes it single-use
+     * ([SirosWallet.consumeInvitation]).
+     */
+    data class Invitation(val uri: String) : DeepLinkType()
+
     /** URI does not match any known wallet protocol. */
     object Unknown : DeepLinkType()
 }
@@ -115,8 +124,25 @@ fun classifyDeepLink(uriString: String, redirectScheme: String): DeepLinkType {
         return DeepLinkType.CredentialOffer(uri = uriString)
     }
 
+    // 4b. WMP invitation (issue #77): wmp://invite?data=<base64url> — the
+    // QR/deep-link form the engine's POST /wmp/invitation answers.
+    if (scheme == "wmp" && jUri.host == "invite") {
+        return DeepLinkType.Invitation(uri = uriString)
+    }
+
     // 5. HTTPS with OID4VCI/OID4VP query parameters
     if (scheme == "https" || scheme == "http") {
+        // The invitation's HTTPS fallback form first (issue #77):
+        // https://<provider>/wmp/invite#<base64url> — the provider's own
+        // domain, the path the engine publishes, the data in the
+        // fragment.
+        val path = jUri.path?.lowercase() ?: ""
+        if (path.endsWith("/wmp/invite") && !jUri.rawQuery.isNullOrEmpty()) {
+            return DeepLinkType.Invitation(uri = uriString)
+        }
+        if (path.endsWith("/wmp/invite") && uriString.contains('#')) {
+            return DeepLinkType.Invitation(uri = uriString)
+        }
         val params = parseQueryParams(jUri.rawQuery)
         if (params.containsKey("credential_offer_uri") ||
             params.containsKey("credential_offer")

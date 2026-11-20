@@ -3,6 +3,7 @@ package org.siros.sdk.transport.wmp
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
@@ -63,6 +64,21 @@ data class SessionCreateParams(
     val security: JsonObject? = null,
     val ttl: Int? = null,
     val auth: SessionAuth? = null,
+    /**
+     * The invitation this create consumes (issue #77): the engine's
+     * single-use nonce — validated (expiry, signature) and consumed by
+     * the session create itself.
+     *
+     * NEVER-encoded at its default ([null]): the codec's `encodeDefaults`
+     * is true, so a null here would serialize as
+     * `"invitation_nonce": null` on EVERY create — and an engine whose
+     * field is a plain `String` (no explicit-null acceptance, the
+     * drop-in parity rule the member pre-dates) refuses the whole
+     * params: "Session creation failed: Invalid params", every login
+     * (found live: the v0.2.34 GDC engine, 2026-11-20 00:13).
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @SerialName("invitation_nonce") val invitationNonce: String? = null,
 )
 
 @Serializable
@@ -125,6 +141,7 @@ object WmpMethods {
 
     const val MESSAGE_DELIVER = "wmp.message.deliver"
     const val MESSAGE_ACK = "wmp.message.ack"
+    const val MESSAGE_POLL = "wmp.message.poll"
 
     const val CAPABILITY_UPDATE = "wmp.capability.update"
 

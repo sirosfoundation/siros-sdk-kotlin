@@ -438,4 +438,16 @@
     <string name="settings_wallet_display_name">Nimeä lompakko uudelleen</string>
     <string name="settings_edit_greeting">Muokkaa tervehdystä</string>
     <string name="header_rename_save">Tallenna</string>
+
+    <!-- W2W invitations (issue #77) -->
+    <string name="retry">Yritä uudelleen</string>
+    <string name="home_invite_wallet">Kutsu lompakko</string>
+    <string name="invite_wallet_title">Kutsu lompakko</string>
+    <string name="invite_wallet_creating">Luodaan kutsua…</string>
+    <string name="invite_wallet_instructions">Anna toisen lompakon skannata tämä QR — se käynnistää istunden lompakoiden välillä (kertakäyttöinen).</string>
+    <string name="invite_wallet_qr_description">Kutsun QR-koodi</string>
+    <string name="invite_wallet_qr_failed">QR-koodia ei voitu luoda.</string>
+    <string name="invite_wallet_share">Jaa linkki</string>
+    <string name="invite_wallet_expires">Vanhenee %1</string>
+    <string name="invite_wallet_group">Luo ryhmäkutsu (liity istuntooni)</string>
 </resources>
