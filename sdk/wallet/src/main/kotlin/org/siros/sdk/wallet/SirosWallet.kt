@@ -7086,12 +7086,30 @@ class SirosWallet private constructor(
     internal fun wmpDeliveredMetadataRefusal(
         flowId: String,
         result: kotlinx.serialization.json.JsonObject?,
-    ): Pair<DeliveredMetadataRefusal, List<String>>? = wmpDeliveredMetadataCheck(flowId, result).first
+    ): Pair<DeliveredMetadataRefusal, List<String>>? = wmpDeliveredMetadataCheck(flowId, result).refusal
+
+    /**
+     * [wmpDeliveredMetadataCheck]'s answer: the refusal (null when the delivery
+     * is clean), the FILLED per-entry batch (ready for
+     * [handleWmpIssuanceComplete] to store), and the verdict's Accept
+     * `entries` — the wrapped response-level `credential_metadata`, exactly
+     * what the keystore's delivered-metadata store and [KeystoreSecretSeedSource]
+     * expect (issue #428: they were computed by the check and dropped before,
+     * so every WMP-issued credential silently lost its seed and every
+     * ssc-based presentation refused at WITNESS).
+     */
+    internal class WmpDeliveredMetadataCheck(
+        val refusal: Pair<DeliveredMetadataRefusal, List<String>>?,
+        val entries: List<kotlinx.serialization.json.JsonObject>,
+        val delivered: kotlinx.serialization.json.JsonArray?,
+    )
 
     /**
      * The delivered-metadata gate AND filler (issue #398's batch store): a
-     * refusal - or `null` beside the FILLed per-entry credentials, ready for
-     * [handleWmpIssuanceComplete] to store. The entries' `credential`
+     * refusal - or `null` beside the FILLED per-entry credentials, ready for
+     * [handleWmpIssuanceComplete] to store, AND the verdict's delivered
+     * entries (issue #428: the wrapped `credential_metadata` — dropped before,
+     * so the seed never reached the container). The entries' `credential`
      * members are the wallet's own decrypted response's (an encrypted batch:
      * the engine relays envelopes, the wallet opens them), the flow-level
      * `refresh_token`/`dpop_jwk`/`notification_id` members riding along -
@@ -7100,28 +7118,42 @@ class SirosWallet private constructor(
     internal fun wmpDeliveredMetadataCheck(
         flowId: String,
         result: kotlinx.serialization.json.JsonObject?,
-    ): Pair<Pair<DeliveredMetadataRefusal, List<String>>?, List<kotlinx.serialization.json.JsonObject>> {
+    ): WmpDeliveredMetadataCheck {
         val decoded = try {
             org.siros.sdk.transport.wmp.openid4x.FlowCompleteResult.decode(result)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            return (DeliveredMetadataRefusal.MALFORMED to emptyList<String>()) to emptyList()
-        } ?: return null to emptyList<kotlinx.serialization.json.JsonObject>()
+            return WmpDeliveredMetadataCheck(DeliveredMetadataRefusal.MALFORMED to emptyList<String>(), emptyList(), null)
+        } ?: return WmpDeliveredMetadataCheck(null, emptyList(), null)
         // An encrypted issuance's credentials and metadata are the wallet's own decrypted response, never the engine's.
         val opened = if (decoded.credentialResponseEncrypted) {
             blindIssuance.take(flowId)
-                ?: return (DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to emptyList<String>()) to emptyList()
+                ?: return WmpDeliveredMetadataCheck(DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to emptyList<String>(), emptyList(), null)
         } else {
             null
         }
-        val engineCreds = decoded.credentials.orEmpty()
+        val engineCreds = decoded.credentials.orEmpty().ifEmpty {
+            // The single-`credential` completion (the legacy view, an engine
+            // without the batch): its flow-level member stands as a one-entry
+            // batch (issue #428 - the gate ran only for the `credentials`
+            // array before, so this path stored without it).
+            val single = (result?.get("credential") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                ?: return@ifEmpty emptyList()
+            listOf(
+                org.siros.sdk.transport.wmp.openid4x.CredentialResult(
+                    format = if ('.' !in single && '~' !in single) "mso_mdoc" else "vc+sd-jwt",
+                    credential = single,
+                    notificationId = (result?.get("notification_id") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull,
+                ),
+            )
+        }
         // A key was offered for this flow: a plain completion carrying credentials is an error, never accepted (the caller drops the key after).
         if (opened == null && engineCreds.isNotEmpty() && blindIssuance.wasOffered(flowId)) {
-            return (DeliveredMetadataRefusal.PLAIN_RESPONSE to engineCreds.mapNotNull { it.notificationId }) to emptyList()
+            return WmpDeliveredMetadataCheck(DeliveredMetadataRefusal.PLAIN_RESPONSE to engineCreds.mapNotNull { it.notificationId }, emptyList(), null)
         }
         if (opened != null && opened.credentials.size != engineCreds.size) {
-            return (DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to listOfNotNull(opened.notificationId)) to emptyList()
+            return WmpDeliveredMetadataCheck(DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE to listOfNotNull(opened.notificationId), emptyList(), null)
         }
         val creds = if (opened == null) {
             engineCreds
@@ -7145,7 +7177,16 @@ class SirosWallet private constructor(
         sentCommitments.forEach { it.commitment.fill(0) }
         val refusal = (verdict as? DeliveredMetadataVerdict.Refuse)
             ?.let { it.reason to creds.mapNotNull { c -> c.notificationId } }
-        if (refusal != null) return refusal to emptyList()
+        if (refusal != null) return WmpDeliveredMetadataCheck(refusal, emptyList(), null)
+        // The Accept's `entries` (issue #428): the wrapped response-level
+        // `credential_metadata` — the secret seed's opening among them —
+        // exactly what [attachDeliveredMetadata] stores and the seed source
+        // reads. Gated on the keystore's ability to hold it (the legacy
+        // collector's `canStoreDelivered` rule); a secret that cannot be
+        // kept was already refused by the check (NO_STORAGE), so this is
+        // the display-only members' gate.
+        val delivered = (verdict as? DeliveredMetadataVerdict.Accept)?.entries
+            ?.takeIf { keystoreCanHoldCredentialMetadata() }
         // Clean: the entries, FILLED with the wallet's own decrypted
         // response's credentials (plain deliveries are already filled), the
         // flow-level members merged in - the storable batch.
@@ -7159,7 +7200,7 @@ class SirosWallet private constructor(
                     ?.let { put("dpop_jwk", kotlinx.serialization.json.JsonPrimitive(it)) }
             }
         }
-        return null to entries
+        return WmpDeliveredMetadataCheck(null, entries, delivered)
     }
 
     /**
@@ -9086,12 +9127,16 @@ class SirosWallet private constructor(
         val index: Int,
         val entryConfigurationIds: List<String?>,
         val entryNotificationIds: List<String?>,
+        /** Called by [handleWmpIssuanceComplete] when the delivered-metadata attach failed and its own rollback ran (issue #428): the batch caller sweeps the rest. */
+        val deliveredStoreFailed: () -> Unit = {},
     )
 
     private suspend fun handleWmpIssuanceComplete(
         flowId: String,
         result: kotlinx.serialization.json.JsonObject,
         batchContext: WmpIssuanceBatchContext? = null,
+        /** The delivered `credential_metadata` entries ([WmpDeliveredMetadataCheck.delivered], issue #428): attached after the save. */
+        delivered: kotlinx.serialization.json.JsonArray? = null,
     ) {
         fun member(name: String): String? =
             (result[name] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
@@ -9251,6 +9296,37 @@ class SirosWallet private constructor(
 
         if (stored != null) {
             credentialStore.save(stored)
+            // The issuer's delivered credential data (issue #428): the
+            // verdict's Accept entries attached AFTER the save with the
+            // legacy collector's semantics — a credential whose delivered
+            // secret could not be kept is not kept either (the attach's own
+            // rollback deleted it), and the issuance fails as a NO_STORAGE
+            // refusal: the issuer is told, the user sees the flow error.
+            if (!attachDeliveredMetadata(stored.id, delivered)) {
+                // The attach's own rollback deleted the just-stored credential
+                // (a credential whose delivered secret could not be kept is not
+                // kept either). The BATCH caller sweeps its siblings and reports
+                // the NO_STORAGE refusal once for the whole flow (issue #428);
+                // the single path has no siblings to sweep, so IT reports.
+                batchContext?.deliveredStoreFailed?.invoke()
+                    ?: run {
+                        persistAndSyncKeystore()
+                        rejectDeliveredMetadata(
+                            flowId,
+                            listOfNotNull(notificationId),
+                            DeliveredMetadataRefusal.NO_STORAGE,
+                            sendFailure = { fid, nid ->
+                                wmpSendCredentialNotification(
+                                    fid,
+                                    nid,
+                                    CredentialNotificationEvent.FAILURE,
+                                    "credential_metadata_rejected",
+                                )
+                            },
+                        )
+                    }
+                return
+            }
             eventListener?.onCredentialReceived(stored)
             Timber.d("Stored issued credential format=$format batch=$batchId")
         }
@@ -9414,12 +9490,12 @@ class SirosWallet private constructor(
             // entry, never "success with nothing stored" (the pre-#398
             // handler validated the entries and discarded them).
             if (result?.containsKey("credentials") == true) {
-                val (refusal, entries) = wmpDeliveredMetadataCheck(flowId, result)
-                if (refusal != null) {
+                val check = wmpDeliveredMetadataCheck(flowId, result)
+                if (check.refusal != null) {
                     rejectDeliveredMetadata(
                         flowId,
-                        refusal.second,
-                        refusal.first,
+                        check.refusal.second,
+                        check.refusal.first,
                         sendFailure = { fid, nid ->
                             peer?.sendCredentialNotification(
                                 flowId = fid,
@@ -9431,6 +9507,8 @@ class SirosWallet private constructor(
                     )
                     return
                 }
+                val entries = check.entries
+                val delivered = check.delivered
                 if (entries.isEmpty()) {
                     Timber.e("WMP issuance flow $flowId completed with an empty credentials batch")
                     resetIssuanceGuards()
@@ -9448,6 +9526,12 @@ class SirosWallet private constructor(
                     (entry["notification_id"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
                 }
                 val completion = result ?: kotlinx.serialization.json.buildJsonObject { }
+                // Issue #428: the attach's own rollback deletes the FAILING
+                // entry; the WHOLE batch goes with it (the legacy collector's
+                // deliveredStoreFailed semantics) - a credential whose
+                // delivered secret could not be kept is not kept, and a batch
+                // is never stored in part.
+                var batchDeliveredStoreFailed = false
                 entries.forEachIndexed { index, entry ->
                     handleWmpIssuanceComplete(
                         flowId,
@@ -9457,7 +9541,24 @@ class SirosWallet private constructor(
                             index = index,
                             entryConfigurationIds = entryConfigurationIds,
                             entryNotificationIds = entryNotificationIds,
+                            deliveredStoreFailed = { batchDeliveredStoreFailed = true },
                         ),
+                        delivered,
+                    )
+                }
+                if (batchDeliveredStoreFailed) {
+                    rejectDeliveredMetadata(
+                        flowId,
+                        entryNotificationIds.mapNotNull { it },
+                        DeliveredMetadataRefusal.NO_STORAGE,
+                        sendFailure = { fid, nid ->
+                            peer?.sendCredentialNotification(
+                                flowId = fid,
+                                notificationId = nid,
+                                event = CredentialNotificationEvent.FAILURE,
+                                eventDescription = "credential_metadata_rejected",
+                            )
+                        },
                     )
                 }
                 // The engine's per-configuration failures (#28/#46): a
@@ -9474,9 +9575,30 @@ class SirosWallet private constructor(
                 return
             }
             // The single-`credential` completion (the legacy view, an
-            // engine without the batch): stored whole.
+            // engine without the batch): gated the same as the batch
+            // (issue #428 - this path stored WITHOUT the gate before, so a
+            // plaintext delivery after a key offer or a malformed metadata
+            // delivery stored ungated), then stored whole with its
+            // delivered entries.
             if (result?.containsKey("credential") == true) {
-                handleWmpIssuanceComplete(flowId, result)
+                val check = wmpDeliveredMetadataCheck(flowId, result)
+                if (check.refusal != null) {
+                    rejectDeliveredMetadata(
+                        flowId,
+                        check.refusal.second,
+                        check.refusal.first,
+                        sendFailure = { fid, nid ->
+                            peer?.sendCredentialNotification(
+                                flowId = fid,
+                                notificationId = nid,
+                                event = CredentialNotificationEvent.FAILURE,
+                                eventDescription = "credential_metadata_rejected",
+                            )
+                        },
+                    )
+                    return
+                }
+                handleWmpIssuanceComplete(flowId, result, null, check.delivered)
                 return
             }
             val refusal = wmpDeliveredMetadataRefusal(flowId, result)
