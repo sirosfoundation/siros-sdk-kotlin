@@ -438,4 +438,16 @@
     <string name="settings_wallet_display_name">Renomear a carteira</string>
     <string name="settings_edit_greeting">Editar saudação</string>
     <string name="header_rename_save">Salvar</string>
+
+    <!-- W2W invitations (issue #77) -->
+    <string name="retry">Tentar novamente</string>
+    <string name="home_invite_wallet">Convidar uma carteira</string>
+    <string name="invite_wallet_title">Convidar uma Carteira</string>
+    <string name="invite_wallet_creating">A criar o convite…</string>
+    <string name="invite_wallet_instructions">Deixe a outra carteira digitalizar este QR — inicia uma sessão entre as duas carteiras (uso único).</string>
+    <string name="invite_wallet_qr_description">O código QR do convite</string>
+    <string name="invite_wallet_qr_failed">Não foi possível gerar o código QR.</string>
+    <string name="invite_wallet_share">Partilhar ligação</string>
+    <string name="invite_wallet_expires">Expira %1</string>
+    <string name="invite_wallet_group">Criar um convite de grupo (junte-se à minha sessão)</string>
 </resources>
