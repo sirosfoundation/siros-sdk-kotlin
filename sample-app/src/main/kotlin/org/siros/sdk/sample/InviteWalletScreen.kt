@@ -81,6 +81,12 @@ fun InviteWalletScreen(
                     android.util.Log.e("InviteWallet", "create start")
                     invitation = wallet.createInvitation()
                     android.util.Log.i("InviteWallet", "create ok: uri=${invitation?.uri?.take(40)}")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Leaving the page cancels the create (the scope's cancel
+                    // now kills the OkHttp call — the SDK's cancellation hook):
+                    // not a failure, never surfaced as one.
+                    android.util.Log.i("InviteWallet", "create cancelled (left the page)")
+                    throw e
                 } catch (e: Exception) {
                     android.util.Log.e("InviteWallet", "create failed: ${e::class.qualifiedName}: ${e.message}", e)
                     error = e.message ?: "The invitation create failed"

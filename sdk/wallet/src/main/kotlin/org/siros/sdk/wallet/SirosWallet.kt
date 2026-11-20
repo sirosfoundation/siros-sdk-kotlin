@@ -10,6 +10,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -8069,6 +8070,21 @@ class SirosWallet private constructor(
     private var wmpAppToken: String? = null
 
     /**
+     * The invitation create's client (issue #77): a dedicated OkHttpClient
+     * with a hard `callTimeout` — [INVITE_CREATE_TIMEOUT_MILLIS]'s coroutine
+     * timeout cancels the call, but a cancelled coroutine whose socket lingers
+     * (a slow-dripping answer past the timeout's uncancel) still parks an
+     * OkHttp dispatcher thread until the call timeout kills the socket.
+     * Never `OkHttpClient()` bare: a new client per call means a new
+     * connection pool and a new thread pool per create.
+     */
+    private val inviteHttpClient: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .callTimeout(INVITE_CREATE_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .build()
+    }
+
+    /**
      * The connection generation of the CURRENT WMP peer - connectViaWmp's own epoch
      * for it, the exact counterpart of a legacy engine session's
      * `connectionGeneration` (the presentation-link ledger keys on it). A peer
@@ -10648,39 +10664,82 @@ class SirosWallet private constructor(
                 ),
             )
             .build()
-        val client = config.httpClient ?: okhttp3.OkHttpClient()
-        // The blocking execute rides IO — never Main (the
-        // NetworkOnMainThreadException's null message surfaced as
-        // "the invitation create failed" with no log line to name it).
-        return withContext(kotlinx.coroutines.Dispatchers.IO) {
-            client.newCall(request).execute().use { response ->
-                val text = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    // The body rides the error (issue #77's diagnostics: the
-                    // engine's refusal text names the reason — the same
-                    // convention as the credential path's refusal-body log).
-                    throw WalletException(
-                        "The invitation create failed: HTTP ${response.code}: ${text.take(200)}",
-                    )
+        val client = config.httpClient ?: inviteHttpClient
+        // The create is cancellation-responsive (issue #77): `enqueue` +
+        // `call.cancel()` on cancellation — `execute()` inside `withContext`
+        // IGNORES coroutine cancellation (the blocking socket call ran on
+        // after the invite page was left, and a create hung mid-reconnect
+        // held the wallet's connection resources the issuance flows needed).
+        // With this, leaving the page (the screen scope's cancel) kills the
+        // call outright — and [withTimeout] bounds the whole create
+        // regardless ([INVITE_CREATE_TIMEOUT_MILLIS]), so a slow-dripping
+        // response (OkHttp's per-read timeout never fires on a live
+        // trickle) cannot hang the flow either.
+        return try {
+            kotlinx.coroutines.withTimeout(INVITE_CREATE_TIMEOUT_MILLIS) {
+                kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                    val call = client.newCall(request)
+                    cont.invokeOnCancellation { runCatching { call.cancel() } }
+                    call.enqueue(object : okhttp3.Callback {
+                        override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                            if (cont.isActive) {
+                                cont.resumeWithException(
+                                    WalletException("The invitation create failed: ${e.message}"),
+                                )
+                            }
+                        }
+
+                        override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                            val text = response.body?.string().orEmpty()
+                            if (!response.isSuccessful) {
+                                // The body rides the error (issue #77's diagnostics: the
+                                // engine's refusal text names the reason — the same
+                                // convention as the credential path's refusal-body log).
+                                if (cont.isActive) {
+                                    cont.resumeWithException(
+                                        WalletException(
+                                            "The invitation create failed: HTTP ${response.code}: ${text.take(200)}",
+                                        ),
+                                    )
+                                }
+                                return
+                            }
+                            cont.resume(invitationFromAnswer(text), null)
+                        }
+                    })
                 }
-                val answer = kotlinx.serialization.json.Json.parseToJsonElement(text)
-                    as? kotlinx.serialization.json.JsonObject
-                    ?: throw WalletException("The invitation answer is not JSON")
-                val invitation = answer["invitation"] as? kotlinx.serialization.json.JsonObject
-                    ?: throw WalletException("The invitation answer carries no invitation")
-                fun member(name: String): String =
-                    (invitation[name] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
-                val uri = (answer["uri"] as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    ?: throw WalletException("The invitation answer carries no URI")
-                WalletInvitation(
-                    uri = uri,
-                    nonce = member("nonce"),
-                    provider = member("provider"),
-                    sender = member("sender"),
-                    expiresAt = member("expires_at").takeIf { it.isNotEmpty() },
-                )
             }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            throw WalletException(
+                "The invitation create timed out after ${INVITE_CREATE_TIMEOUT_MILLIS / 1000}s",
+                e,
+            )
         }
+    }
+
+    /**
+     * Parses the invitation create's answer (issue #77): the `invitation`
+     * object's members plus the top-level `uri` (the `wmp://invite?data=`
+     * QR payload). Exposed as its own function so the timeout/cancellation
+     * wrapping stays readable.
+     */
+    private fun invitationFromAnswer(text: String): WalletInvitation {
+        val answer = kotlinx.serialization.json.Json.parseToJsonElement(text)
+            as? kotlinx.serialization.json.JsonObject
+            ?: throw WalletException("The invitation answer is not JSON")
+        val invitation = answer["invitation"] as? kotlinx.serialization.json.JsonObject
+            ?: throw WalletException("The invitation answer carries no invitation")
+        fun member(name: String): String =
+            (invitation[name] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+        val uri = (answer["uri"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            ?: throw WalletException("The invitation answer carries no URI")
+        return WalletInvitation(
+            uri = uri,
+            nonce = member("nonce"),
+            provider = member("provider"),
+            sender = member("sender"),
+            expiresAt = member("expires_at").takeIf { it.isNotEmpty() },
+        )
     }
 
     /**
@@ -15076,6 +15135,16 @@ class SirosWallet private constructor(
 
         /** The SDK-side time limit for the user's answer to a `circuit_zk` presentation consent. */
         private const val PRESENTATION_CONSENT_TIMEOUT_MILLIS = 120L * 1000
+
+        /**
+         * The invitation create's whole-call time limit (issue #77): the
+         * `scope.launch`ed create a hung engine answer would otherwise park
+         * forever — OkHttp's per-read timeout never fires on a live-dripping
+         * response, and the uncancellable `execute()` held the wallet's WMP
+         * surface until a hard stop. 30s: generous over a mobile round trip,
+         * short enough that the Retry on the invite page is a real option.
+         */
+        internal const val INVITE_CREATE_TIMEOUT_MILLIS = 30_000L
 
         /** Thrown wherever a call needs the backend and the wallet has no session yet. */
         private const val NOT_CONNECTED = "Not connected"
