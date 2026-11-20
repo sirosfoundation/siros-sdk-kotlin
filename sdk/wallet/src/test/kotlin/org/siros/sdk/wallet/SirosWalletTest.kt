@@ -16363,9 +16363,14 @@ class SirosWalletTest {
         // the UI reporting success over lost credentials. Every entry must
         // be stored, one StoredCredential each; a failing entry is an
         // onFlowError, never a silent loss.
-        val store = FakeCredentialStore(mutableListOf())
+        // Issue #428 made the store real: the delivered entries are attached
+        // after each save, and the attach needs the credential IN the
+        // keystore (KeystoreMirroringStore models the production container;
+        // a bare FakeCredentialStore never holds it, the attach rolls the
+        // batch back and the flow refuses as NO_STORAGE).
         val keystore = org.siros.sdk.keystore.JweKeystore()
         keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+        val store = KeystoreMirroringStore(keystore)
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "d", credentials = emptyList())),
             "credentialStore" to store,
@@ -16509,6 +16514,260 @@ class SirosWalletTest {
         verify(exactly = 0) { s.listener.onFlowComplete(any(), any()) }
         verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
         verify(exactly = 0) { s.engine.sendCredentialNotification(any(), any(), CredentialNotificationEvent.ACCEPTED, any()) }
+    }
+
+    // ── Issue #428: the WMP completion stores the delivered credential metadata ──
+
+    /**
+     * A wallet whose WMP flow [flowId] opened an issuer response delivering [metadataMembers], completing with the
+     * engine's [result] frame (the encrypted batch shape: placeholder entries, `credential_response_encrypted`, the
+     * `credential_issuer` - the flow-level `notification_id` never read from the frame, the wallet's own decrypted
+     * response's stands). [storeInKeystore] false: `save` skips the keystore, so [SirosWallet] attaching the delivered
+     * metadata fails (the rollback's repro shape).
+     */
+    private suspend fun kotlinx.coroutines.test.TestScope.wmpCompletionScenario(
+        flowId: String,
+        metadataMembers: kotlinx.serialization.json.JsonObject,
+        result: kotlinx.serialization.json.JsonObject,
+        storeInKeystore: Boolean = true,
+    ): Pair<SirosWallet, KeystoreMirroringStore> {
+        val keystore = org.siros.sdk.keystore.JweKeystore()
+        keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+        val store = KeystoreMirroringStore(keystore, mirror = storeInKeystore)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { sessionStore.privateDataJwe } returns null
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val blind = BlindIssuance()
+        val jwk = blind.offer(flowId, org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        val body = buildJsonObject {
+            put(
+                "credentials",
+                kotlinx.serialization.json.JsonArray(listOf(buildJsonObject { put("credential", JsonPrimitive(NymTestCredentials.sdJwt())) })),
+            )
+            put("notification_id", JsonPrimitive("n9"))
+            put("credential_metadata", metadataMembers)
+        }
+        blind.open(flowId, issuerEncrypt(jwk, "ECDH-ES", "A256GCM", body.toString()), deferred = false)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1", displayName = "Alice", flowId = flowId,
+                    flowType = "issuance", status = "in_progress", credentials = emptyList(),
+                ),
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "blindIssuance" to blind,
+            "secretSeedAdvertised" to advertisedSelections(true),
+            "activeOffer" to org.siros.sdk.credentials.CredentialOffer("nym", "https://issuer.example", "n", issuerName = "i"),
+        )
+        wallet.onWmpFlowCompleteForTest(flowId, result)
+        advanceUntilIdle()
+        return wallet to store
+    }
+
+    /** The engine's encrypted batch completion frame: placeholder entries, no credential values. */
+    private fun wmpEncryptedBatchResult() = Json.parseToJsonElement(
+        """{"credentials":[{"format":"dc+sd-jwt"}],"credential_response_encrypted":true,"credential_issuer":"https://issuer.example"}""",
+    ).jsonObject
+
+    @Test
+    fun wmpIssuance_storesTheDeliveredCredentialMetadata_theSeedReachesTheContainer() = runTest(dispatcher) {
+        // Issue #428: the completion stored the credential and dropped the
+        // check's Accept entries on the floor, so the 16-byte opening the
+        // issuer delivered (probe-proven on the wire) never reached the
+        // credential container - every ssc-based presentation refused at
+        // WITNESS (-31006 "presentation signing failed"). The entries ride
+        // the completion now: attached after the save, read back as the
+        // seed source reads them.
+        val (wallet, store) = wmpCompletionScenario(
+            "flow-wmp-428",
+            deliveredMetadata().members,
+            wmpEncryptedBatchResult(),
+        )
+        assertEquals("the issued credential is stored", 1, store.getAll().size)
+        val stored = store.getAll().single()
+        // The delivered metadata, as the wallet keeps it: the wrapped v0.1
+        // member, exactly the entry KeystoreSecretSeedSource parses.
+        val entries = wallet.storedCredentialMetadata(stored.id)
+        assertNotNull("the delivered credential metadata is attached to the stored credential (issue #428)", entries)
+        val aux = entries.orEmpty().mapNotNull { it as? JsonObject }.filter {
+            (it["type"] as? JsonPrimitive)?.takeIf { p -> p.isString }?.content == deliveredMember
+        }
+        assertEquals("one auxiliary_data entry, wrapped", 1, aux.size)
+        // The presentation arc (the WITNESS gate's input): the seed arrives.
+        val source = KeystoreSecretSeedSource { wallet.storedCredentialMetadata(it) }
+        assertArrayEquals("the seed the issuer delivered opens the credential's ssc", NymTestCredentials.seed, source.secretSeed(stored.id))
+        // A fresh copy per call (the source's contract; the caller zeroes it).
+        assertArrayEquals(NymTestCredentials.seed, source.secretSeed(stored.id))
+        // Non-disclosure (the DeliveredMetadataNonDisclosureTest family): no raw
+        // view of the credential, its display metadata, the store or the state
+        // carries the seed - hex or base64url.
+        val seedB64 = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(NymTestCredentials.seed)
+        for (needle in listOf(NymTestCredentials.seedHex, seedB64)) {
+            assertFalse(needle, stored.raw.contains(needle))
+            assertFalse(needle, (stored.metadata?.toString() ?: "").contains(needle))
+            assertFalse(needle, store.getAll().toString().contains(needle))
+            assertFalse(needle, wallet.state.value.toString().contains(needle))
+        }
+    }
+
+    @Test
+    fun wmpIssuance_aKeystoreThatRefusesTheMetadata_rollsBackTheJustStoredCredential() = runTest(dispatcher) {
+        // The attach's own rollback (the legacy collector's deliveredStoreFailed
+        // semantics): a credential whose delivered secret could not be kept is
+        // not kept either - the just-stored credential is deleted and the
+        // issuance fails as a NO_STORAGE refusal, never success.
+        val (wallet, store) = wmpCompletionScenario(
+            "flow-wmp-428-rollback",
+            deliveredMetadata().members,
+            wmpEncryptedBatchResult(),
+            storeInKeystore = false,
+        )
+        assertEquals("the rolled-back credential leaves nothing stored", 0, store.getAll().size)
+        assertTrue("the failed attach is a flow error, not success: ${wallet.state.value}", wallet.state.value is WalletState.Ready)
+    }
+
+    @Test
+    fun wmpIssuance_anAttachFailureMidBatch_rollsBackTheWholeBatchNeverAPartialOne() = runTest(dispatcher) {
+        // Issue #428's batch rule (the legacy collector's deliveredStoreFailed
+        // sweep): the attach fails on the FIRST stored entry of a two-entry
+        // batch - the just-stored entry goes (the attach's own rollback), and
+        // the batch caller must refuse BEFORE the second entry stores, so a
+        // partial batch never stays and the flow reports NO_STORAGE once.
+        val flowId = "flow-wmp-428-partial"
+        val keystore = org.siros.sdk.keystore.JweKeystore()
+        keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+        // The mirror never runs: the store refuses the keystore's credential
+        // container (the attach then fails on the first entry).
+        val store = KeystoreMirroringStore(keystore, mirror = false)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { sessionStore.privateDataJwe } returns null
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val blind = BlindIssuance()
+        val jwk = blind.offer(flowId, org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        val body = buildJsonObject {
+            put(
+                "credentials",
+                kotlinx.serialization.json.JsonArray(
+                    (1..2).map {
+                        buildJsonObject { put("credential", JsonPrimitive(NymTestCredentials.sdJwt())) }
+                    },
+                ),
+            )
+            put("notification_id", JsonPrimitive("n9"))
+            put("credential_metadata", deliveredMetadata().members)
+        }
+        blind.open(flowId, issuerEncrypt(jwk, "ECDH-ES", "A256GCM", body.toString()), deferred = false)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1", displayName = "Alice", flowId = flowId,
+                    flowType = "issuance", status = "in_progress", credentials = emptyList(),
+                ),
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "blindIssuance" to blind,
+            "secretSeedAdvertised" to advertisedSelections(true),
+            "activeOffer" to org.siros.sdk.credentials.CredentialOffer("nym", "https://issuer.example", "n", issuerName = "i"),
+        )
+        val result = Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt"},{"format":"dc+sd-jwt"}],"credential_response_encrypted":true,"credential_issuer":"https://issuer.example"}""",
+        ).jsonObject
+        wallet.onWmpFlowCompleteForTest(flowId, result)
+        advanceUntilIdle()
+        assertEquals("no partial batch stays: nothing is stored", 0, store.getAll().size)
+        assertTrue("the mid-batch attach failure is a flow error, not success: ${wallet.state.value}", wallet.state.value is WalletState.Ready)
+    }
+
+    @Test
+    fun wmpIssuance_theSingleCredentialCompletion_isGatedAndStoresItsMetadataToo() = runTest(dispatcher) {
+        // Issue #428's secondary: the single-`credential` completion stored
+        // WITHOUT the gate before. The frame's `credential_metadata` is
+        // display-only (the transport's DisplayOnlyCredentialMetadataSerializer
+        // drops secret-bearing members), so the gate's observable refusals on
+        // this path are the malformed ones - and a plaintext seed the relay
+        // dropped is neither refused nor taken (never silently stored).
+        val flowId = "flow-wmp-single"
+        val keystore = org.siros.sdk.keystore.JweKeystore()
+        keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+        val store = KeystoreMirroringStore(keystore)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { sessionStore.privateDataJwe } returns null
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1", displayName = "Alice", flowId = flowId,
+                    flowType = "issuance", status = "in_progress", credentials = emptyList(),
+                ),
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+        )
+        // A malformed metadata delivery on the frame: the gate refuses it,
+        // nothing is stored (issue #428 - this path stored ungated before).
+        val malformed = kotlinx.serialization.json.buildJsonObject {
+            put("credential", JsonPrimitive(NymTestCredentials.sdJwt(sscValues = emptyList())))
+            put("notification_id", JsonPrimitive("n9"))
+            put("credential_issuer", JsonPrimitive("https://issuer.example"))
+            put("credential_metadata", JsonPrimitive("not-an-object"))
+        }
+        wallet.onWmpFlowCompleteForTest(flowId, malformed)
+        advanceUntilIdle()
+        assertEquals("a malformed metadata delivery stores nothing (the gate runs on the single path too)", 0, store.getAll().size)
+        // A plaintext seed the relay dropped: neither refused nor taken - the
+        // credential stores WITHOUT it (the seed travels only the wallet's own
+        // decrypted response, which this plain completion has none of).
+        val plainSeedDropped = kotlinx.serialization.json.buildJsonObject {
+            put("credential", JsonPrimitive(NymTestCredentials.sdJwt(sscValues = emptyList())))
+            put("notification_id", JsonPrimitive("n9"))
+            put("credential_issuer", JsonPrimitive("https://issuer.example"))
+            put("credential_metadata", deliveredAuxBody())
+        }
+        wallet.onWmpFlowCompleteForTest(flowId, plainSeedDropped)
+        advanceUntilIdle()
+        assertEquals("the dropped-seed completion still stores its credential", 1, store.getAll().size)
+        val stored = store.getAll().single()
+        assertNull(
+            "a seed the relay dropped is never silently attached",
+            wallet.storedCredentialMetadata(stored.id),
+        )
+        // A clean display-only delivery: stored WITH its delivered entries
+        // attached. (The display-only serializer keeps exactly `display`
+        // and `claims` — a member like `example.other` is filtered to empty
+        // at the transport boundary, so the verdict is None and nothing is
+        // attached: the correct drop, not a silent loss.)
+        val clean = kotlinx.serialization.json.buildJsonObject {
+            put("credential", JsonPrimitive(NymTestCredentials.sdJwt(sscValues = emptyList())))
+            put("notification_id", JsonPrimitive("n9"))
+            put("credential_issuer", JsonPrimitive("https://issuer.example"))
+            put("credential_metadata", Json.parseToJsonElement("""{"claims":[{"path":["a"]}]}"""))
+        }
+        wallet.onWmpFlowCompleteForTest(flowId, clean)
+        advanceUntilIdle()
+        assertEquals("the clean single-credential completion stores", 2, store.getAll().size)
+        val cleanStored = store.getAll().last()
+        assertNotNull(
+            "its delivered entries are attached (issue #428's single path)",
+            wallet.storedCredentialMetadata(cleanStored.id),
+        )
     }
 
     @Test
