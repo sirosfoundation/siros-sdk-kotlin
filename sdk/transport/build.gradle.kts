@@ -52,8 +52,24 @@ dependencies {
     }
 
     testImplementation(libs.junit)
+    // JNA for the UniFFI tests: the wallet-core AAR exclude above removes
+    // its jna (the @aar packaging conflict), so the test classpath needs
+    // its own — without it the tests skip (the UnsatisfiedLinkError in
+    // memberLoadable/engineLoadable is the JNA dispatcher itself).
+    testImplementation("net.java.dev.jna:jna:5.14.0")
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     testImplementation(libs.okhttp.mockwebserver)
+}
+
+// The native-library path for the UniFFI tests (the MLS round-trip, the
+// in-process engine): `WALLET_CORE_NATIVE` names the wallet-core target
+// dir (its release .so), the env var the developer passes — the CI runs
+// without it and the tests skip (the assumeTrue pattern), a local run
+// against a built wallet-core executes them for real.
+tasks.withType<Test>().configureEach {
+    System.getenv("WALLET_CORE_NATIVE")?.let { path ->
+        systemProperty("jna.library.path", path)
+    }
 }
