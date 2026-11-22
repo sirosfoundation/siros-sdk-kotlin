@@ -151,6 +151,7 @@ import org.siros.sdk.transport.engine.ProofObject
 import org.siros.sdk.transport.engine.SignRequestMessage
 import org.siros.sdk.transport.engine.WalletEngineSession
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -11057,9 +11058,16 @@ class SirosWallet private constructor(
                 sendUrl = urls.first,
                 sseUrl = urls.second,
                 tokenProvider = {
-                    // Fresh per request (the binding is stateless and the AS's
-                    // tokens live minutes): a token from the wallet's OWN AS.
-                    authTokens.ensureBackendToken().raw
+                    // Rung 3 (the strict flip): a token from the INVITED
+                    // backend's OWN AS — discovered (RFC 8414), a client
+                    // dynamically registered there (RFC 7591), minted per
+                    // request (cached until near expiry). NOT the wallet's
+                    // own AS token: a strict engine pins `iss` and refuses
+                    // a foreign issuer (found live: the GDC token refused
+                    // -31002 against the strict relay). A backend without
+                    // an AS (the no-AS mode) falls back to the wallet's own
+                    // token — the subject is advisory there.
+                    joinBearerFor(provider)
                 },
             )
             val peer = createWmpPeerFromTransport(transport)
@@ -11179,6 +11187,160 @@ class SirosWallet private constructor(
             null
         }
     }
+
+    // ── Rung 3: the invited backend's OWN AS (discover → DCR → mint) ─────
+
+    /** The dynamically registered clients, per invited backend (provider → id/secret). */
+    private val joinAsClients =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+
+    /** The cached join tokens, per invited backend (provider → token/expiry-ms). */
+    private val joinAsTokens =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+
+    /** The AS metadata a backend publishes (RFC 8414): token + registration endpoints. */
+    private data class AsMetadata(val tokenEndpoint: String, val registrationEndpoint: String?)
+
+    /** Read the backend's RFC 8414 metadata (`null` when it runs without an AS). */
+    private suspend fun discoverAsMetadata(backendBase: String): AsMetadata? {
+        val url = backendBase.trimEnd('/') + "/.well-known/oauth-authorization-server"
+        return try {
+            val client = wmpDiscoveryClient
+            val request = okhttp3.Request.Builder().url(url).build()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                client.newCall(request).execute()
+            }.use { resp ->
+                if (!resp.isSuccessful) return@use null
+                val parsed = kotlinx.serialization.json.Json
+                    .parseToJsonElement(resp.body?.string() ?: return@use null)
+                    as? kotlinx.serialization.json.JsonObject
+                    ?: return@use null
+                val token = (
+                    parsed["token_endpoint"] as? kotlinx.serialization.json.JsonPrimitive
+                    )?.content
+                if (token.isNullOrBlank()) return@use null
+                val registration = (
+                    parsed["registration_endpoint"] as? kotlinx.serialization.json.JsonPrimitive
+                    )?.content
+                AsMetadata(token, registration?.takeIf { it.isNotBlank() })
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Dynamically register a client at the backend's AS (RFC 7591, open
+     * registration): the arbitrary-invite constraint — a wallet from another
+     * deployment has no client there until it registers one. `null` when
+     * the AS has no registration endpoint (a pre-shared-credential AS:
+     * the fall back answers).
+     */
+    private suspend fun dcrRegister(registrationEndpoint: String, clientName: String): Pair<String, String>? {
+        return try {
+            val client = wmpDiscoveryClient
+            val body = okhttp3.RequestBody.create(
+                "application/json".toMediaTypeOrNull(),
+                kotlinx.serialization.json.Json.encodeToString(
+                    kotlinx.serialization.json.JsonObject.serializer(),
+                    kotlinx.serialization.json.buildJsonObject {
+                        put("client_name", kotlinx.serialization.json.JsonPrimitive(clientName))
+                        put(
+                            "grant_types",
+                            kotlinx.serialization.json.JsonArray(
+                                listOf(kotlinx.serialization.json.JsonPrimitive("client_credentials")),
+                            ),
+                        )
+                        put(
+                            "token_endpoint_auth_method",
+                            kotlinx.serialization.json.JsonPrimitive("client_secret_basic"),
+                        )
+                    },
+                ),
+            )
+            val request = okhttp3.Request.Builder().url(registrationEndpoint).post(body).build()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                client.newCall(request).execute()
+            }.use { resp ->
+                if (!resp.isSuccessful) return@use null
+                val parsed = kotlinx.serialization.json.Json
+                    .parseToJsonElement(resp.body?.string() ?: return@use null)
+                    as? kotlinx.serialization.json.JsonObject
+                    ?: return@use null
+                val id = (parsed["client_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                val secret = (parsed["client_secret"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                if (id.isNullOrBlank() || secret.isNullOrBlank()) null else id to secret
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Mint a token at the backend's own AS (client_credentials, HTTP Basic). */
+    private suspend fun tokenViaClientCredentials(
+        tokenEndpoint: String,
+        client: Pair<String, String>,
+    ): Pair<String, Long>? {
+        return try {
+            val client0 = wmpDiscoveryClient
+            val basic = android.util.Base64.encodeToString(
+                "${client.first}:${client.second}".toByteArray(),
+                android.util.Base64.NO_WRAP,
+            )
+            val body = "grant_type=client_credentials"
+                .toByteArray()
+                .toRequestBody(null)
+            val request = okhttp3.Request.Builder()
+                .url(tokenEndpoint)
+                .header("Authorization", "Basic $basic")
+                .post(body)
+                .build()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                client0.newCall(request).execute()
+            }.use { resp ->
+                if (!resp.isSuccessful) return@use null
+                val parsed = kotlinx.serialization.json.Json
+                    .parseToJsonElement(resp.body?.string() ?: return@use null)
+                    as? kotlinx.serialization.json.JsonObject
+                    ?: return@use null
+                val token = (parsed["access_token"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                if (token.isNullOrBlank()) return@use null
+                val expiresIn = (
+                    parsed["expires_in"] as? kotlinx.serialization.json.JsonPrimitive
+                    )?.content?.toLongOrNull() ?: 3600L
+                token to (System.currentTimeMillis() + (expiresIn - 60) * 1000)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * A bearer for the invited backend (rung 3): a token from THAT backend's
+     * own AS — discovered (RFC 8414), a client registered (RFC 7591), minted
+     * and cached until near expiry. Falls back to the wallet's own AS token
+     * when the backend publishes no AS (the no-AS mode: any bearer rides,
+     * the subject is advisory) or the DCR/mint path fails.
+     */
+    private suspend fun joinBearerFor(provider: String): String {
+        joinAsTokens[provider]?.let { (token, expAt) ->
+            if (expAt > System.currentTimeMillis()) return token
+        }
+        val meta = discoverAsMetadata(provider)
+        if (meta != null) {
+            val client = joinAsClients[provider]
+                ?: dcrRegister(meta.registrationEndpoint ?: return fallbackJoinBearer(), "siros-wallet-android")
+                ?: return fallbackJoinBearer()
+            val minted = tokenViaClientCredentials(meta.tokenEndpoint, client) ?: return fallbackJoinBearer()
+            joinAsClients[provider] = client
+            joinAsTokens[provider] = minted
+            return minted.first
+        }
+        return fallbackJoinBearer()
+    }
+
+    /** The fall back: the wallet's own AS token (the no-AS backends' path). */
+    private suspend fun fallbackJoinBearer(): String = authTokens.ensureBackendToken().raw
 
     /**
      * Sends one message to a peer session (issue #77): the
