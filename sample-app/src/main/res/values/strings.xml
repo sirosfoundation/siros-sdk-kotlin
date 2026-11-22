@@ -173,6 +173,9 @@
     <string name="wmp_endpoint_send">Send:</string>
     <string name="wmp_endpoint_events">Events:</string>
     <string name="wmp_endpoint_session">Session:</string>
+    <string name="wmp_endpoint_messages">Group inbox</string>
+    <string name="wmp_endpoint_messages_empty">No group messages yet - messages the group sends land here.</string>
+    <string name="wmp_group_message_arrived">Group message: %1$s</string>
     <string name="flow_cancel">Cancel</string>
     <string name="flow_close">Close</string>
     <string name="flow_error_title">Flow Failed</string>

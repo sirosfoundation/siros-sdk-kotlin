@@ -51,6 +51,20 @@ class WmpPeer(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val _flowEvents = MutableSharedFlow<FlowEvent>(extraBufferCapacity = 64)
 
+    /**
+     * Every incoming `wmp.message.deliver` notification's params, live
+     * (issue #77): the SSE ping — the MESSAGE BODY does not ride the ping,
+     * it lands in the recipient session's mailbox (`wmp.message.poll`
+     * pulls it, [org.siros.sdk.wallet.SirosWallet.pollGroupMessages] does).
+     * Emitted from the dispatch loop (the single collector of the
+     * session's notification channel — a second collector there would
+     * steal pings).
+     */
+    private val _messageDeliveries = MutableSharedFlow<JsonObject>(extraBufferCapacity = 64)
+
+    /** The live deliver pings ([_messageDeliveries]'s public read). */
+    fun messageDeliveries(): Flow<JsonObject> = _messageDeliveries
+
     /** Observable stream of flow lifecycle events dispatched by profiles. */
     fun flowEvents(): Flow<FlowEvent> = _flowEvents
 
@@ -363,6 +377,10 @@ class WmpPeer(
 
         Timber.d("WmpPeer dispatch: ${msg.method} id=${msg.id}")
         when (msg.method) {
+            // Issue #77: the mailbox ping — the body rides the recipient's
+            // mailbox (the poll pulls it). No flow state, no handler: the
+            // raw params reach the message surface.
+            WmpMethods.MESSAGE_DELIVER -> params?.let { _messageDeliveries.emit(it) }
             WmpMethods.FLOW_PROGRESS -> {
                 val p = decodeParams<FlowProgressParams>(params)
                 val handler = registry.flowHandler(lookupFlowType(p.flowId))

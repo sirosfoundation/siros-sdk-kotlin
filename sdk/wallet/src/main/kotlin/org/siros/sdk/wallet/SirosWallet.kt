@@ -8128,6 +8128,112 @@ class SirosWallet private constructor(
         return out
     }
 
+    // ── Issue #77: the message read surface (the group inbox) ──────────
+
+    /** The poll cursors (backend:session → the last `wmp_message_id` seen). */
+    private val wmpMessageCursors = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** Every WMP peer this wallet holds right now: the main engine plus every invited backend. */
+    private fun allWmpPeers(): List<Pair<String, org.siros.sdk.transport.wmp.WmpPeer>> {
+        val out = mutableListOf<Pair<String, org.siros.sdk.transport.wmp.WmpPeer>>()
+        wmpPeer?.let { out.add(WmpEndpointInfo.ORIGIN_ENGINE to it) }
+        for ((provider, peer) in joinPeers) out.add(provider to peer)
+        return out
+    }
+
+    /**
+     * Pull the recent group messages (issue #77): one `wmp.message.poll`
+     * per connected session — the engine's mailbox fan-out (`to` naming a
+     * group expands to every member's box, handler.rs) lands them there;
+     * the poll is the read. Each backend poll is independent (one
+     * refusing does not fail the rest).
+     *
+     * The cursor: per backend:session, the last `wmp_message_id` a poll
+     * answered — the next poll takes `since` from it (the engine answers
+     * the entries AFTER that id).
+     */
+    suspend fun pollGroupMessages(limit: Int = 50): List<WmpGroupMessage> {
+        val out = mutableListOf<WmpGroupMessage>()
+        for ((backend, peer) in allWmpPeers()) {
+            val sessionId = peer.currentSessionId ?: continue
+            if (peer.state.value != org.siros.sdk.transport.wmp.WmpSessionState.ACTIVE) continue
+            try {
+                val response = peer.call(
+                    org.siros.sdk.transport.wmp.WmpMethods.MESSAGE_POLL,
+                    kotlinx.serialization.json.buildJsonObject {
+                        put("wmp", kotlinx.serialization.json.buildJsonObject {
+                            put("version", kotlinx.serialization.json.JsonPrimitive("0.1"))
+                            put("session_id", kotlinx.serialization.json.JsonPrimitive(sessionId))
+                        })
+                        put("since", kotlinx.serialization.json.JsonPrimitive(wmpMessageCursors["$backend:$sessionId"] ?: ""))
+                        put("limit", kotlinx.serialization.json.JsonPrimitive(limit))
+                    },
+                )
+                val result = response.result as? kotlinx.serialization.json.JsonObject ?: continue
+                val messages = result["messages"] as? kotlinx.serialization.json.JsonArray ?: continue
+                var last: String? = null
+                for (element in messages) {
+                    val envelope = element as? kotlinx.serialization.json.JsonObject ?: continue
+                    val params = envelope["params"] as? kotlinx.serialization.json.JsonObject ?: continue
+                    // The envelope the members receive carries the SENDER's
+                    // params (the `to` the sender named — the group — never
+                    // the engine's expansion): `from` is the sender's
+                    // `wmp.session_id`, the text `body.text`.
+                    val from = (
+                        (params["wmp"] as? kotlinx.serialization.json.JsonObject)
+                            ?.get("session_id") as? kotlinx.serialization.json.JsonPrimitive
+                        )?.content
+                    val text = (
+                        (params["body"] as? kotlinx.serialization.json.JsonObject)
+                            ?.get("text") as? kotlinx.serialization.json.JsonPrimitive
+                        )?.content ?: continue
+                    val id = (envelope["wmp_message_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    out.add(
+                        WmpGroupMessage(
+                            backend = backend,
+                            sessionId = sessionId,
+                            from = from,
+                            text = text,
+                            messageId = id,
+                        ),
+                    )
+                    if (id != null) last = id
+                }
+                if (last != null) wmpMessageCursors["$backend:$sessionId"] = last
+            } catch (e: Exception) {
+                // One backend's poll failing (a mid-recreate race, a network
+                // blip) must not fail the rest — the next poll retries.
+                android.util.Log.w("SirosWallet", "the group message poll on $backend failed: ${e.message}")
+            }
+        }
+        return out
+    }
+
+    /**
+     * The live group messages (issue #77): every connected session's
+     * `wmp.message.deliver` ping → its mailbox poll → the typed messages.
+     * The SSE ping carries no body — the poll ([pollGroupMessages]'s
+     * cursor path) is the read.
+     *
+     * The peers are snapshotted when the flow is collected — a backend
+     * joined AFTER the collection starts does not stream into it
+     * (re-collect to pick it up; [pollGroupMessages] always sees every
+     * current peer).
+     */
+    fun groupMessageEvents(): kotlinx.coroutines.flow.Flow<WmpGroupMessage> =
+        kotlinx.coroutines.flow.channelFlow {
+            for ((_, peer) in allWmpPeers()) {
+                launch {
+                    peer.messageDeliveries().collect {
+                        // The ping fired: pull whatever landed since the last
+                        // poll on THIS session (the cursor is per backend:session).
+                        val messages = pollGroupMessages()
+                        for (m in messages) send(m)
+                    }
+                }
+            }
+        }
+
     /**
      * The wallet's current WMP session id (issue #77): its OWN session — the
      * group a `join` invitation names (`createInvitation(purpose = "join",

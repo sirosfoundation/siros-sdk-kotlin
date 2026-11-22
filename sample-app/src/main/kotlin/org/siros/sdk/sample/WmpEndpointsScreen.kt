@@ -43,6 +43,7 @@ import org.siros.sdk.wallet.WmpEndpointInfo
 @Composable
 fun WmpEndpointsScreen(
     endpoints: List<WmpEndpointInfo>,
+    messages: List<org.siros.sdk.wallet.WmpGroupMessage>,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
 ) {
@@ -144,6 +145,37 @@ fun WmpEndpointsScreen(
                                 stringResource(R.string.wmp_endpoint_session) + " " + it,
                                 style = MaterialTheme.typography.bodySmall,
                             )
+                        }
+                        // Issue #77: the session's group inbox (the messages
+                        // this session's mailbox holds — the SDK's poll).
+                        if (ep.sessionId != null) {
+                            val sessionMessages = messages.filter {
+                                (it.sessionId == ep.sessionId) &&
+                                    (
+                                    (ep.origin == WmpEndpointInfo.ORIGIN_ENGINE && it.backend == WmpEndpointInfo.ORIGIN_ENGINE) ||
+                                        (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION && it.backend == ep.providerUrl)
+                                    )
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                stringResource(R.string.wmp_endpoint_messages),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            if (sessionMessages.isEmpty()) {
+                                Text(
+                                    stringResource(R.string.wmp_endpoint_messages_empty),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            } else {
+                                sessionMessages.take(4).forEach { m ->
+                                    Text(
+                                        text = m.text,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
                         }
                     }
                 }

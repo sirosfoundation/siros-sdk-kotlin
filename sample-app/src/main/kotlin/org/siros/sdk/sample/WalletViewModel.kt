@@ -3182,20 +3182,50 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _wmpEndpoints = MutableStateFlow<List<org.siros.sdk.wallet.WmpEndpointInfo>>(emptyList())
     val wmpEndpoints: StateFlow<List<org.siros.sdk.wallet.WmpEndpointInfo>> = _wmpEndpoints
 
-    /** Issue #77: open the endpoint list (refreshing the snapshot). */
+    /**
+     * Issue #77: the group inbox snapshot — the recent messages per
+     * session ([WmpGroupMessage]), newest first, alongside the live
+     * collector ([wmpEventsJob]) that appends arrivals.
+     */
+    private val _wmpMessages = MutableStateFlow<List<org.siros.sdk.wallet.WmpGroupMessage>>(emptyList())
+    val wmpMessages: StateFlow<List<org.siros.sdk.wallet.WmpGroupMessage>> = _wmpMessages
+    private var wmpEventsJob: kotlinx.coroutines.Job? = null
+
+    /** Issue #77: open the endpoint list (refreshing the snapshot + starting the live collector). */
     fun openWmpEndpoints() {
         _showWmpEndpoints.value = true
         refreshWmpEndpoints()
+        refreshWmpMessages()
+        if (wmpEventsJob == null) {
+            wmpEventsJob = viewModelScope.launch {
+                wallet.groupMessageEvents().collect { msg ->
+                    _wmpMessages.value = listOf(msg) + _wmpMessages.value.take(49)
+                    reportInfo(
+                        activity.getString(R.string.wmp_group_message_arrived, msg.text),
+                        context = "wmp:${msg.backend}",
+                    )
+                }
+            }
+        }
     }
 
-    /** Issue #77: close it. */
+    /** Issue #77: close it (the live collector goes with the screen). */
     fun closeWmpEndpoints() {
         _showWmpEndpoints.value = false
+        wmpEventsJob?.cancel()
+        wmpEventsJob = null
     }
 
     /** Issue #77: re-read the connected backends from the SDK. */
     fun refreshWmpEndpoints() {
         _wmpEndpoints.value = wallet.connectedWmpEndpoints()
+    }
+
+    /** Issue #77: re-pull the recent group messages (the poll). */
+    fun refreshWmpMessages() {
+        viewModelScope.launch {
+            _wmpMessages.value = runCatching { wallet.pollGroupMessages() }.getOrElse { emptyList() }
+        }
     }
 
     private val _walletInstances = MutableStateFlow<List<org.siros.sdk.auth.WalletInstance>>(emptyList())
