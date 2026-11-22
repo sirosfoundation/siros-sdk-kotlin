@@ -3191,6 +3191,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     val wmpMessages: StateFlow<List<org.siros.sdk.wallet.WmpGroupMessage>> = _wmpMessages
     private var wmpEventsJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * Merge new group messages into the inbox (issue #77): newest first,
+     * deduped by message key. Both arrival paths feed this — the reply's
+     * refresh AND the live ping's collector — and with the polls
+     * serialized in the SDK the same message can still race the two
+     * appends here; the key dedup makes the inbox idempotent regardless
+     * (found on-device: one "test" typed, two echoed).
+     */
+    private fun mergeWmpMessages(new: List<org.siros.sdk.wallet.WmpGroupMessage>) {
+        if (new.isEmpty()) return
+        _wmpMessages.value = (new.asReversed() + _wmpMessages.value)
+            .distinctBy { "${it.backend}:${it.sessionId}:${it.messageId ?: it.text}" }
+            .take(50)
+    }
+
     /** Issue #77: open the endpoint list (refreshing the snapshot + starting the live collector). */
     fun openWmpEndpoints() {
         _showWmpEndpoints.value = true
@@ -3199,7 +3214,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         if (wmpEventsJob == null) {
             wmpEventsJob = viewModelScope.launch {
                 wallet.groupMessageEvents().collect { msg ->
-                    _wmpMessages.value = listOf(msg) + _wmpMessages.value.take(49)
+                    mergeWmpMessages(listOf(msg))
                     reportInfo(
                         activity.getString(R.string.wmp_group_message_arrived, msg.text),
                         context = "wmp:${msg.backend}",
@@ -3221,10 +3236,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _wmpEndpoints.value = wallet.connectedWmpEndpoints()
     }
 
-    /** Issue #77: re-pull the recent group messages (the poll). */
+    /** Issue #77: re-pull the recent group messages (the poll, merged deduped). */
     fun refreshWmpMessages() {
         viewModelScope.launch {
-            _wmpMessages.value = runCatching { wallet.pollGroupMessages() }.getOrElse { emptyList() }
+            val polled = runCatching { wallet.pollGroupMessages() }.getOrElse { emptyList() }
+            mergeWmpMessages(polled)
         }
     }
 

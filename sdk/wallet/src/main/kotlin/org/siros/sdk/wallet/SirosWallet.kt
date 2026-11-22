@@ -8147,6 +8147,17 @@ class SirosWallet private constructor(
     /** The poll cursors (backend:session → the last `wmp_message_id` seen). */
     private val wmpMessageCursors = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+    /**
+     * The poll mutex: one `wmp.message.poll` round at a time. The reply path
+     * (`replyToGroup` → `refreshWmpMessages`) and the live ping path
+     * (`groupMessageEvents` → the collector) both poll — concurrent polls
+     * both read the SAME cursor, both answer the same new messages, and the
+     * app's inbox doubled every reply (found on-device: one "test" typed,
+     * two "test" echoed). Serialized, the second caller re-reads the cursor
+     * the first advanced and answers only what is newer.
+     */
+    private val wmpPollMutex = Mutex()
+
     /** Every WMP peer this wallet holds right now: the main engine plus every invited backend. */
     private fun allWmpPeers(): List<Pair<String, org.siros.sdk.transport.wmp.WmpPeer>> {
         val out = mutableListOf<Pair<String, org.siros.sdk.transport.wmp.WmpPeer>>()
@@ -8164,10 +8175,13 @@ class SirosWallet private constructor(
      *
      * The cursor: per backend:session, the last `wmp_message_id` a poll
      * answered — the next poll takes `since` from it (the engine answers
-     * the entries AFTER that id).
+     * the entries AFTER that id). Serialized by [wmpPollMutex] so the
+     * concurrent callers (the reply's refresh, the live ping's collector)
+     * never both answer the same messages.
      */
-    suspend fun pollGroupMessages(limit: Int = 50): List<WmpGroupMessage> {
-        val out = mutableListOf<WmpGroupMessage>()
+    suspend fun pollGroupMessages(limit: Int = 50): List<WmpGroupMessage> =
+        wmpPollMutex.withLock {
+            val out = mutableListOf<WmpGroupMessage>()
         for ((backend, peer) in allWmpPeers()) {
             val sessionId = peer.currentSessionId ?: continue
             if (peer.state.value != org.siros.sdk.transport.wmp.WmpSessionState.ACTIVE) continue
@@ -8220,7 +8234,7 @@ class SirosWallet private constructor(
                 android.util.Log.w("SirosWallet", "the group message poll on $backend failed: ${e.message}")
             }
         }
-        return out
+        out
     }
 
     /**
@@ -11021,13 +11035,24 @@ class SirosWallet private constructor(
         // CONCURRENTLY (independent chains — one chain, not two serialized;
         // found slow on-device: each chain is its own TLS round trip).
         kotlinx.coroutines.coroutineScope {
+            val joinT0 = android.os.SystemClock.elapsedRealtime()
             val endpoints = async { discoverWmpEndpoints(provider) }
-            val token = async { authTokens.ensureBackendToken().raw }
+            val token = async {
+                val t0 = android.os.SystemClock.elapsedRealtime()
+                val raw = authTokens.ensureBackendToken().raw
+                android.util.Log.i("SirosWallet", "issue77 join: token mint ${android.os.SystemClock.elapsedRealtime() - t0}ms")
+                raw
+            }
             val urls = endpoints.await()
                 ?: throw WalletException(
                     "The invitation's backend does not answer discovery " +
                         "($provider/.well-known/wmp-configuration) — cannot join its group",
                 )
+            android.util.Log.i(
+                "SirosWallet",
+                "issue77 join: discovery done at ${android.os.SystemClock.elapsedRealtime() - joinT0}ms " +
+                    "(send=${urls.first.take(48)}… sse=${urls.second.take(48)}…)",
+            )
             val transport = org.siros.sdk.transport.wmp.WmpHttpSseTransport(
                 sendUrl = urls.first,
                 sseUrl = urls.second,
@@ -11044,7 +11069,13 @@ class SirosWallet private constructor(
             // peer would make the NEXT scan consume the spent nonce and
             // refuse (-31002). Close and drop it; the next scan rebuilds.
             try {
+                val createT0 = android.os.SystemClock.elapsedRealtime()
                 peer.connectWithInvitation(authToken = token.await(), invitationNonce = nonce)
+                android.util.Log.i(
+                    "SirosWallet",
+                    "issue77 join: create+SSE ${android.os.SystemClock.elapsedRealtime() - createT0}ms " +
+                        "(total ${android.os.SystemClock.elapsedRealtime() - joinT0}ms)",
+                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 try {
                     peer.close()
