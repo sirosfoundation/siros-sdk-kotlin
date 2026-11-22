@@ -3813,7 +3813,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 val jUri = try { java.net.URI(uri) } catch (_: Exception) { null }
                 Log.i(TAG, "handleQrResult: ${jUri?.scheme}://${jUri?.host}")
-                ensureAuthenticatedForTesting()
+                // The invitation join builds its OWN peer (the invite's
+                // backend) — it needs NO connected engine. Waiting for Ready
+                // here (the debug gate) put the whole cold-start engine
+                // connect (resume + token + WS/SSE handshake) in front of
+                // the join (found on-device: several seconds before the join
+                // even started). The engine-needing paths keep the gate.
+                if (link !is DeepLinkType.Invitation) ensureAuthenticatedForTesting()
                 when (link) {
                     is DeepLinkType.CredentialOffer -> {
                         Log.i(TAG, "Routing to issuance")

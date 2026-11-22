@@ -599,6 +599,14 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
         viewModel.closeHistory()
     }
     val go: (WalletDestination) -> Unit = {
+        // Issue #77: EVERY navigation away cancels a running flow start
+        // (the invite join especially) — the back arrow alone used to be
+        // the only way out, and a system back during the join did nothing
+        // (the handler was gated on flowStarting == null). The cancel is
+        // complete: the consume coroutine aborts (the SDK closes and
+        // evicts the half-joined peer — a spent nonce never poisons the
+        // cache), the spinner clears.
+        if (flowStarting != null) viewModel.cancelFlowStarting()
         closeOverlays()
         destination = it
     }
@@ -731,16 +739,23 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     // System Back steps out of the stacked screens one at a time, then from
     // any destination to Home. The full-screen states above the chrome
     // (consent, credential detail, settings sub-screens) keep their own Back.
+    // Issue #77: a running flow start (the invite join especially) answers
+    // the system back too — it cancels COMPLETELY (the join coroutine aborts,
+    // the half-joined peer is closed and evicted) rather than dead-ending
+    // the press (the handler used to be disabled while flowStarting != null).
     val chromeVisible = pendingAmbiguity == null && pendingPresentation == null && pendingTransactionConsent == null &&
         pendingPresentationConsent == null && !showTransactionLog && selectedCredential == null &&
         !showDevices && !showWscaDeveloper && !showIso18045Editor && !showWmpEndpoints && flowStarting == null
     androidx.activity.compose.BackHandler(
-        enabled = chromeVisible && (
-            activateMode != null || showIDVPreparation || showAddCredential || showHistory || showErrorJournal ||
-                (destination != WalletDestination.Home && walletState is WalletState.Ready)
+        enabled = (flowStarting != null) || (
+            chromeVisible && (
+                activateMode != null || showIDVPreparation || showAddCredential || showHistory || showErrorJournal ||
+                    (destination != WalletDestination.Home && walletState is WalletState.Ready)
+                )
             ),
     ) {
         when {
+            flowStarting != null -> viewModel.cancelFlowStarting()
             showHistory -> viewModel.closeHistory()
             showErrorJournal -> viewModel.closeErrorJournal()
             activateMode != null -> viewModel.closeActivate()
