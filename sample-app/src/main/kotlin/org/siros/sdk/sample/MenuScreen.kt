@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lan
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PeopleAlt
 import androidx.compose.material.icons.outlined.Settings
@@ -42,7 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /** Where a [MenuScreen] row leads. */
-enum class MenuItem { ManageCredentials, InviteWallet, ShareInPerson, History, AddCredentials, RecentErrors, Settings, About, Verify, Logout }
+enum class MenuItem { ManageCredentials, InviteWallet, ShareInPerson, History, AddCredentials, RecentErrors, WmpEndpoints, Settings, About, Verify, Logout }
 
 fun menuItemTestTag(item: MenuItem) = "menu_${item.name}"
 
@@ -70,6 +71,9 @@ fun MenuScreen(current: MenuItem?, onSelect: (MenuItem) -> Unit, modifier: Modif
         MenuRow(MenuItem.ShareInPerson, Icons.Outlined.PeopleAlt, R.string.home_share_in_person, current, onSelect)
         MenuRow(MenuItem.History, Icons.Outlined.History, R.string.menu_history, current, onSelect)
         MenuRow(MenuItem.AddCredentials, Icons.Outlined.AddCircleOutline, R.string.add_credential_title, current, onSelect)
+        // Issue #77's endpoint surface: the WMP backends this wallet is
+        // connected to (the engine + one per scanned invite's backend).
+        MenuRow(MenuItem.WmpEndpoints, Icons.Outlined.Lan, R.string.menu_wmp_endpoints, current, onSelect)
         MenuRow(MenuItem.RecentErrors, Icons.Outlined.ErrorOutline, R.string.menu_recent_errors, current, onSelect)
         MenuRow(MenuItem.Settings, Icons.Outlined.Settings, R.string.nav_settings, current, onSelect)
         MenuRow(MenuItem.About, Icons.Outlined.Info, R.string.menu_about, current, onSelect)

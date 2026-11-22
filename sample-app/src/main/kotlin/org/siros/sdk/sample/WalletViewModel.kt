@@ -3169,6 +3169,35 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _showDevices = MutableStateFlow(false)
     val showDevices: StateFlow<Boolean> = _showDevices
 
+    /**
+     * Issue #77's endpoint surface: the WMP backends this wallet is
+     * connected to — the SDK ([SirosWallet.connectedWmpEndpoints]) owns the
+     * tracking, this is the screen's snapshot. Refreshed on open/refresh
+     * (a StateFlow of the live peers would need the SDK to expose change
+     * events — a snapshot answers the sample's question: "what am I
+     * connected to RIGHT NOW?").
+     */
+    private val _showWmpEndpoints = MutableStateFlow(false)
+    val showWmpEndpoints: StateFlow<Boolean> = _showWmpEndpoints
+    private val _wmpEndpoints = MutableStateFlow<List<org.siros.sdk.wallet.WmpEndpointInfo>>(emptyList())
+    val wmpEndpoints: StateFlow<List<org.siros.sdk.wallet.WmpEndpointInfo>> = _wmpEndpoints
+
+    /** Issue #77: open the endpoint list (refreshing the snapshot). */
+    fun openWmpEndpoints() {
+        _showWmpEndpoints.value = true
+        refreshWmpEndpoints()
+    }
+
+    /** Issue #77: close it. */
+    fun closeWmpEndpoints() {
+        _showWmpEndpoints.value = false
+    }
+
+    /** Issue #77: re-read the connected backends from the SDK. */
+    fun refreshWmpEndpoints() {
+        _wmpEndpoints.value = wallet.connectedWmpEndpoints()
+    }
+
     private val _walletInstances = MutableStateFlow<List<org.siros.sdk.auth.WalletInstance>>(emptyList())
     val walletInstances: StateFlow<List<org.siros.sdk.auth.WalletInstance>> = _walletInstances
 
@@ -3756,6 +3785,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     is DeepLinkType.Invitation -> {
                         Log.i(TAG, "Routing to invitation consume")
                         wallet.consumeInvitation(link.uri)
+                        // The join is NOT a flow: nothing transitions, so
+                        // without this the success was silent (the scan
+                        // closed, home screen, no signal). Name the outcome.
+                        reportInfo(
+                            activity.getString(R.string.invite_joined),
+                            context = "invitation",
+                        )
                         _flowStarting.value = null
                     }
                     else -> {

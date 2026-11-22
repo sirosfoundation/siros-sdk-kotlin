@@ -556,6 +556,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     val showWscaDeveloper by viewModel.showWscaDeveloper.collectAsState()
     val showIso18045Editor by viewModel.showIso18045Editor.collectAsState()
     val showDevices by viewModel.showDevices.collectAsState()
+    val showWmpEndpoints by viewModel.showWmpEndpoints.collectAsState()
     // Where the user is among the screens the Home / Scan QR / Menu bar and the
     // menu lead to. The view-model's own flags (history, add credential, the
     // scanner, ...) stack over whichever of these is current.
@@ -732,7 +733,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
     // (consent, credential detail, settings sub-screens) keep their own Back.
     val chromeVisible = pendingAmbiguity == null && pendingPresentation == null && pendingTransactionConsent == null &&
         pendingPresentationConsent == null && !showTransactionLog && selectedCredential == null &&
-        !showDevices && !showWscaDeveloper && !showIso18045Editor && flowStarting == null
+        !showDevices && !showWscaDeveloper && !showIso18045Editor && !showWmpEndpoints && flowStarting == null
     androidx.activity.compose.BackHandler(
         enabled = chromeVisible && (
             activateMode != null || showIDVPreparation || showAddCredential || showHistory || showErrorJournal ||
@@ -861,6 +862,11 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 errorMessage = viewModel.devicesError.collectAsState().value,
                 onBack = viewModel::closeDevices,
                 onRefresh = viewModel::refreshDevices,
+            )
+            showWmpEndpoints -> WmpEndpointsScreen(
+                endpoints = viewModel.wmpEndpoints.collectAsState().value,
+                onBack = viewModel::closeWmpEndpoints,
+                onRefresh = viewModel::refreshWmpEndpoints,
             )
 
             // Consolidated WSCD settings sub-screen (one tab per plugin -
@@ -1067,6 +1073,8 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                                         MenuItem.ShareInPerson -> go(WalletDestination.Share)
                                         MenuItem.History -> viewModel.openHistory()
                                         MenuItem.RecentErrors -> viewModel.openErrorJournal()
+                                        // Issue #77's endpoint surface: the connected WMP backends.
+                                        MenuItem.WmpEndpoints -> viewModel.openWmpEndpoints()
                                         MenuItem.AddCredentials -> viewModel.openAddCredential()
                                         MenuItem.Settings -> go(WalletDestination.Settings)
                                         MenuItem.About -> go(WalletDestination.About)
@@ -2794,6 +2802,11 @@ fun FlowStartingView(
         Text(
             text = when (flowType) {
                 "issuance" -> stringResource(R.string.flow_starting_issuance)
+                // Issue #77: the invitation join is its OWN lane — a session
+                // bootstrap, not a verification. The generic "verifier" copy
+                // was wrong and alarming (found on-device: the invite scan
+                // read "Contacting verifier…").
+                "invitation" -> stringResource(R.string.flow_starting_invitation)
                 else -> stringResource(R.string.flow_starting_presentation)
             },
             style = MaterialTheme.typography.titleMedium,
@@ -2801,7 +2814,10 @@ fun FlowStartingView(
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = stringResource(R.string.flow_starting_subtitle),
+            text = when (flowType) {
+                "invitation" -> stringResource(R.string.flow_starting_invitation_subtitle)
+                else -> stringResource(R.string.flow_starting_subtitle)
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = SirosDesign.secondaryText,
             textAlign = TextAlign.Center,

@@ -1265,6 +1265,7 @@ class SirosWallet private constructor(
         // reference without ever closing it. clearPerFlowAuthorizationState above already bumped consentEpoch before this.
         wmpPeer?.close()
         wmpPeer = null
+        wmpMainUrls = null
         // The invite-backend peers die with the session too: their tokens are
         // the wallet's, minted against a session that is ending here.
         joinPeers.values.forEach { peer ->
@@ -1274,6 +1275,7 @@ class SirosWallet private constructor(
             }
         }
         joinPeers.clear()
+        joinPeerUrls.clear()
         credentialNotifier = null
         apiClient = null
         authTokens.clear()
@@ -8070,6 +8072,14 @@ class SirosWallet private constructor(
     private var wmpPeer: org.siros.sdk.transport.wmp.WmpPeer? = null
 
     /**
+     * The main endpoint's URLs (issue #77's endpoint surface): captured at
+     * the connect site (the legacy WS URL, or the provider's send/sse URLs,
+     * or "local") so [connectedWmpEndpoints] can report them — the peer
+     * itself carries only the session state.
+     */
+    private var wmpMainUrls: Pair<String, String?>? = null
+
+    /**
      * The join peers (issue #77, an invite's OWN backend): one per backend a
      * scanned invitation named — the nonce exists THERE, not on the wallet's
      * configured engine. Keyed by the invitation's provider URL; closed on
@@ -8077,6 +8087,46 @@ class SirosWallet private constructor(
      */
     private val joinPeers =
         java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.transport.wmp.WmpPeer>()
+
+    /** The join peers' URLs, keyed the same as [joinPeers] ([connectedWmpEndpoints] reports them). */
+    private val joinPeerUrls =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+
+    /**
+     * The connected WMP backends (issue #77's endpoint surface): the wallet's
+     * configured engine plus every backend a scanned invitation named — the
+     * sample apps render the list, the SDK owns the tracking. A join backend
+     * whose connect is still running reports `state = connecting`.
+     */
+    fun connectedWmpEndpoints(): List<WmpEndpointInfo> {
+        val out = mutableListOf<WmpEndpointInfo>()
+        wmpPeer?.let { peer ->
+            out.add(
+                WmpEndpointInfo(
+                    origin = WmpEndpointInfo.ORIGIN_ENGINE,
+                    providerUrl = null,
+                    sendUrl = wmpMainUrls?.first ?: "unknown",
+                    sseUrl = wmpMainUrls?.second,
+                    state = peer.state.value.name.lowercase(),
+                    sessionId = peer.currentSessionId,
+                ),
+            )
+        }
+        for ((provider, peer) in joinPeers) {
+            val urls = joinPeerUrls[provider]
+            out.add(
+                WmpEndpointInfo(
+                    origin = WmpEndpointInfo.ORIGIN_INVITATION,
+                    providerUrl = provider,
+                    sendUrl = urls?.first ?: "unknown",
+                    sseUrl = urls?.second,
+                    state = peer.state.value.name.lowercase(),
+                    sessionId = peer.currentSessionId,
+                ),
+            )
+        }
+        return out
+    }
 
     /**
      * The wallet's current WMP session id (issue #77): its OWN session — the
@@ -8270,6 +8320,7 @@ class SirosWallet private constructor(
             val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
                 "/api/v2/wallet?tenant_id=${config.tenantId}"
             val peer = createWmpPeer(wsUrl)
+            wmpMainUrls = wsUrl to null
             connectWmpPeer(peer, appToken, peerEpoch, thisConnectionScope, legacy = true)
             Timber.i("Connected via WMP protocol (legacy Go engine)")
             return
@@ -8392,6 +8443,12 @@ class SirosWallet private constructor(
                         )
                     }
                     val peer = createWmpPeerFromTransport(transport)
+                    // The endpoint surface (issue #77): the provider's own
+                    // URLs, captured for connectedWmpEndpoints' report.
+                    wmpMainUrls = when (provider) {
+                        is WmpEngineProvider.RemoteHttpSse -> provider.sendUrl to provider.sseUrl
+                        is WmpEngineProvider.Local -> "local" to null
+                    }
                     connectWmpPeer(peer, appToken, peerEpoch, thisConnectionScope, legacy = false)
                     Timber.i("Connected via WMP protocol (engine provider ${provider.label}, attempt $attempt)")
                     return
@@ -10874,6 +10931,7 @@ class SirosWallet private constructor(
         )
         val peer = createWmpPeerFromTransport(transport)
         joinPeers[provider] = peer
+        joinPeerUrls[provider] = endpoints.first to endpoints.second
         return peer
     }
 
