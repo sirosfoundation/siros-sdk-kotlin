@@ -3228,6 +3228,28 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
+    /**
+     * Issue #77: reply to the group an invited backend's invitation named —
+     * the message rides that backend's join peer. (The engine backend has
+     * no joined group on the invitation path: this refuses there; the
+     * engine's own `sendMessage(to, text)` covers the configured case.)
+     */
+    fun replyToGroup(backend: String, text: String) {
+        viewModelScope.launch {
+            try {
+                wallet.replyToGroup(backend, text)
+                reportInfo(
+                    activity.getString(R.string.wmp_endpoint_reply_sent, text),
+                    context = "wmp:$backend",
+                )
+                refreshWmpMessages()
+            } catch (e: Exception) {
+                if (isSilentCancellation(e)) throw e
+                reportError(e.message ?: "The reply failed", cause = e, context = "wmp:$backend")
+            }
+        }
+    }
+
     private val _walletInstances = MutableStateFlow<List<org.siros.sdk.auth.WalletInstance>>(emptyList())
     val walletInstances: StateFlow<List<org.siros.sdk.auth.WalletInstance>> = _walletInstances
 

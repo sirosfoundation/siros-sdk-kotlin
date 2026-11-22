@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -25,12 +26,55 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.siros.sdk.wallet.WmpEndpointInfo
+
+/**
+ * Issue #77's endpoint surface: the WMP backends this wallet is connected
+ * to — its own configured engine plus one backend per scanned invitation
+ * that named one (the join lands THERE: the nonce exists only on the
+ * backend that minted it). The SDK tracks ([SirosWallet.connectedWmpEndpoints]),
+ * this screen renders.
+ */
+@Composable
+private fun ReplyField(
+    label: String,
+    onSend: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    androidx.compose.foundation.layout.Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            placeholder = { Text(label, style = MaterialTheme.typography.bodySmall) },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            textStyle = MaterialTheme.typography.bodySmall,
+        )
+        Spacer(Modifier.width(8.dp))
+        androidx.compose.material3.TextButton(
+            onClick = {
+                if (text.isNotBlank()) {
+                    onSend(text.trim())
+                    text = ""
+                }
+            },
+        ) {
+            Text(stringResource(R.string.wmp_endpoint_reply_send))
+        }
+    }
+}
 
 /**
  * Issue #77's endpoint surface: the WMP backends this wallet is connected
@@ -46,6 +90,7 @@ fun WmpEndpointsScreen(
     messages: List<org.siros.sdk.wallet.WmpGroupMessage>,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
+    onReply: (backend: String, text: String) -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -176,6 +221,21 @@ fun WmpEndpointsScreen(
                                     )
                                 }
                             }
+                            // The reply (issue #77): the wallet answers the
+                            // group on the SAME backend the inbox reads.
+                            ReplyField(
+                                label = stringResource(R.string.wmp_endpoint_reply),
+                                onSend = { text ->
+                                    onReply(
+                                        if (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION) {
+                                            ep.providerUrl ?: WmpEndpointInfo.ORIGIN_ENGINE
+                                        } else {
+                                            WmpEndpointInfo.ORIGIN_ENGINE
+                                        },
+                                        text,
+                                    )
+                                },
+                            )
                         }
                     }
                 }

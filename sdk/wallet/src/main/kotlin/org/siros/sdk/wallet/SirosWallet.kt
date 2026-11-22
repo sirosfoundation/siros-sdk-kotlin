@@ -1276,6 +1276,7 @@ class SirosWallet private constructor(
         }
         joinPeers.clear()
         joinPeerUrls.clear()
+        joinGroups.clear()
         credentialNotifier = null
         apiClient = null
         authTokens.clear()
@@ -8093,6 +8094,17 @@ class SirosWallet private constructor(
         java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
 
     /**
+     * The joined GROUPS (issue #77): each invited backend's provider URL →
+     * the GROUP session id its invitation named (the inviter's session —
+     * [WmpGroupMessage.from]'s counterpart: the wallet's messages to the
+     * group name it as `to`). Captured at the consume ([consumeInvitation]
+     * reads it off the invitation's `session_id`) and cleared with the
+     * peers on teardown.
+     */
+    private val joinGroups =
+        java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
      * The connected WMP backends (issue #77's endpoint surface): the wallet's
      * configured engine plus every backend a scanned invitation named — the
      * sample apps render the list, the SDK owns the tracking. A join backend
@@ -11004,6 +11016,35 @@ class SirosWallet private constructor(
     }
 
     /**
+     * The GROUP a backend's invitation names (issue #77, the reply path):
+     * the inviter's session id (`session_id` on the invitation's payload —
+     * a `join` invite always carries one; `session` invites name none, the
+     * joining session IS the group, and this answers `null`).
+     */
+    private fun invitationGroup(
+        invitation: kotlinx.serialization.json.JsonObject,
+    ): String? =
+        (invitation["session_id"] as? kotlinx.serialization.json.JsonPrimitive)
+            ?.content?.takeIf { it.isNotBlank() }
+
+    /**
+     * Reply to the GROUP an invited backend's invitation named (issue #77):
+     * the message rides that backend's join peer, `to` the inviter's
+     * session. The [backend] names the invited backend's provider URL.
+     */
+    suspend fun replyToGroup(backend: String, text: String) {
+        val group = joinGroups[backend]
+            ?: throw WalletException("No joined group on the invited backend $backend to reply to")
+        sendMessage(backend = backend, to = group, text = text)
+    }
+
+    /**
+     * The group ids this wallet joined on invited backends (issue #77): the
+     * provider URL → the inviter's session id. The apps' reply UIs read it.
+     */
+    fun joinedGroups(): Map<String, String> = LinkedHashMap(joinGroups)
+
+    /**
      * The join peer for an invitation's OWN backend (issue #77): the
      * invitation names the backend that minted it — `provider` (the
      * deployment's public URL) or, failing that, the `relay` URL's own base.
@@ -11026,6 +11067,9 @@ class SirosWallet private constructor(
                 "The invitation's backend does not answer discovery " +
                     "($provider/.well-known/wmp-configuration) — cannot join its group",
             )
+        // The GROUP the invitation names (the reply path's `to`): captured
+        // here — the joinPeerFor callers route their sends by it.
+        invitationGroup(invitation)?.let { joinGroups[provider] = it }
         val transport = org.siros.sdk.transport.wmp.WmpHttpSseTransport(
             sendUrl = endpoints.first,
             sseUrl = endpoints.second,
@@ -11091,7 +11135,22 @@ class SirosWallet private constructor(
      *   `content_type: text/plain`).
      */
     suspend fun sendMessage(to: String, text: String) {
-        val peer = wmpPeer ?: throw WalletException("The wallet is not connected to an engine")
+        sendMessage(backend = null, to = to, text = text)
+    }
+
+    /**
+     * Send one message (issue #77), naming the backend: `null` (or the
+     * engine's own origin) routes via the main engine — the historic path;
+     * an invited backend's provider URL routes via ITS join peer (the
+     * group's own backend, where [to] names the inviter's session).
+     */
+    suspend fun sendMessage(backend: String?, to: String, text: String) {
+        val peer = when (backend) {
+            null, WmpEndpointInfo.ORIGIN_ENGINE -> wmpPeer
+                ?: throw WalletException("The wallet is not connected to an engine")
+            else -> joinPeers[backend]
+                ?: throw WalletException("The wallet is not connected to the invited backend $backend")
+        }
         peer.send(
             org.siros.sdk.transport.wmp.WmpMethods.MESSAGE_DELIVER,
             kotlinx.serialization.json.buildJsonObject {
