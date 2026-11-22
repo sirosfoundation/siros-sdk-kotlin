@@ -1265,6 +1265,15 @@ class SirosWallet private constructor(
         // reference without ever closing it. clearPerFlowAuthorizationState above already bumped consentEpoch before this.
         wmpPeer?.close()
         wmpPeer = null
+        // The invite-backend peers die with the session too: their tokens are
+        // the wallet's, minted against a session that is ending here.
+        joinPeers.values.forEach { peer ->
+            try {
+                peer.close()
+            } catch (_: Exception) {
+            }
+        }
+        joinPeers.clear()
         credentialNotifier = null
         apiClient = null
         authTokens.clear()
@@ -8061,6 +8070,15 @@ class SirosWallet private constructor(
     private var wmpPeer: org.siros.sdk.transport.wmp.WmpPeer? = null
 
     /**
+     * The join peers (issue #77, an invite's OWN backend): one per backend a
+     * scanned invitation named — the nonce exists THERE, not on the wallet's
+     * configured engine. Keyed by the invitation's provider URL; closed on
+     * logout with the main peer.
+     */
+    private val joinPeers =
+        java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.transport.wmp.WmpPeer>()
+
+    /**
      * The wallet's current WMP session id (issue #77): its OWN session — the
      * group a `join` invitation names (`createInvitation(purpose = "join",
      * sessionId = ...)`). Null when no session is live.
@@ -10796,8 +10814,105 @@ class SirosWallet private constructor(
             ?: throw WalletException("The invitation data does not parse")
         val nonce = (invitation["nonce"] as? kotlinx.serialization.json.JsonPrimitive)?.content
             ?: throw WalletException("The invitation carries no nonce")
+        // Issue #77, the invite's OWN backend: the nonce exists only on the
+        // backend that minted it (the invitation's `provider`, the `relay`
+        // URL its fallback). The wallet's own configured engine knows nothing
+        // of a foreign invite — consuming against it refused `-31002` no
+        // matter how fresh the login (found live from the phone: a
+        // hard-closed, re-logged-in wallet still refused the scan). Join the
+        // backend the INVITE names, presenting the wallet's own token (an
+        // arbitrary backend's no-AS mode accepts any bearer; a strict one
+        // wants a token from its own AS — that's the registry's problem to
+        // solve, never the nonce's).
+        val joinPeer = joinPeerFor(invitation)
+        if (joinPeer != null) {
+            if (joinPeer.state.value == org.siros.sdk.transport.wmp.WmpSessionState.CLOSED) {
+                joinPeer.connectWithInvitation(
+                    authToken = authTokens.ensureBackendToken().raw,
+                    invitationNonce = nonce,
+                )
+            } else {
+                joinPeer.recreateSession(invitationNonce = nonce)
+            }
+            return
+        }
         val peer = wmpPeer ?: throw WalletException("The wallet is not connected to an engine")
         peer.recreateSession(invitationNonce = nonce)
+    }
+
+    /**
+     * The join peer for an invitation's OWN backend (issue #77): the
+     * invitation names the backend that minted it — `provider` (the
+     * deployment's public URL) or, failing that, the `relay` URL's own base.
+     * One peer per backend, cached across scans; closed on logout with the
+     * main peer. `null` when the invitation names no backend (the legacy
+     * shape: the caller falls back to the wallet's configured engine).
+     */
+    private suspend fun joinPeerFor(
+        invitation: kotlinx.serialization.json.JsonObject,
+    ): org.siros.sdk.transport.wmp.WmpPeer? {
+        val provider =
+            (
+                (invitation["provider"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    ?: (invitation["relay"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                )?.trimEnd('/')?.takeIf { it.isNotBlank() }
+            ?: return null
+        joinPeers[provider]?.let { return it }
+        val endpoints = discoverWmpEndpoints(provider)
+            ?: throw WalletException(
+                "The invitation's backend does not answer discovery " +
+                    "($provider/.well-known/wmp-configuration) — cannot join its group",
+            )
+        val transport = org.siros.sdk.transport.wmp.WmpHttpSseTransport(
+            sendUrl = endpoints.first,
+            sseUrl = endpoints.second,
+            tokenProvider = {
+                // Fresh per request (the binding is stateless and the AS's
+                // tokens live minutes): a token from the wallet's OWN AS.
+                authTokens.ensureBackendToken().raw
+            },
+        )
+        val peer = createWmpPeerFromTransport(transport)
+        joinPeers[provider] = peer
+        return peer
+    }
+
+    /**
+     * The WMP endpoints a backend's well-known names
+     * (`/.well-known/wmp-configuration`, path-preserving: a reverse-proxied
+     * deployment serves it under its own path prefix). `null` when the
+     * backend does not answer or carries no `endpoints.wmp`/`endpoints.events`.
+     */
+    private suspend fun discoverWmpEndpoints(backendBase: String): Pair<String, String>? {
+        val url = backendBase.trimEnd('/') + "/.well-known/wmp-configuration"
+        return try {
+            val client = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            val request = okhttp3.Request.Builder().url(url).build()
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                client.newCall(request).execute()
+            }.use { resp ->
+                if (!resp.isSuccessful) return@use null
+                val parsed = kotlinx.serialization.json.Json
+                    .parseToJsonElement(resp.body?.string() ?: return@use null)
+                    as? kotlinx.serialization.json.JsonObject
+                    ?: return@use null
+                val endpoints =
+                    parsed["endpoints"] as? kotlinx.serialization.json.JsonObject
+                        ?: return@use null
+                val send = (
+                    endpoints["wmp"] as? kotlinx.serialization.json.JsonPrimitive
+                        )?.content
+                val events = (
+                    endpoints["events"] as? kotlinx.serialization.json.JsonPrimitive
+                        )?.content
+                if (send.isNullOrBlank() || events.isNullOrBlank()) null else send to events
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

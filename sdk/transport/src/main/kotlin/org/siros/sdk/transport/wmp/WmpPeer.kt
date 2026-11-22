@@ -94,6 +94,24 @@ class WmpPeer(
         startDispatch()
     }
 
+    /**
+     * Connect consuming an invitation's single-use nonce (issue #77, the
+     * invite's OWN backend): the engine's session bootstrap validates the
+     * nonce (expiry, signature — every failure `-31002`) and answers the
+     * session the invitation names — the wallet lands IN the inviter's
+     * group. For a backend the wallet was never connected to: this FIRST
+     * create consumes the nonce (a plain [connect] would burn a nonce-less
+     * session first, and [recreateSession] a second one after).
+     */
+    suspend fun connectWithInvitation(
+        authToken: String,
+        invitationNonce: String,
+        capabilitiesOffered: JsonObject? = null,
+    ) {
+        session.create(authToken, null, capabilitiesOffered, invitationNonce)
+        startDispatch()
+    }
+
     /** Close the session and stop dispatching. */
     suspend fun close(reason: String = "complete") {
         try {
