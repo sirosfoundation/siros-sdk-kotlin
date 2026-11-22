@@ -243,6 +243,16 @@ class SirosWallet private constructor(
     private val activity: Activity,
     private val config: WalletConfig,
 ) {
+    /**
+     * The wallet's group message store (issue #77): the inbox, the outbox,
+     * the poll cursors — CLIENT-SIDE ONLY (never the backend: the relay is
+     * the Delivery Service, wmp-mls.md §5; its own queueing may back onto
+     * Valkey or similar, that's the gateway's business). The app supplies
+     * its persistence through the config (`wmpMessageStore`); the default
+     * (null) runs the in-memory store.
+     */
+    private val wmpMessageStore: WmpMessageStore =
+        config.wmpMessageStore ?: InMemoryWmpMessageStore()
     // The DC API request rules, copied out of [config] once. Nullable only so a
     // wallet built without running initializers (tests) falls back to the defaults.
     private val dcApiExpectedOriginsMode: ExpectedOriginsMode? = config.dcApiExpectedOrigins
@@ -1280,6 +1290,9 @@ class SirosWallet private constructor(
         joinPeers.clear()
         joinPeerUrls.clear()
         joinGroups.clear()
+        // The store dies with the session (the logout/relogin path): the
+        // cursors too, so the next login re-reads from the top.
+        wmpMessageStore.clear()
         credentialNotifier = null
         apiClient = null
         authTokens.clear()
@@ -8145,9 +8158,6 @@ class SirosWallet private constructor(
 
     // ── Issue #77: the message read surface (the group inbox) ──────────
 
-    /** The poll cursors (backend:session → the last `wmp_message_id` seen). */
-    private val wmpMessageCursors = java.util.concurrent.ConcurrentHashMap<String, String>()
-
     /**
      * The poll mutex: one `wmp.message.poll` round at a time. The reply path
      * (`replyToGroup` → `refreshWmpMessages`) and the live ping path
@@ -8194,7 +8204,7 @@ class SirosWallet private constructor(
                             put("version", kotlinx.serialization.json.JsonPrimitive("0.1"))
                             put("session_id", kotlinx.serialization.json.JsonPrimitive(sessionId))
                         })
-                        put("since", kotlinx.serialization.json.JsonPrimitive(wmpMessageCursors["$backend:$sessionId"] ?: ""))
+                        put("since", kotlinx.serialization.json.JsonPrimitive(wmpMessageStore.cursor(backend, sessionId) ?: ""))
                         put("limit", kotlinx.serialization.json.JsonPrimitive(limit))
                     },
                 )
@@ -8217,18 +8227,20 @@ class SirosWallet private constructor(
                             ?.get("text") as? kotlinx.serialization.json.JsonPrimitive
                         )?.content ?: continue
                     val id = (envelope["wmp_message_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    out.add(
-                        WmpGroupMessage(
-                            backend = backend,
-                            sessionId = sessionId,
-                            from = from,
-                            text = text,
-                            messageId = id,
-                        ),
+                    val message = WmpGroupMessage(
+                        backend = backend,
+                        sessionId = sessionId,
+                        from = from,
+                        text = text,
+                        messageId = id,
                     )
+                    // Every answered message appends (idempotent by the id
+                    // when present) — the store IS the inbox.
+                    wmpMessageStore.append(message)
+                    out.add(message)
                     if (id != null) last = id
                 }
-                if (last != null) wmpMessageCursors["$backend:$sessionId"] = last
+                if (last != null) wmpMessageStore.setCursor(backend, sessionId, last)
             } catch (e: Exception) {
                 // One backend's poll failing (a mid-recreate race, a network
                 // blip) must not fail the rest — the next poll retries.
@@ -8237,6 +8249,18 @@ class SirosWallet private constructor(
         }
         out
     }
+
+    /**
+     * The wallet's group inbox (issue #77): the messages every session
+     * holds, from the STORE (the app-supplied [WmpMessageStore] — its
+     * persistence, its retention). The apps render this snapshot;
+     * [pollGroupMessages] keeps it fresh.
+     */
+    fun wmpGroupInbox(limit: Int = 50): List<WmpGroupMessage> =
+        allWmpPeers().flatMap { (backend, peer) ->
+            val sessionId = peer.currentSessionId ?: return@flatMap emptyList<WmpGroupMessage>()
+            wmpMessageStore.load(backend, sessionId, limit)
+        }
 
     /**
      * The live group messages (issue #77): every connected session's

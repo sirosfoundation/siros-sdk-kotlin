@@ -604,6 +604,18 @@ data class WalletConfig(
      * hang.
      */
     val engineConnectRetries: Int = 2,
+    /**
+     * Issue #77: the wallet's group message store (the inbox + the outbox
+     * + the poll cursors) — CLIENT-SIDE ONLY (never the backend: the relay
+     * is the Delivery Service). The app constructs its own persistence
+     * (its files, its database) against [WmpMessageStore]; `null` (the
+     * default) runs the in-memory store, gone with the process.
+     *
+     * LAST in the constructor on purpose: the source-compat pins
+     * (WalletConfigCompatibilityTest) keep the pre-field constructors'
+     * prefixes stable — a new field goes after every existing one.
+     */
+    val wmpMessageStore: WmpMessageStore? = null,
 ) {
     init {
         org.siros.sdk.keystore.CircuitZkProfile.validateAdditional(circuitZkProfiles, circuitZkPredicateFunctions)

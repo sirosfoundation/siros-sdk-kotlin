@@ -3191,21 +3191,6 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     val wmpMessages: StateFlow<List<org.siros.sdk.wallet.WmpGroupMessage>> = _wmpMessages
     private var wmpEventsJob: kotlinx.coroutines.Job? = null
 
-    /**
-     * Merge new group messages into the inbox (issue #77): newest first,
-     * deduped by message key. Both arrival paths feed this — the reply's
-     * refresh AND the live ping's collector — and with the polls
-     * serialized in the SDK the same message can still race the two
-     * appends here; the key dedup makes the inbox idempotent regardless
-     * (found on-device: one "test" typed, two echoed).
-     */
-    private fun mergeWmpMessages(new: List<org.siros.sdk.wallet.WmpGroupMessage>) {
-        if (new.isEmpty()) return
-        _wmpMessages.value = (new.asReversed() + _wmpMessages.value)
-            .distinctBy { "${it.backend}:${it.sessionId}:${it.messageId ?: it.text}" }
-            .take(50)
-    }
-
     /** Issue #77: open the endpoint list (refreshing the snapshot + starting the live collector). */
     fun openWmpEndpoints() {
         _showWmpEndpoints.value = true
@@ -3214,7 +3199,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         if (wmpEventsJob == null) {
             wmpEventsJob = viewModelScope.launch {
                 wallet.groupMessageEvents().collect { msg ->
-                    mergeWmpMessages(listOf(msg))
+                    _wmpMessages.value = wallet.wmpGroupInbox()
                     reportInfo(
                         activity.getString(R.string.wmp_group_message_arrived, msg.text),
                         context = "wmp:${msg.backend}",
@@ -3236,11 +3221,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _wmpEndpoints.value = wallet.connectedWmpEndpoints()
     }
 
-    /** Issue #77: re-pull the recent group messages (the poll, merged deduped). */
+    /**
+     * Issue #77: re-pull the recent group messages (the poll), then read
+     * the inbox snapshot from the SDK's store (the poll appends into it;
+     * the store IS the inbox — the dedup lives there now, keyed by the
+     * message id).
+     */
     fun refreshWmpMessages() {
         viewModelScope.launch {
-            val polled = runCatching { wallet.pollGroupMessages() }.getOrElse { emptyList() }
-            mergeWmpMessages(polled)
+            runCatching { wallet.pollGroupMessages() }
+            _wmpMessages.value = wallet.wmpGroupInbox()
         }
     }
 
@@ -4049,6 +4039,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val base = WalletConfig(
             backendUrl = _backendUrl.value,
             tenantId = _tenantId.value,
+            // Issue #77: the group inbox/outbox persistence — the app's own
+            // store (one JSON file under the wallet's private storage; a
+            // real app would use its database). The SDK owns the seam, this
+            // is the sample's implementation.
+            wmpMessageStore = JsonFileWmpMessageStore(activity.filesDir),
             zkCircuitUrls = _zkCircuitUrls.value,
             // The DEMO-ONLY editor's materialized scheme (see _iso18045State):
             // a production deployment fixes this at integration time and
