@@ -450,4 +450,21 @@
     <string name="invite_wallet_share">Dela länk</string>
     <string name="invite_wallet_expires">Upphör %1</string>
     <string name="invite_wallet_group">Skapa en gruppinbjudan (gå med i min session)</string>
+    <string name="flow_starting_invitation">Går med i den inbjudna gruppen…</string>
+    <string name="flow_starting_invitation_subtitle">Ansluter till backenden som inbjudan namnger - detta är ett gruppgång, inte en verifikation.</string>
+    <string name="invite_joined">Gick med i gruppen - inbjudarens meddelanden anländer till denna session.</string>
+    <string name="menu_wmp_endpoints">WMP-endpoints</string>
+    <string name="wmp_endpoints_refresh">Uppdatera</string>
+    <string name="wmp_endpoints_empty">Inga WMP-endpoints anslutna ännu - logga in, eller skanna en inbjudan för att gå med.</string>
+    <string name="wmp_endpoint_origin_engine">Din engine</string>
+    <string name="wmp_endpoint_origin_invitation">Inbjuden backend</string>
+    <string name="wmp_endpoint_send">Sänd:</string>
+    <string name="wmp_endpoint_events">Händelser:</string>
+    <string name="wmp_endpoint_session">Session:</string>
+    <string name="wmp_endpoint_messages">Gruppinkorg</string>
+    <string name="wmp_endpoint_messages_empty">Inga gruppmeddelanden ännu - meddelanden gruppen skickar landar här.</string>
+    <string name="wmp_group_message_arrived">Gruppmeddelande: %1$s</string>
+    <string name="wmp_endpoint_reply">Svara gruppen…</string>
+    <string name="wmp_endpoint_reply_send">Skicka</string>
+    <string name="wmp_endpoint_reply_sent">Svar skickat: %1$s</string>
 </resources>

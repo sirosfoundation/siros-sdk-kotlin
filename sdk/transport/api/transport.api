@@ -2170,6 +2170,86 @@ public final class org/siros/sdk/transport/wmp/JsonRpcResponse$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class org/siros/sdk/transport/wmp/MlsAddStaged {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/MlsAddStaged;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/MlsAddStaged;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/MlsAddStaged;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCommit ()Ljava/lang/String;
+	public final fun getWelcome ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/MlsDecrypted {
+	public fun <init> ([BJ)V
+	public final fun component1 ()[B
+	public final fun component2 ()J
+	public final fun copy ([BJ)Lorg/siros/sdk/transport/wmp/MlsDecrypted;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/MlsDecrypted;[BJILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/MlsDecrypted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getPlaintext ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/MlsEncrypted {
+	public fun <init> (Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy (Ljava/lang/String;J)Lorg/siros/sdk/transport/wmp/MlsEncrypted;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/MlsEncrypted;Ljava/lang/String;JILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/MlsEncrypted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCiphertext ()Ljava/lang/String;
+	public final fun getEpoch ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/MlsGroupCreated {
+	public fun <init> (Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy (Ljava/lang/String;J)Lorg/siros/sdk/transport/wmp/MlsGroupCreated;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/MlsGroupCreated;Ljava/lang/String;JILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/MlsGroupCreated;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getGroupId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/MlsJoined {
+	public fun <init> (Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy (Ljava/lang/String;J)Lorg/siros/sdk/transport/wmp/MlsJoined;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/MlsJoined;Ljava/lang/String;JILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/MlsJoined;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getGroupId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/MlsKeyPackage {
+	public fun <init> (Ljava/lang/String;JLjava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;JLjava/lang/String;)Lorg/siros/sdk/transport/wmp/MlsKeyPackage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/MlsKeyPackage;Ljava/lang/String;JLjava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/MlsKeyPackage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCipherSuite ()J
+	public final fun getId ()Ljava/lang/String;
+	public final fun getKeyPackage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class org/siros/sdk/transport/wmp/ResolveParams {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/ResolveParams$Companion;
 	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
@@ -2643,6 +2723,20 @@ public final class org/siros/sdk/transport/wmp/WmpMethods {
 	public static final field SESSION_RESUME Ljava/lang/String;
 }
 
+public final class org/siros/sdk/transport/wmp/WmpMlsCrypto {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun addMember (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/MlsAddStaged;
+	public final fun createGroup (J)Lorg/siros/sdk/transport/wmp/MlsGroupCreated;
+	public final fun decrypt (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/MlsDecrypted;
+	public final fun encrypt (Ljava/lang/String;[B)Lorg/siros/sdk/transport/wmp/MlsEncrypted;
+	public final fun generateKeyPackage (J)Lorg/siros/sdk/transport/wmp/MlsKeyPackage;
+	public final fun getIdentity ()Ljava/lang/String;
+	public final fun processCommit (Ljava/lang/String;Ljava/lang/String;)J
+	public final fun processWelcome (Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/MlsJoined;
+	public final fun removeMember (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+	public final fun selfUpdate (Ljava/lang/String;)Ljava/lang/String;
+}
+
 public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport/wmp/WmpPeerContext {
 	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpSession;)V
 	public fun call (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -2652,11 +2746,14 @@ public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport
 	public static synthetic fun close$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun connect (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun connect$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun connectWithInvitation (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun connectWithInvitation$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun flowEvents ()Lkotlinx/coroutines/flow/Flow;
 	public fun forgetFlow (Ljava/lang/String;)V
 	public fun getCodec ()Lorg/siros/sdk/transport/wmp/WmpCodec;
 	public final fun getCurrentSessionId ()Ljava/lang/String;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun messageDeliveries ()Lkotlinx/coroutines/flow/Flow;
 	public fun notify (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun notifyIf (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun recreateSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -4452,6 +4549,24 @@ public abstract class uniffi/engine_adapter_sdk/FfiConverterCallbackInterface : 
 	public fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
 }
 
+public final class uniffi/engine_adapter_sdk/FfiConverterLong : uniffi/engine_adapter_sdk/FfiConverter {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterLong;
+	public fun allocationSize-I7RO_PI (J)J
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun lift (J)Ljava/lang/Long;
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Long;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lower (J)Ljava/lang/Long;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public fun lowerIntoRustBuffer (J)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Long;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun write (JLjava/nio/ByteBuffer;)V
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+}
+
 public final class uniffi/engine_adapter_sdk/FfiConverterOptionalByteArray : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
 	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterOptionalByteArray;
 	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
@@ -5291,6 +5406,146 @@ public final class uniffi/engine_adapter_sdk/FfiConverterTypeMatchResult : uniff
 	public fun write (Luniffi/engine_adapter_sdk/MatchResult;Ljava/nio/ByteBuffer;)V
 }
 
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeMlsAddStaged : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeMlsAddStaged;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/MlsAddStaged;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsAddStaged;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsAddStaged;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/MlsAddStaged;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/MlsAddStaged;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/MlsAddStaged;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/MlsAddStaged;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeMlsDecrypted : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeMlsDecrypted;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/MlsDecrypted;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsDecrypted;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsDecrypted;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/MlsDecrypted;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/MlsDecrypted;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/MlsDecrypted;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/MlsDecrypted;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeMlsEncrypted : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeMlsEncrypted;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/MlsEncrypted;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsEncrypted;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsEncrypted;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/MlsEncrypted;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/MlsEncrypted;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/MlsEncrypted;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/MlsEncrypted;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeMlsException : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeMlsException;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/MlsException;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsException;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsException;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/MlsException;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/MlsException;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/MlsException;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/MlsException;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeMlsGroupCreated : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeMlsGroupCreated;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/MlsGroupCreated;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsGroupCreated;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsGroupCreated;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/MlsGroupCreated;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/MlsGroupCreated;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/MlsGroupCreated;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/MlsGroupCreated;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeMlsJoined : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeMlsJoined;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/MlsJoined;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsJoined;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsJoined;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/MlsJoined;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/MlsJoined;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/MlsJoined;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/MlsJoined;Ljava/nio/ByteBuffer;)V
+}
+
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeMlsKeyPackage : uniffi/engine_adapter_sdk/FfiConverterRustBuffer {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeMlsKeyPackage;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/MlsKeyPackage;)J
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsKeyPackage;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsKeyPackage;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun lower (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lower (Luniffi/engine_adapter_sdk/MlsKeyPackage;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/MlsKeyPackage;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/MlsKeyPackage;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/MlsKeyPackage;Ljava/nio/ByteBuffer;)V
+}
+
 public final class uniffi/engine_adapter_sdk/FfiConverterTypePdp : uniffi/engine_adapter_sdk/FfiConverterCallbackInterface {
 	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypePdp;
 }
@@ -5653,6 +5908,24 @@ public final class uniffi/engine_adapter_sdk/FfiConverterTypeWmpEngine : uniffi/
 	public fun write (Luniffi/engine_adapter_sdk/WmpEngine;Ljava/nio/ByteBuffer;)V
 }
 
+public final class uniffi/engine_adapter_sdk/FfiConverterTypeWmpMls : uniffi/engine_adapter_sdk/FfiConverter {
+	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterTypeWmpMls;
+	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
+	public fun allocationSize-I7RO_PI (Luniffi/engine_adapter_sdk/WmpMls;)J
+	public fun lift (Lcom/sun/jna/Pointer;)Luniffi/engine_adapter_sdk/WmpMls;
+	public synthetic fun lift (Ljava/lang/Object;)Ljava/lang/Object;
+	public synthetic fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun liftFromRustBuffer (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/WmpMls;
+	public synthetic fun lower (Ljava/lang/Object;)Ljava/lang/Object;
+	public fun lower (Luniffi/engine_adapter_sdk/WmpMls;)Lcom/sun/jna/Pointer;
+	public synthetic fun lowerIntoRustBuffer (Ljava/lang/Object;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public fun lowerIntoRustBuffer (Luniffi/engine_adapter_sdk/WmpMls;)Luniffi/engine_adapter_sdk/RustBuffer$ByValue;
+	public synthetic fun read (Ljava/nio/ByteBuffer;)Ljava/lang/Object;
+	public fun read (Ljava/nio/ByteBuffer;)Luniffi/engine_adapter_sdk/WmpMls;
+	public synthetic fun write (Ljava/lang/Object;Ljava/nio/ByteBuffer;)V
+	public fun write (Luniffi/engine_adapter_sdk/WmpMls;Ljava/nio/ByteBuffer;)V
+}
+
 public final class uniffi/engine_adapter_sdk/FfiConverterUInt : uniffi/engine_adapter_sdk/FfiConverter {
 	public static final field INSTANCE Luniffi/engine_adapter_sdk/FfiConverterUInt;
 	public synthetic fun allocationSize-I7RO_PI (Ljava/lang/Object;)J
@@ -5865,6 +6138,138 @@ public final class uniffi/engine_adapter_sdk/MatchResult {
 }
 
 public final class uniffi/engine_adapter_sdk/MatchResult$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/MlsAddStaged {
+	public static final field Companion Luniffi/engine_adapter_sdk/MlsAddStaged$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/MlsAddStaged;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/MlsAddStaged;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/MlsAddStaged;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCommit ()Ljava/lang/String;
+	public final fun getWelcome ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setCommit (Ljava/lang/String;)V
+	public final fun setWelcome (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/MlsAddStaged$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/MlsDecrypted {
+	public static final field Companion Luniffi/engine_adapter_sdk/MlsDecrypted$Companion;
+	public fun <init> ([BJ)V
+	public final fun component1 ()[B
+	public final fun component2 ()J
+	public final fun copy ([BJ)Luniffi/engine_adapter_sdk/MlsDecrypted;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/MlsDecrypted;[BJILjava/lang/Object;)Luniffi/engine_adapter_sdk/MlsDecrypted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getPlaintext ()[B
+	public fun hashCode ()I
+	public final fun setEpoch (J)V
+	public final fun setPlaintext ([B)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/MlsDecrypted$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/MlsEncrypted {
+	public static final field Companion Luniffi/engine_adapter_sdk/MlsEncrypted$Companion;
+	public fun <init> (Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy (Ljava/lang/String;J)Luniffi/engine_adapter_sdk/MlsEncrypted;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/MlsEncrypted;Ljava/lang/String;JILjava/lang/Object;)Luniffi/engine_adapter_sdk/MlsEncrypted;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCiphertext ()Ljava/lang/String;
+	public final fun getEpoch ()J
+	public fun hashCode ()I
+	public final fun setCiphertext (Ljava/lang/String;)V
+	public final fun setEpoch (J)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/MlsEncrypted$Companion {
+}
+
+public abstract class uniffi/engine_adapter_sdk/MlsException : java/lang/Exception {
+	public static final field ErrorHandler Luniffi/engine_adapter_sdk/MlsException$ErrorHandler;
+}
+
+public final class uniffi/engine_adapter_sdk/MlsException$ErrorHandler : uniffi/engine_adapter_sdk/UniffiRustCallStatusErrorHandler {
+	public synthetic fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Ljava/lang/Object;
+	public fun lift (Luniffi/engine_adapter_sdk/RustBuffer$ByValue;)Luniffi/engine_adapter_sdk/MlsException;
+}
+
+public final class uniffi/engine_adapter_sdk/MlsException$Refused : uniffi/engine_adapter_sdk/MlsException {
+	public fun <init> (Ljava/lang/String;)V
+	public fun getMessage ()Ljava/lang/String;
+	public final fun getV1 ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/MlsGroupCreated {
+	public static final field Companion Luniffi/engine_adapter_sdk/MlsGroupCreated$Companion;
+	public fun <init> (Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy (Ljava/lang/String;J)Luniffi/engine_adapter_sdk/MlsGroupCreated;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/MlsGroupCreated;Ljava/lang/String;JILjava/lang/Object;)Luniffi/engine_adapter_sdk/MlsGroupCreated;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getGroupId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setEpoch (J)V
+	public final fun setGroupId (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/MlsGroupCreated$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/MlsJoined {
+	public static final field Companion Luniffi/engine_adapter_sdk/MlsJoined$Companion;
+	public fun <init> (Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun copy (Ljava/lang/String;J)Luniffi/engine_adapter_sdk/MlsJoined;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/MlsJoined;Ljava/lang/String;JILjava/lang/Object;)Luniffi/engine_adapter_sdk/MlsJoined;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEpoch ()J
+	public final fun getGroupId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setEpoch (J)V
+	public final fun setGroupId (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/MlsJoined$Companion {
+}
+
+public final class uniffi/engine_adapter_sdk/MlsKeyPackage {
+	public static final field Companion Luniffi/engine_adapter_sdk/MlsKeyPackage$Companion;
+	public fun <init> (Ljava/lang/String;JLjava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;JLjava/lang/String;)Luniffi/engine_adapter_sdk/MlsKeyPackage;
+	public static synthetic fun copy$default (Luniffi/engine_adapter_sdk/MlsKeyPackage;Ljava/lang/String;JLjava/lang/String;ILjava/lang/Object;)Luniffi/engine_adapter_sdk/MlsKeyPackage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCipherSuite ()J
+	public final fun getId ()Ljava/lang/String;
+	public final fun getKeyPackage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setCipherSuite (J)V
+	public final fun setId (Ljava/lang/String;)V
+	public final fun setKeyPackage (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/MlsKeyPackage$Companion {
 }
 
 public final class uniffi/engine_adapter_sdk/NoPointer {
@@ -6381,5 +6786,47 @@ public abstract interface class uniffi/engine_adapter_sdk/WmpEngineInterface {
 }
 
 public final class uniffi/engine_adapter_sdk/WmpEngineInterface$Companion {
+}
+
+public class uniffi/engine_adapter_sdk/WmpMls : java/lang/AutoCloseable, uniffi/engine_adapter_sdk/Disposable, uniffi/engine_adapter_sdk/WmpMlsInterface {
+	public static final field Companion Luniffi/engine_adapter_sdk/WmpMls$Companion;
+	public fun <init> (Lcom/sun/jna/Pointer;)V
+	public fun <init> (Ljava/lang/String;)V
+	public fun <init> (Luniffi/engine_adapter_sdk/NoPointer;)V
+	public fun addMember (Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/MlsAddStaged;
+	public fun close ()V
+	public fun createGroup (J)Luniffi/engine_adapter_sdk/MlsGroupCreated;
+	public fun decrypt (Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/MlsDecrypted;
+	public fun destroy ()V
+	public fun encrypt (Ljava/lang/String;[B)Luniffi/engine_adapter_sdk/MlsEncrypted;
+	public fun generateKeyPackage (J)Luniffi/engine_adapter_sdk/MlsKeyPackage;
+	protected final fun getCleanable ()Luniffi/engine_adapter_sdk/UniffiCleaner$Cleanable;
+	protected final fun getPointer ()Lcom/sun/jna/Pointer;
+	public fun identity ()Ljava/lang/String;
+	public fun processCommit (Ljava/lang/String;Ljava/lang/String;)J
+	public fun processWelcome (Ljava/lang/String;)Luniffi/engine_adapter_sdk/MlsJoined;
+	public fun removeMember (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+	public fun selfUpdate (Ljava/lang/String;)Ljava/lang/String;
+	public final fun uniffiClonePointer ()Lcom/sun/jna/Pointer;
+}
+
+public final class uniffi/engine_adapter_sdk/WmpMls$Companion {
+}
+
+public abstract interface class uniffi/engine_adapter_sdk/WmpMlsInterface {
+	public static final field Companion Luniffi/engine_adapter_sdk/WmpMlsInterface$Companion;
+	public abstract fun addMember (Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/MlsAddStaged;
+	public abstract fun createGroup (J)Luniffi/engine_adapter_sdk/MlsGroupCreated;
+	public abstract fun decrypt (Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/MlsDecrypted;
+	public abstract fun encrypt (Ljava/lang/String;[B)Luniffi/engine_adapter_sdk/MlsEncrypted;
+	public abstract fun generateKeyPackage (J)Luniffi/engine_adapter_sdk/MlsKeyPackage;
+	public abstract fun identity ()Ljava/lang/String;
+	public abstract fun processCommit (Ljava/lang/String;Ljava/lang/String;)J
+	public abstract fun processWelcome (Ljava/lang/String;)Luniffi/engine_adapter_sdk/MlsJoined;
+	public abstract fun removeMember (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+	public abstract fun selfUpdate (Ljava/lang/String;)Ljava/lang/String;
+}
+
+public final class uniffi/engine_adapter_sdk/WmpMlsInterface$Companion {
 }
 

@@ -450,4 +450,21 @@
     <string name="invite_wallet_share">Partilhar ligação</string>
     <string name="invite_wallet_expires">Expira %1</string>
     <string name="invite_wallet_group">Criar um convite de grupo (junte-se à minha sessão)</string>
+    <string name="flow_starting_invitation">Entrando no grupo convidado…</string>
+    <string name="flow_starting_invitation_subtitle">Conectando ao backend que o convite indica - isto é uma entrada em grupo, não uma verificação.</string>
+    <string name="invite_joined">Entrou no grupo - as mensagens de quem convidou chegam nesta sessão.</string>
+    <string name="menu_wmp_endpoints">Endpoints WMP</string>
+    <string name="wmp_endpoints_refresh">Atualizar</string>
+    <string name="wmp_endpoints_empty">Nenhum backend WMP conectado ainda - inicie sessão ou leia um convite para entrar.</string>
+    <string name="wmp_endpoint_origin_engine">O seu motor</string>
+    <string name="wmp_endpoint_origin_invitation">Backend convidado</string>
+    <string name="wmp_endpoint_send">Envio:</string>
+    <string name="wmp_endpoint_events">Eventos:</string>
+    <string name="wmp_endpoint_session">Sessão:</string>
+    <string name="wmp_endpoint_messages">Caixa de entrada do grupo</string>
+    <string name="wmp_endpoint_messages_empty">Ainda sem mensagens do grupo - as mensagens que o grupo envia chegam aqui.</string>
+    <string name="wmp_group_message_arrived">Mensagem do grupo: %1$s</string>
+    <string name="wmp_endpoint_reply">Responder ao grupo…</string>
+    <string name="wmp_endpoint_reply_send">Enviar</string>
+    <string name="wmp_endpoint_reply_sent">Resposta enviada: %1$s</string>
 </resources>
