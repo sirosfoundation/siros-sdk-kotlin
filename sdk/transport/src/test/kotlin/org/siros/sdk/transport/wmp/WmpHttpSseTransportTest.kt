@@ -184,6 +184,32 @@ class WmpHttpSseTransportTest {
     }
 
     @Test
+    fun aRecreateRetargetsTheLiveStreamToTheFreshSession() = runBlocking {
+        // The re-scan path (WmpSession.recreate → create → onSessionCreated with a
+        // NEW id while the first stream is still open): the engine routes every
+        // event by `?session_id=`, so a stream left on the retired id never sees
+        // the new session's outbox pushes. Found live: a second scan of a
+        // re-minted invite left the wallet deaf to its group — heartbeats flowed,
+        // zero data lines, the inbox never filled.
+        val transport = WmpHttpSseTransport(
+            "https://x.test/send", "https://x.test/events",
+            client("id: 1\ndata: first\n\n", "id: 2\ndata: second\n\n"),
+        )
+        withTimeout(5_000) { transport.onSessionCreated("ses-1") }
+        assertEquals("the first stream rides the first session", "ses-1", requests.last().url.queryParameter("session_id"))
+        // The re-create answers a fresh session id.
+        withTimeout(5_000) { transport.onSessionCreated("ses-2") }
+        assertEquals(
+            "the re-create moves the stream to the fresh session (the retired stream is replaced, not kept)",
+            "ses-2",
+            requests.last().url.queryParameter("session_id"),
+        )
+        // Both streams deliver (the channel carries the first stream's event too).
+        val seen = withTimeout(5_000) { transport.incoming().take(2).toList() }
+        assertEquals(listOf("first", "second"), seen.map { it.toString(Charsets.UTF_8) })
+    }
+
+    @Test
     fun noEventDataAndNoDecodeErrorIsLogged() = runBlocking {
         val secret = "SEEDMARK-00112233445566778899aabbccddeeff"
         val transport = WmpHttpSseTransport("https://x.test/send", "https://x.test/events", client("id: 1\ndata: {\"credential_metadata\":\"$secret\"}\n\n"))
