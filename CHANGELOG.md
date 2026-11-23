@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Stateless OID4VCI resume sends the `authorization_context`** — go-wallet-backend `d5eb7d4d` (2026-11-13) made the
+  post-redirect resume *require* the signed transaction JWT it hands over with the authorization URL; the SDK's
+  `FlowStartMessage` never had the member, so every browser-authorization issuance that resumed on a fresh flow
+  (the common case — the socket rarely survives the browser round-trip) failed against such backends with
+  *"authorization_context is required for flow resumption"*. The wallet now stashes the context from the
+  authorization-redirect progress data alongside the code verifier and re-sends it on `resumeIssuance`
+  ([sirosid-dev#187](https://github.com/sirosfoundation/sirosid-dev/issues/187)). Backends that predate the field
+  don't send it and ignore it — both directions stay compatible. Shipped as the 0.23.11 patch; listed here for the
+  0.24.0 release notes.
+
 ## [0.23.0] - 2026-11-12
 
 The SDK's local WMP engine pins to the **released wallet-core v0.2.2** (`org.siros:siros-wallet-core`, the first release-track pin
