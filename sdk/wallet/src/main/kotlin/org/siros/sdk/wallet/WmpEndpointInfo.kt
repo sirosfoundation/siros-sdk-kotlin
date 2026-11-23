@@ -27,6 +27,27 @@ data class WmpEndpointInfo(
     val state: String,
     /** The live session's id on this backend, when one exists. */
     val sessionId: String?,
+    /**
+     * The GROUP the wallet joined on this backend (issue #77's group-centric
+     * view): the invitation's `session_id` — the inviter's session, the group
+     * every member shares. `null` until a join lands (the engine backend has
+     * no joined group on the invitation path) — the group-centric UI keys
+     * its cards by it and falls back to the session id.
+     */
+    val groupId: String? = null,
+    /**
+     * The group's display name, when the backend named one (wmp-mcp names
+     * every group — two random words — and the invitation may carry it).
+     * `null` renders the group id.
+     */
+    val groupName: String? = null,
+    /**
+     * The capabilities the live session negotiated on this backend, when one
+     * exists: the create answer's `capabilities`, by name (flows / mcp / …).
+     * The group-centric view renders them as chips — what the group may ask
+     * of this wallet.
+     */
+    val caps: List<String> = emptyList(),
 ) {
     companion object {
         /** The wallet's own configured engine. */

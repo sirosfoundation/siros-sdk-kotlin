@@ -15,7 +15,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lan
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,60 +42,50 @@ import androidx.compose.ui.unit.dp
 import org.siros.sdk.wallet.WmpEndpointInfo
 
 /**
- * Issue #77's endpoint surface: the WMP backends this wallet is connected
- * to — its own configured engine plus one backend per scanned invitation
- * that named one (the join lands THERE: the nonce exists only on the
- * backend that minted it). The SDK tracks ([SirosWallet.connectedWmpEndpoints]),
- * this screen renders.
+ * Issue #77's group-centric view: the MLS GROUPS the wallet holds — one
+ * card per group (the configured engine plus every backend a scanned
+ * invitation named).
+ *
+ * The card's identity is the GROUP — its name/id, its connection state, and
+ * the CAPABILITIES its live session negotiated (what the group may ask of
+ * this wallet: flows, mcp tools, …). WMP messages are machine traffic —
+ * credentials and typed asks, not chat — so nothing of the inbox renders
+ * here; the connection plumbing (origin, provider, URLs, session id) sits
+ * behind the ⓘ popup.
  */
+/** One line of the ⓘ popup's plumbing (label + value). */
 @Composable
-private fun ReplyField(
-    label: String,
-    onSend: (String) -> Unit,
-) {
-    var text by remember { mutableStateOf("") }
-    androidx.compose.foundation.layout.Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        androidx.compose.material3.OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            placeholder = { Text(label, style = MaterialTheme.typography.bodySmall) },
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-            textStyle = MaterialTheme.typography.bodySmall,
+private fun DetailLine(label: String, value: String) {
+    Row(Modifier.fillMaxWidth()) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.width(110.dp),
         )
-        Spacer(Modifier.width(8.dp))
-        androidx.compose.material3.TextButton(
-            onClick = {
-                if (text.isNotBlank()) {
-                    onSend(text.trim())
-                    text = ""
-                }
-            },
-        ) {
-            Text(stringResource(R.string.wmp_endpoint_reply_send))
-        }
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
 /**
- * Issue #77's endpoint surface: the WMP backends this wallet is connected
- * to — its own configured engine plus one backend per scanned invitation
- * that named one (the join lands THERE: the nonce exists only on the
- * backend that minted it). The SDK tracks ([SirosWallet.connectedWmpEndpoints]),
- * this screen renders.
+ * Issue #77's group-centric view: the MLS groups the wallet holds, one card
+ * per group — the group's name/id and state headline, its negotiated
+ * capabilities as chips, the connection details behind the ⓘ.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WmpEndpointsScreen(
     endpoints: List<WmpEndpointInfo>,
-    messages: List<org.siros.sdk.wallet.WmpGroupMessage>,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
-    onReply: (backend: String, text: String) -> Unit,
 ) {
+    // The ⓘ popup: which card's plumbing is open (null = closed).
+    var detailsFor by remember { mutableStateOf<WmpEndpointInfo?>(null) }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -145,23 +139,39 @@ fun WmpEndpointsScreen(
                         },
                     ),
                 ) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // The GROUP is the card's identity: its name (or id)
+                        // headlines, the state rides beside it, the ⓘ opens
+                        // the plumbing.
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                text = stringResource(
-                                    if (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION) {
-                                        R.string.wmp_endpoint_origin_invitation
-                                    } else {
-                                        R.string.wmp_endpoint_origin_engine
-                                    },
-                                ),
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = ep.groupName ?: ep.groupId ?: ep.sessionId
+                                        ?: stringResource(
+                                            if (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION) {
+                                                R.string.wmp_endpoint_origin_invitation
+                                            } else {
+                                                R.string.wmp_endpoint_origin_engine
+                                            },
+                                        ),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                ep.groupId?.let {
+                                    if (ep.groupName != null) {
+                                        Text(
+                                            it,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.width(8.dp))
                             Text(
                                 text = ep.state,
                                 style = MaterialTheme.typography.labelMedium,
@@ -171,75 +181,80 @@ fun WmpEndpointsScreen(
                                     MaterialTheme.colorScheme.outline
                                 },
                             )
-                        }
-                        ep.providerUrl?.let {
-                            Text(it, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text(
-                            stringResource(R.string.wmp_endpoint_send) + " " + ep.sendUrl,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        ep.sseUrl?.let {
-                            Text(
-                                stringResource(R.string.wmp_endpoint_events) + " " + it,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        ep.sessionId?.let {
-                            Text(
-                                stringResource(R.string.wmp_endpoint_session) + " " + it,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        // Issue #77: the session's group inbox (the messages
-                        // this session's mailbox holds — the SDK's poll).
-                        if (ep.sessionId != null) {
-                            val sessionMessages = messages.filter {
-                                (it.sessionId == ep.sessionId) &&
-                                    (
-                                    (ep.origin == WmpEndpointInfo.ORIGIN_ENGINE && it.backend == WmpEndpointInfo.ORIGIN_ENGINE) ||
-                                        (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION && it.backend == ep.providerUrl)
-                                    )
-                            }
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                stringResource(R.string.wmp_endpoint_messages),
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            if (sessionMessages.isEmpty()) {
-                                Text(
-                                    stringResource(R.string.wmp_endpoint_messages_empty),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline,
+                            Spacer(Modifier.width(4.dp))
+                            IconButton(
+                                onClick = { detailsFor = ep },
+                                modifier = Modifier.height(28.dp).width(28.dp),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Info,
+                                    contentDescription = stringResource(R.string.wmp_endpoint_details),
+                                    tint = MaterialTheme.colorScheme.outline,
                                 )
-                            } else {
-                                sessionMessages.take(4).forEach { m ->
-                                    Text(
-                                        text = m.text,
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
+                            }
+                        }
+                        // The capabilities the live session negotiated — what
+                        // this group may ask of the wallet (flows, mcp, …).
+                        if (ep.caps.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    stringResource(R.string.wmp_endpoint_caps),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    ep.caps.take(4).forEach { cap ->
+                                        AssistChip(
+                                            onClick = {},
+                                            label = {
+                                                Text(cap, style = MaterialTheme.typography.labelSmall)
+                                            },
+                                        )
+                                    }
                                 }
                             }
-                            // The reply (issue #77): the wallet answers the
-                            // group on the SAME backend the inbox reads.
-                            ReplyField(
-                                label = stringResource(R.string.wmp_endpoint_reply),
-                                onSend = { text ->
-                                    onReply(
-                                        if (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION) {
-                                            ep.providerUrl ?: WmpEndpointInfo.ORIGIN_ENGINE
-                                        } else {
-                                            WmpEndpointInfo.ORIGIN_ENGINE
-                                        },
-                                        text,
-                                    )
-                                },
-                            )
                         }
                     }
                 }
             }
+        }
+        // The ⓘ popup: this card's connection plumbing.
+        detailsFor?.let { ep ->
+            AlertDialog(
+                onDismissRequest = { detailsFor = null },
+                confirmButton = {
+                    TextButton(onClick = { detailsFor = null }) {
+                        Text(stringResource(R.string.wmp_endpoint_details_close))
+                    }
+                },
+                title = {
+                    Text(
+                        stringResource(
+                            if (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION) {
+                                R.string.wmp_endpoint_origin_invitation
+                            } else {
+                                R.string.wmp_endpoint_origin_engine
+                            },
+                        ),
+                    )
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ep.providerUrl?.let { DetailLine(stringResource(R.string.wmp_endpoint_provider), it) }
+                        DetailLine(stringResource(R.string.wmp_endpoint_send), ep.sendUrl)
+                        ep.sseUrl?.let { DetailLine(stringResource(R.string.wmp_endpoint_events), it) }
+                        ep.sessionId?.let { DetailLine(stringResource(R.string.wmp_endpoint_session), it) }
+                        ep.groupId?.let {
+                            if (ep.sessionId != it) {
+                                DetailLine(stringResource(R.string.wmp_endpoint_group), it)
+                            }
+                        }
+                    }
+                },
+            )
         }
     }
 }

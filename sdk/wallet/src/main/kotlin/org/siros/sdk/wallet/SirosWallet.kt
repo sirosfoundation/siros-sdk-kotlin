@@ -8158,6 +8158,7 @@ class SirosWallet private constructor(
                     sseUrl = wmpMainUrls?.second,
                     state = peer.state.value.name.lowercase(),
                     sessionId = peer.currentSessionId,
+                    caps = peer.currentCapabilities?.keys?.toList() ?: emptyList(),
                 ),
             )
         }
@@ -8171,6 +8172,8 @@ class SirosWallet private constructor(
                     sseUrl = urls?.second,
                     state = peer.state.value.name.lowercase(),
                     sessionId = peer.currentSessionId,
+                    groupId = joinGroups[provider],
+                    caps = peer.currentCapabilities?.keys?.toList() ?: emptyList(),
                 ),
             )
         }

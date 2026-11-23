@@ -880,13 +880,8 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
             )
             showWmpEndpoints -> WmpEndpointsScreen(
                 endpoints = viewModel.wmpEndpoints.collectAsState().value,
-                messages = viewModel.wmpMessages.collectAsState().value,
                 onBack = viewModel::closeWmpEndpoints,
-                onRefresh = {
-                    viewModel.refreshWmpEndpoints()
-                    viewModel.refreshWmpMessages()
-                },
-                onReply = viewModel::replyToGroup,
+                onRefresh = viewModel::refreshWmpEndpoints,
             )
 
             // Consolidated WSCD settings sub-screen (one tab per plugin -
