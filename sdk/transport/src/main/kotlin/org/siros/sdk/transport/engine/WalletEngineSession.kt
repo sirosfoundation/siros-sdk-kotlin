@@ -542,6 +542,11 @@ class WalletEngineSession(
      * Resume an OID4VCI issuance flow after an OAuth browser redirect returns to the app,
      * on a fresh flow_start rather than a flow_action on the original flow_id.
      *
+     * [authorizationContext] is the signed transaction JWT the backend handed over with
+     * the authorization URL - backends that made it mandatory (d5eb7d4d+) refuse the
+     * resume without it, so it rides the client's pending-authorization stash from the
+     * redirect to here.
+     *
      * The backend's `resumeWithAuthCode` path is fully stateless: it re-derives issuer
      * metadata/trust from [offer]/[credentialOfferUri] and completes the token exchange
      * with [authCode]/[codeVerifier], so this works even if the original flow_id's session
@@ -559,9 +564,11 @@ class WalletEngineSession(
         redirectUri: String,
         authCode: String,
         codeVerifier: String?,
-        clientAttestation: String? = null,
-        clientAttestationPoP: String? = null,
+        authorizationContext: String? = null,
     ) {
+        // The deprecated clientAttestation/clientAttestationPoP parameters are gone:
+        // both were documented leave-null (the engine requests attestation itself on
+        // the resumed flow), and eight parameters tripped the maintainability gate.
         send(FlowStartMessage.serializer(), FlowStartMessage(
             protocol = "oid4vci",
             offer = offer,
@@ -569,8 +576,7 @@ class WalletEngineSession(
             redirectUri = redirectUri,
             authCode = authCode,
             codeVerifier = codeVerifier,
-            clientAttestation = clientAttestation,
-            clientAttestationPoP = clientAttestationPoP,
+            authorizationContext = authorizationContext,
         ))
     }
 

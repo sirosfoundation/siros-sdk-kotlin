@@ -188,11 +188,24 @@ import java.util.Base64
  * object the backend already parsed, round-tripped verbatim so resume never needs
  * to re-fetch a possibly single-use `credential_offer_uri`.
  */
+/** The WMP paths' connection refusal - one message, three call sites (SonarCloud S1192). */
+private const val NOT_CONNECTED_TO_AN_ENGINE = "The wallet is not connected to an engine"
+
 private data class PendingAuthorization(
     val offerJson: String?,
     val redirectUri: String,
     val codeVerifier: String?,
     val state: String,
+    /**
+     * The backend's signed `authorization_context` (go-wallet-backend's stateless-resume
+     * transaction JWT, handed over with the authorization URL). The stateless resume
+     * REQUIRES it - `resumeWithAuthCode` re-derives nothing from the rediscovered
+     * metadata but trusts the context's stashed endpoints/PKCE policy - so it rides the
+     * stash from the authorization redirect to the resume exactly like the code
+     * verifier does. Null on backends predating it (they don't send it and don't
+     * want it).
+     */
+    val authorizationContext: String? = null,
     /**
      * The issuance attempt ([SirosWallet]'s start epoch) this authorization belongs to, when it was saved. A callback that arrives
      * after a cancel or a newer issuance is for a SUPERSEDED attempt and must not resume anything (nor borrow the newer one's context).
@@ -6111,6 +6124,7 @@ class SirosWallet private constructor(
                     redirectUri = pending.redirectUri,
                     authCode = code,
                     codeVerifier = pending.codeVerifier,
+                    authorizationContext = pending.authorizationContext,
                 )
             } catch (e: Exception) {
                 resumingFlowIds?.remove(flowId)
@@ -7126,7 +7140,14 @@ class SirosWallet private constructor(
             throw e
         } catch (e: Exception) {
             return WmpDeliveredMetadataCheck(DeliveredMetadataRefusal.MALFORMED to emptyList<String>(), emptyList(), null)
-        } ?: return WmpDeliveredMetadataCheck(null, emptyList(), null)
+        }
+        // decode()'s only null yield is a null result object, which the callers
+        // gate before here - but the type is nullable, so the check stays explicit
+        // rather than an elvis (SonarCloud S6619 flagged the elvis; the null
+        // branch is the compiler's requirement).
+        if (decoded == null) {
+            return WmpDeliveredMetadataCheck(null, emptyList(), null)
+        }
         // An encrypted issuance's credentials and metadata are the wallet's own decrypted response, never the engine's.
         val opened = if (decoded.credentialResponseEncrypted) {
             blindIssuance.take(flowId)
@@ -10130,6 +10151,7 @@ class SirosWallet private constructor(
                 redirectUri = redirectUri,
                 codeVerifier = member("code_verifier"),
                 state = effectiveState,
+                authorizationContext = member("authorization_context"),
                 issuanceEpoch = issuanceStartEpoch.get(),
             )
         }
@@ -10667,7 +10689,7 @@ class SirosWallet private constructor(
         sessionId: String? = null,
     ): WalletInvitation {
         val token = wmpAppToken
-            ?: throw WalletException("The wallet is not connected to an engine")
+            ?: throw WalletException(NOT_CONNECTED_TO_AN_ENGINE)
         val base = wmpInvitationEndpointBase()
             ?: throw WalletException("The wallet's engine endpoint is not configured")
         if (purpose == "join" && sessionId.isNullOrEmpty()) {
@@ -10796,7 +10818,7 @@ class SirosWallet private constructor(
             ?: throw WalletException("The invitation data does not parse")
         val nonce = (invitation["nonce"] as? kotlinx.serialization.json.JsonPrimitive)?.content
             ?: throw WalletException("The invitation carries no nonce")
-        val peer = wmpPeer ?: throw WalletException("The wallet is not connected to an engine")
+        val peer = wmpPeer ?: throw WalletException(NOT_CONNECTED_TO_AN_ENGINE)
         peer.recreateSession(invitationNonce = nonce)
     }
 
@@ -10812,7 +10834,7 @@ class SirosWallet private constructor(
      *   `content_type: text/plain`).
      */
     suspend fun sendMessage(to: String, text: String) {
-        val peer = wmpPeer ?: throw WalletException("The wallet is not connected to an engine")
+        val peer = wmpPeer ?: throw WalletException(NOT_CONNECTED_TO_AN_ENGINE)
         peer.send(
             org.siros.sdk.transport.wmp.WmpMethods.MESSAGE_DELIVER,
             kotlinx.serialization.json.buildJsonObject {
@@ -12782,6 +12804,7 @@ class SirosWallet private constructor(
                         val redirectUri = payload?.get("expected_redirect_uri")?.jsonPrimitive?.contentOrNull
                         val state = payload?.get("state")?.jsonPrimitive?.contentOrNull
                         val codeVerifier = payload?.get("code_verifier")?.jsonPrimitive?.contentOrNull
+                        val authorizationContext = payload?.get("authorization_context")?.jsonPrimitive?.contentOrNull
                         val offerJson = payload?.get("credential_offer")?.let { json.encodeToString(JsonElement.serializer(), it) }
                         if (authUrl != null) {
                             // Apply URL rewriter if configured
@@ -12798,6 +12821,7 @@ class SirosWallet private constructor(
                                     redirectUri = redirectUri,
                                     codeVerifier = codeVerifier,
                                     state = effectiveState,
+                                    authorizationContext = authorizationContext,
                                     issuanceEpoch = issuanceStartEpoch.get(),
                                 )
                             }
@@ -12995,7 +13019,7 @@ class SirosWallet private constructor(
                 // derived for, else the offer's, else the one the engine states in the completion itself. A replayed or resumed
                 // completion can reach a wallet with no active offer and no preceding sign request, and the credential must
                 // still keep the exact issuer.
-                val flowIssuerId = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier ?: msg.credentialIssuer ?: ""
+                val flowIssuerId = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier ?: msg.credentialIssuer
                 val flowVctmDocument = activeVctmDocument
                 msg.credentials?.forEachIndexed { index, cred ->
                     if (cred.format == "mso_mdoc") {
