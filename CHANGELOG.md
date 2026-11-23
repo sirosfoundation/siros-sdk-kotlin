@@ -19,6 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([sirosid-dev#187](https://github.com/sirosfoundation/sirosid-dev/issues/187)). Backends that predate the field
   don't send it and ignore it — both directions stay compatible.
 
+## [0.23.13] - 2026-11-23
+
+### Fixed
+- **The stateless OID4VCI resume carries `authorization_context`** (0.23.11's fix, listed for the line's record —
+  go-wallet-backend `d5eb7d4d` requires it; [sirosid-dev#187](https://github.com/sirosfoundation/sirosid-dev/issues/187)).
+- **A re-created WMP session retargets the SSE stream** — a second scan of a re-minted invite left the wallet deaf
+  to its group (`onSessionCreated` kept the retired session id; the engine routes every event by `?session_id=`).
+  The transport adopts the fresh id, cancels the retired stream and re-opens with fresh event state — the replay
+  re-delivers from the top.
+
+*The group-centric UI (the group cards, capability chips, the message trace) rides the main line (0.24.0) —
+not this patch: its SDK surface (the reply path, the join registry) is part of issue #77's main-line chain.*
+
 ## [0.23.10] - 2026-11-23
 
 ### Fixed
