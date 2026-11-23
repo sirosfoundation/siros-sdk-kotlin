@@ -123,8 +123,33 @@ class WmpHttpSseTransport(
 
     /** The stream, opened with the session the wallet created: `?session_id=` names it (the engine routes by it). */
     override suspend fun onSessionCreated(sessionId: String) {
-        if (sseSessionId == null) sseSessionId = sessionId
-        if (_state.value != TransportState.CONNECTED) openStream()
+        val previous = sseSessionId
+        sseSessionId = sessionId
+        when {
+            // The first create: open the stream on it.
+            previous == null -> if (_state.value != TransportState.CONNECTED) openStream()
+            // A re-create minted a NEW session id (the re-scan path,
+            // [WmpSession.recreate] — a second invitation consume on a live
+            // peer): the old stream still names the RETIRED id, and the
+            // engine routes every event by `?session_id=` — the new
+            // session's outbox pushes never reach it. Found live: a second
+            // scan of a re-minted invite left the wallet deaf to its group
+            // (heartbeats flowed, zero data lines, the inbox never filled).
+            // Close the retired stream and open on the fresh id, with fresh
+            // event state: the engine's replay then re-delivers everything
+            // the new session's mailbox holds from the top.
+            previous != sessionId -> {
+                sseJob?.cancel()
+                sseJob = null
+                lastEventId = null
+                seenEventIds.clear()
+                _state.value = TransportState.DISCONNECTED
+                openStream()
+            }
+            // The same id again (a recreate that answered it): the stream
+            // stays as it is.
+            else -> if (_state.value != TransportState.CONNECTED) openStream()
+        }
     }
 
     /** The SSE GET, named with the session id. */

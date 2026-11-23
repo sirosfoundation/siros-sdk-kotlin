@@ -2753,6 +2753,7 @@ public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport
 	public final fun flowEvents ()Lkotlinx/coroutines/flow/Flow;
 	public fun forgetFlow (Ljava/lang/String;)V
 	public fun getCodec ()Lorg/siros/sdk/transport/wmp/WmpCodec;
+	public final fun getCurrentCapabilities ()Lkotlinx/serialization/json/JsonObject;
 	public final fun getCurrentSessionId ()Ljava/lang/String;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun messageDeliveries ()Lkotlinx/coroutines/flow/Flow;
@@ -2801,6 +2802,7 @@ public final class org/siros/sdk/transport/wmp/WmpSession {
 	public static synthetic fun close$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun create (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun create$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getCurrentCapabilities ()Lkotlinx/serialization/json/JsonObject;
 	public final fun getCurrentSessionId ()Ljava/lang/String;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun isSessionGone (Ljava/lang/String;)Z

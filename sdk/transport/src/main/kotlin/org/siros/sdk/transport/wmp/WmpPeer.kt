@@ -45,6 +45,10 @@ class WmpPeer(
     val currentSessionId: String?
         get() = session.currentSessionId
 
+    /** The current session's negotiated capabilities, when one is live. */
+    val currentCapabilities: JsonObject?
+        get() = session.currentCapabilities
+
     private val registry = WmpRegistry()
     override val codec: WmpCodec get() = session.codec
 

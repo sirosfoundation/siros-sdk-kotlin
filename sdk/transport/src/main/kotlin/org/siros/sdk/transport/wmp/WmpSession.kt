@@ -42,6 +42,10 @@ class WmpSession(
     /** The current session's id, when one is live (the join invitation's group name, issue #77). */
     val currentSessionId: String?
         get() = sessionId
+
+    /** The capabilities the live session negotiated, when one exists (the create's answer). */
+    val currentCapabilities: JsonObject?
+        get() = sessionId?.let { capabilities }
     private var resumptionToken: String? = null
     private var lastReceivedId: String? = null
     // Saved from the create() call so the fresh-create fallback after a
