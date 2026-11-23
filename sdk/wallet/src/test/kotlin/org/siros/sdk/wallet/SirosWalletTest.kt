@@ -1595,7 +1595,7 @@ class SirosWalletTest {
         val listener = mockk<WalletEventListener>(relaxed = true)
         val store = FakeCredentialStore(mutableListOf())
         val engine = mockEngineConstructor(progressFlow = progressFlow)
-        every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+        every { engine.resumeIssuance(any(), any(), any(), any(), any(), any()) } just runs
         coEvery { engine.awaitConnected(any()) } just runs
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(
@@ -1624,6 +1624,7 @@ class SirosWalletTest {
                     put("expected_redirect_uri", "siros://callback")
                     put("state", "state-from-url")
                     put("code_verifier", "verifier-abc")
+                    put("authorization_context", "ctx-jwt-signed-transaction")
                     putJsonObject("credential_offer") {
                         put("credential_issuer", "https://issuer.example.com")
                     }
@@ -1643,6 +1644,7 @@ class SirosWalletTest {
                 redirectUri = "siros://callback",
                 authCode = "auth-code-xyz",
                 codeVerifier = "verifier-abc",
+                authorizationContext = "ctx-jwt-signed-transaction",
             )
         }
         verify(exactly = 0) { engine.sendFlowAction("flow-auth", "authorization_complete", any()) }
@@ -1949,7 +1951,7 @@ class SirosWalletTest {
         val listener = mockk<WalletEventListener>(relaxed = true)
         val store = FakeCredentialStore(mutableListOf())
         val engine = mockEngineConstructor(progressFlow = progressFlow)
-        every { engine.resumeIssuance(any(), any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.resumeIssuance(any(), any(), any(), any(), any(), any()) } just runs
         coEvery { engine.awaitConnected(any()) } just runs
 
         val sessionStore = mockk<SessionStore>(relaxed = true)
@@ -2008,8 +2010,6 @@ class SirosWalletTest {
                 redirectUri = "siros://callback",
                 authCode = "auth-code-xyz",
                 codeVerifier = "verifier-abc",
-                clientAttestation = null,
-                clientAttestationPoP = null,
             )
         }
         coVerify(exactly = 0) { apiClient.requestWIAChallenge() }
@@ -19882,12 +19882,14 @@ class SirosWalletTest {
         codeVerifier: String?,
         state: String,
         issuanceEpoch: Int,
+        authorizationContext: String? = null,
     ): Any {
         val cls = Class.forName("org.siros.sdk.wallet.PendingAuthorization")
-        // The data class's own 5-parameter constructor (not its default-mask twin).
-        val ctor = cls.declaredConstructors.first { it.parameterCount == 5 }
+        // The data class's own 6-parameter constructor (not its default-mask twin).
+        val ctor = cls.declaredConstructors.first { it.parameterCount == 6 }
         ctor.isAccessible = true
-        return ctor.newInstance(offerJson, redirectUri, codeVerifier, state, issuanceEpoch)
+        // Declaration order: authorizationContext precedes issuanceEpoch in the data class.
+        return ctor.newInstance(offerJson, redirectUri, codeVerifier, state, authorizationContext, issuanceEpoch)
     }
 
     /** One private suspend function of the wallet, invoked directly (the ask handlers are not public API). */
