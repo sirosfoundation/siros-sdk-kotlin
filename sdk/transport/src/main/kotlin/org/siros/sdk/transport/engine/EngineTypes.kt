@@ -60,6 +60,14 @@ data class FlowStartMessage(
     @SerialName("auth_code") val authCode: String? = null,
     @SerialName("code_verifier") val codeVerifier: String? = null,
     /**
+     * The backend's signed `authorization_context` (go-wallet-backend's stateless-resume
+     * transaction JWT, handed over with the authorization URL at the redirect step and
+     * sent back verbatim on the resumed flow). Backends that require it (d5eb7d4d+,
+     * 2026-11-13) refuse the resume without it - "authorization_context is required
+     * for flow resumption"; backends predating it don't send it and ignore it here.
+     */
+    @SerialName("authorization_context") val authorizationContext: String? = null,
+    /**
      * OAuth Client Attestation (draft-ietf-oauth-attestation-based-client-auth-04
      * §3.1): a Wallet Instance Attestation JWT (`typ: oauth-client-attestation+jwt`)
      * obtained from this wallet's own backend (`/wallet-provider/wia/generate`).
