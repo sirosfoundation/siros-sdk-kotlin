@@ -467,6 +467,8 @@
     <string name="wmp_endpoint_details_close">Fechar</string>
     <string name="wmp_endpoint_details">Detalhes da ligação</string>
     <string name="wmp_endpoint_caps">Capacidades</string>
+    <string name="wmp_endpoint_trace">Rastreio de mensagens</string>
+    <string name="wmp_endpoint_trace_empty">Ainda sem tráfego - as mensagens do grupo chegam aqui.</string>
     <string name="wmp_endpoint_messages_empty">Ainda sem mensagens do grupo - as mensagens que o grupo envia chegam aqui.</string>
     <string name="wmp_group_message_arrived">Mensagem do grupo: %1$s</string>
     <string name="wmp_endpoint_reply">Responder ao grupo…</string>

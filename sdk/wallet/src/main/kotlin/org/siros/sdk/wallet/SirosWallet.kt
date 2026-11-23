@@ -11434,6 +11434,25 @@ class SirosWallet private constructor(
                 })
             },
         )
+        // The outbound half of the trace ([WmpMessageStore] is the inbox AND
+        // the outbox — issue #77): the send lands in the store beside the
+        // arrivals, tagged [WmpGroupMessage.outbound], so the group's trace
+        // reads both sides of the conversation. The session named is the
+        // sender's own on that backend (the box the replies land in); the
+        // message id is minted locally (the engine assigns none to a send)
+        // — a null id would dedup by TEXT and collapse repeated sends.
+        peer.currentSessionId?.let { sessionId ->
+            wmpMessageStore.append(
+                WmpGroupMessage(
+                    backend = backend ?: WmpEndpointInfo.ORIGIN_ENGINE,
+                    sessionId = sessionId,
+                    from = sessionId,
+                    text = text,
+                    messageId = "out-" + java.time.Instant.now().toEpochMilli(),
+                    outbound = true,
+                ),
+            )
+        }
     }
 
         /** The invitation `data` parameter: the query form's, else the fragment's. */

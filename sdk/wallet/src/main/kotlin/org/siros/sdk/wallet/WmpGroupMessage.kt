@@ -24,4 +24,11 @@ data class WmpGroupMessage(
     val text: String,
     /** The engine's message id (`wmp_message_id`), when carried. */
     val messageId: String?,
+    /**
+     * The direction, for the trace: `false` (the default) = inbound (the
+     * session received it); `true` = outbound (the wallet SENT it —
+     * [SirosWallet.sendMessage] appends its own sends so a group's trace
+     * shows both sides of the conversation, machine traffic and all).
+     */
+    val outbound: Boolean = false,
 )

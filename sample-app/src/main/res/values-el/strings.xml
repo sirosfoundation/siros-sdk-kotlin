@@ -467,6 +467,8 @@
     <string name="wmp_endpoint_details_close">Κλείσιμο</string>
     <string name="wmp_endpoint_details">Στοιχεία σύνδεσης</string>
     <string name="wmp_endpoint_caps">Δυνατότητες</string>
+    <string name="wmp_endpoint_trace">Έχνος μηνυμάτων</string>
+    <string name="wmp_endpoint_trace_empty">Χωρίς κίνηση ακόμα - τα μηνύματα της ομάδας έρχονται εδώ.</string>
     <string name="wmp_endpoint_messages_empty">Χωρίς μηνύματα ακόμα – τα μηνύματα της ομάδας έρχονται εδώ.</string>
     <string name="wmp_group_message_arrived">Μήνυμα ομάδας: %1$s</string>
     <string name="wmp_endpoint_reply">Απάντηση στην ομάδα…</string>

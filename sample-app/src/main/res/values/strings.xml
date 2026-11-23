@@ -179,6 +179,8 @@
     <string name="wmp_endpoint_details_close">Close</string>
     <string name="wmp_endpoint_details">Connection details</string>
     <string name="wmp_endpoint_caps">Capabilities</string>
+    <string name="wmp_endpoint_trace">Message trace</string>
+    <string name="wmp_endpoint_trace_empty">No traffic yet - the group\'s messages land here as they arrive.</string>
     <string name="wmp_endpoint_messages_empty">No group messages yet - messages the group sends land here.</string>
     <string name="wmp_group_message_arrived">Group message: %1$s</string>
     <string name="wmp_endpoint_reply">Reply to the group…</string>
