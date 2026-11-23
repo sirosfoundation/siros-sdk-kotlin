@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.10] - 2026-11-23
+
+### Fixed
+- **The `siros-wscd-manager:0.14.2` Maven artifact** (no SDK source change — this release marks the fixed resolution). The GitHub
+  Packages copy of the wscd-manager 0.14.2 AAR — the artifact this SDK's POM resolves transitively — was a stale build from before
+  the 2026-11-15 softkey storage work: its `FfiWscdConfig` record lacked the `softkey_keys_file` field the SDK's vendored bindings
+  serialize, so initializing the wscd softkey plugin failed at enroll with a decode error (the UniFFI function checksums all match —
+  the fix changed a record layout, not signatures — so nothing flagged the mismatch at load). The artifact was replaced in place from
+  the v0.14.2 tag by re-running the release build on 2026-11-23. **Consumers must refresh dependencies** — a warm Gradle cache still
+  holds the broken copy: `gradle --refresh-dependencies`, or delete the cached
+  `org.siros/siros-wscd-manager/0.14.2` entry under `~/.gradle/caches/modules-2/files-2.1/`.
+
 ## [0.23.0] - 2026-11-12
 
 The SDK's local WMP engine pins to the **released wallet-core v0.2.2** (`org.siros:siros-wallet-core`, the first release-track pin
