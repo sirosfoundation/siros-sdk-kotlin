@@ -1303,6 +1303,7 @@ class SirosWallet private constructor(
         joinPeers.clear()
         joinPeerUrls.clear()
         joinGroups.clear()
+        joinGroupNames.clear()
         // The store dies with the session (the logout/relogin path): the
         // cursors too, so the next login re-reads from the top.
         wmpMessageStore.clear()
@@ -8142,6 +8143,16 @@ class SirosWallet private constructor(
         java.util.concurrent.ConcurrentHashMap<String, String>()
 
     /**
+     * The joined groups' display NAMES (issue #77): each invited backend's
+     * provider URL → the group's label (the invitation's `label` — the
+     * backend-signed group name, wmp-mcp's `group_name`). The group-centric
+     * UI renders it ([WmpEndpointInfo.groupName]); empty/absent on the
+     * invitation falls back to the group id.
+     */
+    private val joinGroupNames =
+        java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
      * The connected WMP backends (issue #77's endpoint surface): the wallet's
      * configured engine plus every backend a scanned invitation named — the
      * sample apps render the list, the SDK owns the tracking. A join backend
@@ -8173,6 +8184,7 @@ class SirosWallet private constructor(
                     state = peer.state.value.name.lowercase(),
                     sessionId = peer.currentSessionId,
                     groupId = joinGroups[provider],
+                    groupName = joinGroupNames[provider],
                     caps = peer.currentCapabilities?.keys?.toList() ?: emptyList(),
                 ),
             )
@@ -11079,6 +11091,8 @@ class SirosWallet private constructor(
             } else {
                 peer.recreateSession(invitationNonce = nonce)
             }
+            invitationGroup(invitation)?.let { joinGroups[provider] = it }
+            invitationLabel(invitation)?.let { joinGroupNames[provider] = it }
             return
         }
         // The cold join: the endpoints discovery and the token mint run
@@ -11143,6 +11157,7 @@ class SirosWallet private constructor(
             joinPeers[provider] = peer
             joinPeerUrls[provider] = urls
             invitationGroup(invitation)?.let { joinGroups[provider] = it }
+            invitationLabel(invitation)?.let { joinGroupNames[provider] = it }
         }
     }
 
@@ -11171,6 +11186,18 @@ class SirosWallet private constructor(
     ): String? =
         (invitation["session_id"] as? kotlinx.serialization.json.JsonPrimitive)
             ?.content?.takeIf { it.isNotBlank() }
+
+    /**
+     * The group's display name an invitation carries (issue #77): the
+     * signed payload's `label` (wmp-mcp's `group_name`, embedded+signed by
+     * the minting engine). Null when the invitation carries none — the UI
+     * falls back to the group id.
+     */
+    private fun invitationLabel(
+        invitation: kotlinx.serialization.json.JsonObject,
+    ): String? =
+        (invitation["label"] as? kotlinx.serialization.json.JsonPrimitive)
+            ?.content?.trim()?.takeIf { it.isNotBlank() }
 
     /**
      * Reply to the GROUP an invited backend's invitation named (issue #77):
