@@ -450,4 +450,21 @@
     <string name="invite_wallet_share">Κοινοποίηση συνδέσμου</string>
     <string name="invite_wallet_expires">Λήγει %1</string>
     <string name="invite_wallet_group">Δημιουργία πρόσκλησης ομάδας (συμμετοχή στη συνεδρία μου)</string>
+    <string name="flow_starting_invitation">Ένωση στην προσκλημένη ομάδα…</string>
+    <string name="flow_starting_invitation_subtitle">Σύνδεση στο backend που οποιοστήθηκε η προσκλήση αυτή είναι ένδεξη σε ομάδα, όχι επαλήθευση.</string>
+    <string name="invite_joined">Ένωση στην ομάδα – τα μηνύματα του συνκελεστή φτάνουν σε αυτή την συνεδρία.</string>
+    <string name="menu_wmp_endpoints">Τερματικοί WMP</string>
+    <string name="wmp_endpoints_refresh">Ανανέωση</string>
+    <string name="wmp_endpoints_empty">Κανένας backend WMP δεν συνδέθηκε ακόμα – συνδεθείτε ή σκανάρετε πρόσκληση.</string>
+    <string name="wmp_endpoint_origin_engine">Ο motor σας</string>
+    <string name="wmp_endpoint_origin_invitation">Προσκλημένο backend</string>
+    <string name="wmp_endpoint_send">Αποστολή:</string>
+    <string name="wmp_endpoint_events">Εκδηλώσεις:</string>
+    <string name="wmp_endpoint_session">Συνεδρία:</string>
+    <string name="wmp_endpoint_messages">Εισερχόμενα ομάδας</string>
+    <string name="wmp_endpoint_messages_empty">Χωρίς μηνύματα ακόμα – τα μηνύματα της ομάδας έρχονται εδώ.</string>
+    <string name="wmp_group_message_arrived">Μήνυμα ομάδας: %1$s</string>
+    <string name="wmp_endpoint_reply">Απάντηση στην ομάδα…</string>
+    <string name="wmp_endpoint_reply_send">Αποστολή</string>
+    <string name="wmp_endpoint_reply_sent">Η απάντηση εστάλη: %1$s</string>
 </resources>

@@ -79,7 +79,7 @@ class CredentialStackInteractionTest {
             CredentialStack(
                 entries = entries,
                 onCredentialClick = { recorded.opened += it.batchId },
-                onCredentialLongClick = { recorded.longPressed += it.batchId },
+                onLiftCredential = { recorded.longPressed += it.batchId },
                 onRenewCredential = {},
                 onDeleteCredential = {},
             )

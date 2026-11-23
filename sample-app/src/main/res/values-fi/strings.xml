@@ -450,4 +450,21 @@
     <string name="invite_wallet_share">Jaa linkki</string>
     <string name="invite_wallet_expires">Vanhenee %1</string>
     <string name="invite_wallet_group">Luo ryhmäkutsu (liity istuntooni)</string>
+    <string name="flow_starting_invitation">Liitytään kutsuttuun ryhmään…</string>
+    <string name="flow_starting_invitation_subtitle">Yhdistetään kutsun nimeämään palvelimeen - tämä on liittyminen ryhmään, ei varmennus.</string>
+    <string name="invite_joined">Liityttu ryhmään - kutsujan viestit saapuvat tähän istuntoon.</string>
+    <string name="menu_wmp_endpoints">WMP-päätepisteet</string>
+    <string name="wmp_endpoints_refresh">Päivitä</string>
+    <string name="wmp_endpoints_empty">WMP-päätepisteitä ei vielä yhdistetty - kirjaudu sisään tai lue kutsu liittyäksesi.</string>
+    <string name="wmp_endpoint_origin_engine">Oma moottorisi</string>
+    <string name="wmp_endpoint_origin_invitation">Kutsuttu palvelin</string>
+    <string name="wmp_endpoint_send">Lähetys:</string>
+    <string name="wmp_endpoint_events">Tapahtumat:</string>
+    <string name="wmp_endpoint_session">Istunto:</string>
+    <string name="wmp_endpoint_messages">Ryhmän saapuneet</string>
+    <string name="wmp_endpoint_messages_empty">Ryhmän viestejä ei vielä - ryhmän lähettämät viestit ilmestyvät tähän.</string>
+    <string name="wmp_group_message_arrived">Ryhmäviesti: %1$s</string>
+    <string name="wmp_endpoint_reply">Vastaa ryhmäään…</string>
+    <string name="wmp_endpoint_reply_send">Lähetä</string>
+    <string name="wmp_endpoint_reply_sent">Vastaus lähetetty: %1$s</string>
 </resources>

@@ -14821,6 +14821,23 @@ class SirosWalletTest {
         }
         // allocateInstance skips these initializers: the WIA acquisition lock and the set of DPoP-bound instance keys.
         if ("wiaMutex" !in values) values["wiaMutex"] = kotlinx.coroutines.sync.Mutex()
+        // The issue #77 join/backend fields (allocateInstance skips their
+        // initializers too): the relogin teardown iterates joinPeers (an NPE
+        // there killed the self-driven relogin - caught as a generic failure,
+        // the relogin tests went red), the store/cursors/clients answer the
+        // invite flows, and the poll mutex serializes the message polls.
+        if ("joinPeers" !in values) values["joinPeers"] = java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.transport.wmp.WmpPeer>()
+        if ("joinPeerUrls" !in values) values["joinPeerUrls"] = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+        if ("joinGroups" !in values) values["joinGroups"] = java.util.concurrent.ConcurrentHashMap<String, String>()
+        if ("joinAsClients" !in values) values["joinAsClients"] = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
+        if ("joinAsTokens" !in values) values["joinAsTokens"] = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+        if ("wmpPollMutex" !in values) values["wmpPollMutex"] = kotlinx.coroutines.sync.Mutex()
+        // The client-side message store (issue #77): a val with an
+        // initializer over config (allocateInstance skips it) - the
+        // relogin teardown clears it (found by the NPE: wmpMessageStore
+        // was null there and the whole self-driven relogin died to the
+        // generic catch, the relogin tests red since cf0b1c26).
+        if ("wmpMessageStore" !in values) values["wmpMessageStore"] = InMemoryWmpMessageStore()
         if ("dpopBoundInstanceKeys" !in values) values["dpopBoundInstanceKeys"] = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         if ("pscIssuerByFlow" !in values) {
             values["pscIssuerByFlow"] = java.util.concurrent.ConcurrentHashMap<String, String>()
