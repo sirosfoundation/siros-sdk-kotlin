@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.12] - 2026-11-23
+
+### Fixed
+- **A re-created WMP session retargets the SSE stream** — a *second* scan of a re-minted invite (the re-scan path,
+  `WmpSession.recreate` → a fresh session id while the first stream is still open) left the wallet deaf to its group:
+  `onSessionCreated` kept the first session id and skipped the re-open while the old stream was connected, and the
+  engine routes every event by `?session_id=` — the new session's pushes went to a stream nobody listened on
+  (found live on the Pixel: heartbeats flowed, zero data lines, the inbox never filled; the engine's join, fan-out
+  and SSE push all proven working by direct probe). The transport now adopts the fresh id, cancels the retired
+  stream, and re-opens with fresh event state — the engine's replay then re-delivers the new session's mailbox
+  from the top.
+
 ## [0.23.11] - 2026-11-23
 
 ### Fixed
