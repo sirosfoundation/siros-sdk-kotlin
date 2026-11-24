@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-11-24
+
+*The Echo-chain patch: the wallet-core re-pin that fixes the EBW-OID issuance with PID authentication —
+found, fixed, released, and proven on-device inside one afternoon (the credential issued on the Pixel
+through the repaired resume, live at the Cleverbase interop).*
+
+### Fixed
+- **The wallet-core pin to 0.3.9 — the authorization answer's state correlation** ([#438](https://github.com/sirosfoundation/siros-sdk-kotlin/pull/438)):
+  the EBW-OID issuance with PID authentication died at the credential step — `flow.action failed: Method not found` —
+  because the apigw's openid4vp login is its own flow and the oid4vp family refuses every action, while the Go engine
+  ran the login and the issuance as one flow so its `resumeWithAuthCode` always landed on the stash's owner
+  (wallet-core [#105](https://github.com/sirosfoundation/siros-wallet-core/issues/105)). v0.3.9's
+  handoff writes a state→flow index beside the stash and the runtime routes an `authorization_complete` to the owner
+  the state names — the CSRF check, the token exchange and the whole issuance tail run where the stash lives. The
+  FFI surface is unchanged from v0.3.8 (the vendored bindings stay); the AAR pin alone moves 0.3.6 → 0.3.9.
+
 ## [0.24.0] - 2026-11-24
 
 *The Madrid line: full MLS support, the group-centric wallet, and the LLM-over-MCP path — every gate of the
