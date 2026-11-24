@@ -165,9 +165,9 @@
     <string name="flow_starting_subtitle">This can take a moment depending on the issuer or verifier - hang tight.</string>
     <string name="flow_starting_invitation_subtitle">Connecting to the backend the invite names - this is a group join, not a verification.</string>
     <string name="invite_joined">Joined the group - the inviter\'s messages arrive in this session.</string>
-    <string name="menu_wmp_endpoints">WMP groups</string>
+    <string name="menu_wmp_endpoints">Groups</string>
     <string name="wmp_endpoints_refresh">Refresh</string>
-    <string name="wmp_endpoints_empty">No MLS groups yet - log in, or scan an invite to join one.</string>
+    <string name="wmp_endpoints_empty">No groups yet - scan an invite to join one.</string>
     <string name="wmp_endpoint_origin_engine">Your engine\'s group</string>
     <string name="wmp_endpoint_origin_invitation">Invited group</string>
     <string name="wmp_endpoint_send">Send:</string>

@@ -453,9 +453,9 @@
     <string name="flow_starting_invitation">Entrando no grupo convidado…</string>
     <string name="flow_starting_invitation_subtitle">Conectando ao backend que o convite indica - isto é uma entrada em grupo, não uma verificação.</string>
     <string name="invite_joined">Entrou no grupo - as mensagens de quem convidou chegam nesta sessão.</string>
-    <string name="menu_wmp_endpoints">Grupos WMP</string>
+    <string name="menu_wmp_endpoints">Grupos</string>
     <string name="wmp_endpoints_refresh">Atualizar</string>
-    <string name="wmp_endpoints_empty">Ainda sem grupos MLS - inicie sessão ou leia um convite para entrar.</string>
+    <string name="wmp_endpoints_empty">Ainda sem grupos - leia um convite para entrar.</string>
     <string name="wmp_endpoint_origin_engine">O grupo do seu motor</string>
     <string name="wmp_endpoint_origin_invitation">Grupo convidado</string>
     <string name="wmp_endpoint_send">Envio:</string>

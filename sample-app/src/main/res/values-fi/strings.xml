@@ -453,9 +453,9 @@
     <string name="flow_starting_invitation">Liitytään kutsuttuun ryhmään…</string>
     <string name="flow_starting_invitation_subtitle">Yhdistetään kutsun nimeämään palvelimeen - tämä on liittyminen ryhmään, ei varmennus.</string>
     <string name="invite_joined">Liityttu ryhmään - kutsujan viestit saapuvat tähän istuntoon.</string>
-    <string name="menu_wmp_endpoints">WMP-ryhmät</string>
+    <string name="menu_wmp_endpoints">Ryhmät</string>
     <string name="wmp_endpoints_refresh">Päivitä</string>
-    <string name="wmp_endpoints_empty">MLS-ryhmiä ei vielä - kirjaudu sisään tai lue kutsu liittyäksesi.</string>
+    <string name="wmp_endpoints_empty">Ei ryhmiä vielä - lue kutsu liittyäksesi.</string>
     <string name="wmp_endpoint_origin_engine">Oman moottorisi ryhmä</string>
     <string name="wmp_endpoint_origin_invitation">Kutsuttu ryhmä</string>
     <string name="wmp_endpoint_send">Lähetys:</string>

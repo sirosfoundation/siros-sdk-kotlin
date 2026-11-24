@@ -453,9 +453,9 @@
     <string name="flow_starting_invitation">Ένωση στην προσκλημένη ομάδα…</string>
     <string name="flow_starting_invitation_subtitle">Σύνδεση στο backend που οποιοστήθηκε η προσκλήση αυτή είναι ένδεξη σε ομάδα, όχι επαλήθευση.</string>
     <string name="invite_joined">Ένωση στην ομάδα – τα μηνύματα του συνκελεστή φτάνουν σε αυτή την συνεδρία.</string>
-    <string name="menu_wmp_endpoints">Ομάδες WMP</string>
+    <string name="menu_wmp_endpoints">Ομάδες</string>
     <string name="wmp_endpoints_refresh">Ανανέωση</string>
-    <string name="wmp_endpoints_empty">Χωρίς ομάδες MLS ακόμα - συνδεθείτε ή σκαράρετε πρόσκληση.</string>
+    <string name="wmp_endpoints_empty">Χωρίς ομάδες ακόμα - σκαράρετε πρόσκληση.</string>
     <string name="wmp_endpoint_origin_engine">Η ομάδα του motor σας</string>
     <string name="wmp_endpoint_origin_invitation">Προσκλημένη ομάδα</string>
     <string name="wmp_endpoint_send">Αποστολή:</string>

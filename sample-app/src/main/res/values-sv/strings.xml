@@ -453,9 +453,9 @@
     <string name="flow_starting_invitation">Går med i den inbjudna gruppen…</string>
     <string name="flow_starting_invitation_subtitle">Ansluter till backenden som inbjudan namnger - detta är ett gruppgång, inte en verifikation.</string>
     <string name="invite_joined">Gick med i gruppen - inbjudarens meddelanden anländer till denna session.</string>
-    <string name="menu_wmp_endpoints">WMP-grupper</string>
+    <string name="menu_wmp_endpoints">Grupper</string>
     <string name="wmp_endpoints_refresh">Uppdatera</string>
-    <string name="wmp_endpoints_empty">Inga MLS-grupper ännu - logga in, eller skanna en inbjudan för att gå med.</string>
+    <string name="wmp_endpoints_empty">Inga grupper ännu - skanna en inbjudan.</string>
     <string name="wmp_endpoint_origin_engine">Din engines grupp</string>
     <string name="wmp_endpoint_origin_invitation">Inbjuden grupp</string>
     <string name="wmp_endpoint_send">Sänd:</string>

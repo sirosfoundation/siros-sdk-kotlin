@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-24
+
+*The Madrid line: full MLS support, the group-centric wallet, and the LLM-over-MCP path — every gate of the
+validation plan proven live on-device (the MLS round-trip on the Pixel, the 739ms join, the full named-group loop
+closed over MCP: mint → scan → the named card → tools → the both-direction trace).*
+
+### Added — MLS, the group surface
+- **Full MLS support**: the wallet-core FFI surface (`WmpMls` + the `Mls*` records) over the vendored UniFFI bindings
+  (`--features mls`), `WmpMlsCrypto` in transport (the two-member lifecycle: create, join by the shared MLS GroupId,
+  epoch-key encrypt/decrypt, the own-ciphertext refusal, the removal advancing the epoch). Proven on-device:
+  `WmpMlsCryptoInstrumentedTest` → OK on the Pixel against the APK's own `.so`; 4/4 `mls_e2e`, 5/5 `mls_ffi` in wallet-core.
+- **The client-side message store** (issue #77): `WmpMessageStore` — the inbox AND the outbox, CLIENT-SIDE ONLY
+  (the backend routes; the plaintext and its history live in the wallet). App-supplied persistence (the seam the
+  privatedata Rust library lands behind), cursors for the poll resume, retention and logout-clear.
+- **The rung-3 join**: an invitation consume registers dynamically at the INVITED backend's own AS (RFC 8414 + 7591)
+  and mints per-request tokens — a strict foreign engine accepts the wallet (the foreign-issuer refusal, fixed).
+- **The group-centric view** (issue #77): the menu's "WMP endpoints" is "WMP groups" — cards keyed by the GROUP
+  (its name/id + state), the negotiated **capabilities as chips** (what the group may ask of this wallet), the
+  connection plumbing behind the ⓘ popup.
+- **The group trace + the message tool**: the card shows the group's traffic both directions — → the wallet's sends,
+  ← the arrivals — and the send field is the wallet's message primitive (`wmp_message_send`'s twin: either side of
+  the group endpoints drives the same tool).
+- **The group's name renders** (the signed label): the invitation consume captures the engine-signed `label`
+  (wallet-core #94's `group_name`, released v0.3.6) — `WmpEndpointInfo.groupName` headlines the card; absent labels
+  mint a Signal-style two-word name (curated non-offensive lists), never raw ids.
+
+### Fixed
+- **The stateless OID4VCI resume carries `authorization_context`** — go-wallet-backend `d5eb7d4d` requires the signed
+  transaction JWT on the post-redirect resume; the SDK never sent it ([sirosid-dev#187](https://github.com/sirosfoundation/sirosid-dev/issues/187)).
+  Also shipped as the 0.23.11 patch.
+- **A re-created WMP session retargets the SSE stream** — a second scan of a re-minted invite left the wallet deaf to
+  its group. Also shipped as the 0.23.12 patch.
+- **The join-bearer chain never silently falls back**: the invited backend's AS metadata fetch rides the join budget
+  (20s, was 5s — the Fly-edge TLS handshake lottery measured 8.2s live), and every fallback step logs its cause —
+  a slow TLS window degrades to a slow join, never to a wrong-token `-31002`.
+- **The self-echo filter**: the group fan-out includes the sender's own session; the poll skips `from == own session` —
+  one → per wallet send in the trace.
+
+### The engine line
+- **wallet-core pins to the released v0.3.6** (`org.siros:siros-wallet-core:0.3.6`, the MLS-enabled AAR — 24 `wmpmls`
+  symbols verified; the vendored bindings match its surface exactly). Both deployed engines (the GDC wallet-side and
+  the wmp-mcp relay) run the same release line.
+
+
+
 ### Fixed
 - **Stateless OID4VCI resume sends the `authorization_context`** — go-wallet-backend `d5eb7d4d` (2026-11-13) made the
   post-redirect resume *require* the signed transaction JWT it hands over with the authorization URL; the SDK's
