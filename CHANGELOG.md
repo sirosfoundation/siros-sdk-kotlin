@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-11-24
+
+*The transport-binding patch: the Echo-chain's working mTLS binding becomes a first-class, properly-named SDK config gate (`mtls-binding`) — no Madrid references, no Cleverbase special cases; the spec's own `mtls` auth type for deployments whose load balancer terminates TLS and verifies the subscriber certificate.*
+
+### Added
+- **The mTLS session binding behind a config gate** ([#441](https://github.com/sirosfoundation/siros-sdk-kotlin/pull/441)):
+  `WmpSessionConfig.mtlsBinding` (the `MtlsBinding` PEM pair) flips the session create to `auth.type = "mtls"`
+  (wmp-core §4.4.6's `ebcore` row — the certificate the transport presents at TLS is the credential, no bearer) and
+  the transport's client presents the certificate on every request of the binding (wmp-transport §4.3.1's principal
+  binding). `WmpEngineProvider.RemoteHttpSse.mtlsBinding` gates it per provider — `null` (the default) keeps the bearer
+  binding completely unchanged. Proven live against Cleverbase's QERDS: the chain from session create to the first
+  encrypted, signed message consigned in the recipient's pane.
+
 ## [0.24.1] - 2026-11-24
 
 *The Echo-chain patch: the wallet-core re-pin that fixes the EBW-OID issuance with PID authentication —
