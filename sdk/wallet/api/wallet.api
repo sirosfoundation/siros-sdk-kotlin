@@ -1804,15 +1804,17 @@ public final class org/siros/sdk/wallet/WmpEngineProvider$Local : org/siros/sdk/
 }
 
 public final class org/siros/sdk/wallet/WmpEngineProvider$RemoteHttpSse : org/siros/sdk/wallet/WmpEngineProvider {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Z)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/transport/wmp/MtlsBinding;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/transport/wmp/MtlsBinding;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Z
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Z)Lorg/siros/sdk/wallet/WmpEngineProvider$RemoteHttpSse;
-	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/WmpEngineProvider$RemoteHttpSse;Ljava/lang/String;Ljava/lang/String;ZILjava/lang/Object;)Lorg/siros/sdk/wallet/WmpEngineProvider$RemoteHttpSse;
+	public final fun component4 ()Lorg/siros/sdk/transport/wmp/MtlsBinding;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/transport/wmp/MtlsBinding;)Lorg/siros/sdk/wallet/WmpEngineProvider$RemoteHttpSse;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/WmpEngineProvider$RemoteHttpSse;Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/transport/wmp/MtlsBinding;ILjava/lang/Object;)Lorg/siros/sdk/wallet/WmpEngineProvider$RemoteHttpSse;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun getLabel ()Ljava/lang/String;
+	public final fun getMtlsBinding ()Lorg/siros/sdk/transport/wmp/MtlsBinding;
 	public final fun getSendUrl ()Ljava/lang/String;
 	public final fun getSseUrl ()Ljava/lang/String;
 	public final fun getTenantTokens ()Z
