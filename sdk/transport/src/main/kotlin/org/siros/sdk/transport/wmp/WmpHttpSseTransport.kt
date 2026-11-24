@@ -391,24 +391,33 @@ class WmpHttpSseTransport(
          * every request ([WmpSessionConfig.mtlsBinding]'s doc cites the
          * spec): the PEM pair becomes an in-memory PKCS12 key store the
          * SSLContext's key manager serves, so the TLS handshake answers
-         * the server's CertificateRequest with the subscriber certificate.
+         * the server's CertificateRequest with the subscriber certificate
+         * **and its issuing CA chain** — the deployment's load balancer
+         * validates the leaf against its trust anchor, so the CA must ride
+         * the chain (found live: presenting the leaf alone left the LB
+         * unable to bind the session to the identity).
          *
-         * `null`-keyed: the binding's PEMs parse here, once, at client
-         * construction — a malformed pair fails fast with the parse error,
-         * never as a mid-session TLS refusal.
+         * The certificate PEM may carry the full chain (leaf first, then
+         * the CA(s)); every certificate in it enters the key store entry.
+         * The pair parses here, once, at client construction — a malformed
+         * pair fails fast with the parse error, never as a mid-session
+         * TLS refusal.
          */
         fun mtlsClient(binding: MtlsBinding): OkHttpClient {
-            val certificate = try {
-                java.security.cert.CertificateFactory
-                    .getInstance("X.509")
-                    .generateCertificates(binding.certificatePem.byteInputStream())
-                    .firstOrNull() as? java.security.cert.X509Certificate
-            } catch (e: java.security.cert.CertificateException) {
-                null
+            val certificates: List<java.security.cert.X509Certificate> =
+                try {
+                    java.security.cert.CertificateFactory
+                        .getInstance("X.509")
+                        .generateCertificates(binding.certificatePem.byteInputStream())
+                        .filterIsInstance<java.security.cert.X509Certificate>()
+                } catch (e: java.security.cert.CertificateException) {
+                    emptyList()
+                }
+            if (certificates.isEmpty()) {
+                throw IllegalArgumentException(
+                    "the mtls binding's certificate PEM holds no certificate",
+                )
             }
-            ?: throw IllegalArgumentException(
-                "the mtls binding's certificate PEM holds no certificate",
-            )
             val keyBytes = decodePemBody(binding.privateKeyPem, "PRIVATE KEY")
             val key = java.security.KeyFactory
                 .getInstance("EC")
@@ -419,7 +428,7 @@ class WmpHttpSseTransport(
                 "mtls-binding",
                 key,
                 CharArray(0),
-                arrayOf(certificate),
+                certificates.toTypedArray(),
             )
             val kmf = javax.net.ssl.KeyManagerFactory
                 .getInstance(javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm())

@@ -492,16 +492,19 @@ data class WmpSessionConfig(
 )
 
 /**
- * The mTLS binding's credential pair: the subscriber certificate and its
- * private key, both PEM. The certificate is presented at TLS per request
- * ([MtlsBinding]'s doc on [WmpSessionConfig] cites the spec); the key never
- * leaves the client.
+ * The mTLS binding's credential pair: the subscriber certificate chain and
+ * its private key, both PEM. The certificate PEM carries the **full chain,
+ * leaf first** (the leaf, then the issuing CA(s)) — the load balancer needs
+ * the CA to validate the leaf against its trust anchor, so the chain must
+ * ride every handshake (found live: the leaf alone left the LB unable to
+ * bind the session to the identity). The key never leaves the client.
  *
  * The PEM pair is the held-key form (a plain key file or an app-managed
  * secret); a keystore-backed form can wrap the same config surface later —
  * the gate's shape is the pair, not the storage.
  */
 data class MtlsBinding(
+    /** The subscriber certificate chain, leaf first, then the CA(s). */
     val certificatePem: String,
     val privateKeyPem: String,
 )
