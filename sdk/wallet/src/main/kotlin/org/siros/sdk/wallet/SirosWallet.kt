@@ -11124,7 +11124,7 @@ class SirosWallet private constructor(
             val urls = endpoints.await()
                 ?: throw WalletException(
                     "The invitation's backend does not answer discovery " +
-                        "($provider/.well-known/wmp-configuration) — cannot join its group",
+                        "(the well-known WMP configuration of $provider) — cannot join its group",
                 )
             android.util.Log.i(
                 "SirosWallet",
@@ -11263,10 +11263,12 @@ class SirosWallet private constructor(
     fun joinedGroups(): Map<String, String> = LinkedHashMap(joinGroups)
 
     /**
-     * The WMP endpoints a backend's well-known names
-     * (`/.well-known/wmp-configuration`, path-preserving: a reverse-proxied
-     * deployment serves it under its own path prefix). `null` when the
-     * backend does not answer or carries no `endpoints.wmp`/`endpoints.events`.
+     * The WMP endpoints a backend's well-known configuration names (WMP
+     * Core 7.5.1). A backend under a path is a tenant of its host: its
+     * configuration is at `https://<host>/.well-known/wmp-configuration<path>`
+     * and names the backend in `discovery_base`. `null` when the backend has
+     * no discovery base, does not answer, answers for another base, or
+     * carries no `endpoints.wmp`/`endpoints.events`.
      */
     /**
      * The discovery client (issue #77): ONE shared OkHttpClient, built once —
@@ -11286,7 +11288,8 @@ class SirosWallet private constructor(
     }
 
     private suspend fun discoverWmpEndpoints(backendBase: String): Pair<String, String>? {
-        val url = backendBase.trimEnd('/') + "/.well-known/wmp-configuration"
+        val base = org.siros.sdk.transport.wmp.WmpDiscoveryBase.of(backendBase) ?: return null
+        val url = base.wellKnownUrl
         return try {
             val client = wmpDiscoveryClient
             val request = okhttp3.Request.Builder().url(url).build()
@@ -11298,6 +11301,14 @@ class SirosWallet private constructor(
                     .parseToJsonElement(resp.body?.string() ?: return@use null)
                     as? kotlinx.serialization.json.JsonObject
                     ?: return@use null
+                val declared = parsed["discovery_base"]
+                val discoveryBase = when {
+                    declared == null || declared is kotlinx.serialization.json.JsonNull -> null
+                    declared is kotlinx.serialization.json.JsonPrimitive && declared.isString ->
+                        declared.content
+                    else -> return@use null
+                }
+                if (!base.isDescribedBy(discoveryBase)) return@use null
                 val endpoints =
                     parsed["endpoints"] as? kotlinx.serialization.json.JsonObject
                         ?: return@use null
