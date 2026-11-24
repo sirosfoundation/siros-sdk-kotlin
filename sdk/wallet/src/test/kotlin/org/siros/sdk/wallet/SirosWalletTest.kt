@@ -19934,7 +19934,7 @@ class SirosWalletTest {
         val capabilitiesSlot = slot<JsonObject?>()
         coEvery { peer.connect(any(), any(), captureNullable(capabilitiesSlot)) } just runs
         val previous = SirosWallet.createWmpPeerFromTransport
-        SirosWallet.createWmpPeerFromTransport = { peer }
+        SirosWallet.createWmpPeerFromTransport = { _, _ -> peer }
         try {
             val wallet = newWallet(
                 "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
@@ -19993,7 +19993,7 @@ class SirosWalletTest {
         every { peer.use(any()) } just runs
         coEvery { peer.connect(any(), any(), any()) } just runs
         val previous = SirosWallet.createWmpPeerFromTransport
-        SirosWallet.createWmpPeerFromTransport = { transport ->
+        SirosWallet.createWmpPeerFromTransport = { transport, _ ->
             captured = transport
             peer
         }
@@ -20094,7 +20094,7 @@ class SirosWalletTest {
         val transports = mutableListOf<org.siros.sdk.transport.Transport>()
         val previous = SirosWallet.createWmpPeerFromTransport
         var next = 0
-        SirosWallet.createWmpPeerFromTransport = { transport ->
+        SirosWallet.createWmpPeerFromTransport = { transport, _ ->
             transports.add(transport)
             peers[next++]  // (removeFirst() needs a newer stdlib than the runtime's)
         }
@@ -20223,7 +20223,7 @@ class SirosWalletTest {
         val connectingPeer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
         coEvery { connectingPeer.connect(any<String>(), any(), any()) } just runs
         val previous = SirosWallet.createWmpPeerFromTransport
-        SirosWallet.createWmpPeerFromTransport = { _ -> connectingPeer }
+        SirosWallet.createWmpPeerFromTransport = { _, _ -> connectingPeer }
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
@@ -20260,7 +20260,7 @@ class SirosWalletTest {
             val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
             coEvery { peer.connect(any<String>(), any(), any()) } just runs
             val previous = SirosWallet.createWmpPeerFromTransport
-            SirosWallet.createWmpPeerFromTransport = { transport ->
+            SirosWallet.createWmpPeerFromTransport = { transport, _ ->
                 captured = transport
                 peer
             }

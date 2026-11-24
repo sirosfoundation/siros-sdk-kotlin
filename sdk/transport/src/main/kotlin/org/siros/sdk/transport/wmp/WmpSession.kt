@@ -118,7 +118,15 @@ class WmpSession(
             SessionCreateParams(
                 wmp = WmpMeta(sender = sender),
                 capabilitiesOffered = capabilitiesOffered,
-                auth = SessionAuth(type = "bearer", token = authToken),
+                // The binding decides the auth type (wmp-core §4.4.6): an
+                // mTLS-bound session authenticates by the certificate the
+                // transport presents at TLS — `auth.type = "mtls"`, no
+                // bearer; otherwise the token the caller handed over.
+                auth = if (config.mtlsBinding != null) {
+                    SessionAuth(type = "mtls", token = "")
+                } else {
+                    SessionAuth(type = "bearer", token = authToken)
+                },
                 ttl = config.sessionTtlSeconds,
                 invitationNonce = invitationNonce,
             )
@@ -469,6 +477,33 @@ data class WmpSessionConfig(
     val maxReconnectAttempts: Int = 10,
     val reconnectBaseMs: Long = 1_000,
     val reconnectMaxMs: Long = 30_000,
+    /**
+     * The mTLS session binding (wmp-core §4.4.6: the `ebcore` scheme
+     * authenticates with `mtls` — the subscriber certificate presented at
+     * the TLS level; wmp-transport §4.3.1: the session binds to the
+     * authenticated principal). When set, the session create sends
+     * `auth.type = "mtls"` (no bearer) and the transport presents the
+     * certificate on every request of the binding — the load balancer
+     * verifies it and forwards the binding the middleware authorizes.
+     *
+     * Null (the default) keeps the bearer binding.
+     */
+    val mtlsBinding: MtlsBinding? = null,
+)
+
+/**
+ * The mTLS binding's credential pair: the subscriber certificate and its
+ * private key, both PEM. The certificate is presented at TLS per request
+ * ([MtlsBinding]'s doc on [WmpSessionConfig] cites the spec); the key never
+ * leaves the client.
+ *
+ * The PEM pair is the held-key form (a plain key file or an app-managed
+ * secret); a keystore-backed form can wrap the same config surface later —
+ * the gate's shape is the pair, not the storage.
+ */
+data class MtlsBinding(
+    val certificatePem: String,
+    val privateKeyPem: String,
 )
 
 class WmpSessionException(message: String, cause: Throwable? = null) : org.siros.sdk.credentials.SirosException(message, cause)
