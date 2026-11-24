@@ -11301,9 +11301,11 @@ class SirosWallet private constructor(
                     .parseToJsonElement(resp.body?.string() ?: return@use null)
                     as? kotlinx.serialization.json.JsonObject
                     ?: return@use null
+                // `discovery_base` is a string or absent; any other type
+                // (a JSON null too) refuses.
                 val declared = parsed["discovery_base"]
                 val discoveryBase = when {
-                    declared == null || declared is kotlinx.serialization.json.JsonNull -> null
+                    declared == null -> null
                     declared is kotlinx.serialization.json.JsonPrimitive && declared.isString ->
                         declared.content
                     else -> return@use null
