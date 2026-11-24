@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.3] - 2026-11-24
+
+### Fixed
+- **The mtls client presents the full certificate chain**: the load balancer needs the CA to validate the leaf against
+  its trust anchor, so the chain must ride every handshake — the leaf alone left the LB unable to bind the session to
+  the identity (Jochen's live feedback from the interop). The certificate PEM now carries the full chain (leaf first,
+  then the CA(s)); every certificate in it enters the key store entry.
+
 ## [0.24.2] - 2026-11-24
 
 *The transport-binding patch: the Echo-chain's working mTLS binding becomes a first-class, properly-named SDK config gate (`mtls-binding`) — no Madrid references, no Cleverbase special cases; the spec's own `mtls` auth type for deployments whose load balancer terminates TLS and verifies the subscriber certificate.*
