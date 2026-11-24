@@ -2551,6 +2551,27 @@ public final class org/siros/sdk/transport/wmp/WmpCodec {
 	public final fun getJson ()Lkotlinx/serialization/json/Json;
 }
 
+public final class org/siros/sdk/transport/wmp/WmpDiscoveryBase {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/WmpDiscoveryBase$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/WmpDiscoveryBase;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpDiscoveryBase;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpDiscoveryBase;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHost ()Ljava/lang/String;
+	public final fun getTenantPath ()Ljava/lang/String;
+	public final fun getUrl ()Ljava/lang/String;
+	public final fun getWellKnownUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun isDescribedBy (Ljava/lang/String;)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpDiscoveryBase$Companion {
+	public final fun of (Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/WmpDiscoveryBase;
+}
+
 public abstract interface class org/siros/sdk/transport/wmp/WmpEngineAskHandler {
 	public abstract fun onProgress (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public abstract fun openAuthorization (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
