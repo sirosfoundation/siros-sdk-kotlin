@@ -11179,7 +11179,16 @@ class SirosWallet private constructor(
             // refuse (-31002). Close and drop it; the next scan rebuilds.
             try {
                 val createT0 = android.os.SystemClock.elapsedRealtime()
-                peer.connectWithInvitation(authToken = token.await(), invitationNonce = nonce)
+                // The create's auth.token carries the INVITED backend's own
+                // AS token (the DCR chain's), NOT the wallet-backend's: a
+                // strict engine validates the JSON-RPC auth field, and a
+                // foreign-issuer token refused -31002 (found live against
+                // the relay: the backend's token failed even when the
+                // HTTP Authorization header carried the correct one).
+                peer.connectWithInvitation(
+                    authToken = joinBearerFor(provider),
+                    invitationNonce = nonce,
+                )
                 android.util.Log.i(
                     "SirosWallet",
                     "issue77 join: create+SSE ${android.os.SystemClock.elapsedRealtime() - createT0}ms " +
