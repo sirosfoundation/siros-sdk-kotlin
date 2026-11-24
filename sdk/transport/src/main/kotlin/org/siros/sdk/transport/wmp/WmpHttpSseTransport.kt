@@ -424,7 +424,7 @@ class WmpHttpSseTransport(
             val kmf = javax.net.ssl.KeyManagerFactory
                 .getInstance(javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm())
             kmf.init(store, CharArray(0))
-            val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+            val sslContext = javax.net.ssl.SSLContext.getInstance("TLSv1.3")
             sslContext.init(kmf.keyManagers, null, null)
             return OkHttpClient.Builder()
                 .sslSocketFactory(sslContext.socketFactory, trustManagerForJvm())
