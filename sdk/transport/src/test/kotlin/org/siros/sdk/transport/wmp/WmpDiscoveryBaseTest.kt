@@ -61,7 +61,8 @@ class WmpDiscoveryBaseTest {
     fun a_tenant_document_must_name_the_tenant() {
         val tenant = WmpDiscoveryBase.of("https://example.com/tenants/acme")!!
         assertTrue(tenant.isDescribedBy("https://example.com/tenants/acme"))
-        assertTrue(tenant.isDescribedBy("HTTPS://EXAMPLE.com/tenants/acme/"))
+        assertTrue(tenant.isDescribedBy("HTTPS://EXAMPLE.com/tenants/acme"))
+        assertFalse("trailing slash", tenant.isDescribedBy("https://example.com/tenants/acme/"))
         assertFalse("absent", tenant.isDescribedBy(null))
         assertFalse("empty", tenant.isDescribedBy(""))
         assertFalse("the host's", tenant.isDescribedBy("https://example.com"))
@@ -76,7 +77,7 @@ class WmpDiscoveryBaseTest {
         val host = WmpDiscoveryBase.of("x509:san:dns:example.com")!!
         assertTrue(host.isDescribedBy(null))
         assertTrue(host.isDescribedBy("https://example.com"))
-        assertTrue(host.isDescribedBy("https://example.com/"))
+        assertFalse("trailing slash", host.isDescribedBy("https://example.com/"))
         assertFalse(host.isDescribedBy("https://example.com/tenant1"))
         assertFalse(host.isDescribedBy("https://evil.example"))
     }

@@ -29,6 +29,9 @@ data class WmpDiscoveryBase(val host: String, val tenantPath: String) {
      */
     fun isDescribedBy(discoveryBase: String?): Boolean {
         if (discoveryBase.isNullOrEmpty()) return tenantPath.isEmpty()
+        // The declared base is compared as written: a trailing `/` is not
+        // the base, only an identifier's path is trimmed.
+        if (discoveryBase.endsWith('/')) return false
         // The scheme compares case-insensitively, like the host.
         val scheme = "https:"
         val normalized =
