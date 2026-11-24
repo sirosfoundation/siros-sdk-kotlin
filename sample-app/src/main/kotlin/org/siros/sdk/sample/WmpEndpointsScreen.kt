@@ -15,9 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lan
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -87,9 +85,6 @@ fun WmpEndpointsScreen(
     onRefresh: () -> Unit,
     onSend: (backend: String, text: String) -> Unit,
 ) {
-    // The ⓘ popup: which card's plumbing is open (null = closed).
-    var detailsFor by remember { mutableStateOf<WmpEndpointInfo?>(null) }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -185,17 +180,6 @@ fun WmpEndpointsScreen(
                                     MaterialTheme.colorScheme.outline
                                 },
                             )
-                            Spacer(Modifier.width(4.dp))
-                            IconButton(
-                                onClick = { detailsFor = ep },
-                                modifier = Modifier.height(28.dp).width(28.dp),
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Info,
-                                    contentDescription = stringResource(R.string.wmp_endpoint_details),
-                                    tint = MaterialTheme.colorScheme.outline,
-                                )
-                            }
                         }
                         // The capabilities the live session negotiated — what
                         // this group may ask of the wallet (flows, mcp, …).
@@ -312,41 +296,6 @@ fun WmpEndpointsScreen(
                     }
                 }
             }
-        }
-        // The ⓘ popup: this card's connection plumbing.
-        detailsFor?.let { ep ->
-            AlertDialog(
-                onDismissRequest = { detailsFor = null },
-                confirmButton = {
-                    TextButton(onClick = { detailsFor = null }) {
-                        Text(stringResource(R.string.wmp_endpoint_details_close))
-                    }
-                },
-                title = {
-                    Text(
-                        stringResource(
-                            if (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION) {
-                                R.string.wmp_endpoint_origin_invitation
-                            } else {
-                                R.string.wmp_endpoint_origin_engine
-                            },
-                        ),
-                    )
-                },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        ep.providerUrl?.let { DetailLine(stringResource(R.string.wmp_endpoint_provider), it) }
-                        DetailLine(stringResource(R.string.wmp_endpoint_send), ep.sendUrl)
-                        ep.sseUrl?.let { DetailLine(stringResource(R.string.wmp_endpoint_events), it) }
-                        ep.sessionId?.let { DetailLine(stringResource(R.string.wmp_endpoint_session), it) }
-                        ep.groupId?.let {
-                            if (ep.sessionId != it) {
-                                DetailLine(stringResource(R.string.wmp_endpoint_group), it)
-                            }
-                        }
-                    }
-                },
-            )
         }
     }
 }

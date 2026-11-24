@@ -879,7 +879,14 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                 onRefresh = viewModel::refreshDevices,
             )
             showWmpEndpoints -> WmpEndpointsScreen(
-                endpoints = viewModel.wmpEndpoints.collectAsState().value,
+                // The GROUPS only: the invited backends' joined groups. The
+                // wallet's own engine session is infrastructure (General's
+                // WMP sessions block lists it) — it was never a group the
+                // wallet joined, and showing it beside the real groups read
+                // as a second "thing" that wasn't one.
+                endpoints = viewModel.wmpEndpoints.collectAsState().value.filter {
+                    it.origin == org.siros.sdk.wallet.WmpEndpointInfo.ORIGIN_INVITATION
+                },
                 messages = viewModel.wmpMessages.collectAsState().value,
                 onBack = viewModel::closeWmpEndpoints,
                 onRefresh = {
@@ -1116,6 +1123,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                             )
                             WalletDestination.About -> AboutScreen()
                             WalletDestination.Settings -> SettingsTab(
+                            wmpEndpoints = viewModel.wmpEndpoints.collectAsState().value,
                             state = state,
                             // The 2026-11-16 restructure bundles (SettingsSections.kt):
                             // full trust modes, connection tuning, credential types.
@@ -2124,6 +2132,9 @@ fun SettingsTab(
     backendUrl: String,
     tenantId: String,
     useWmpProtocol: Boolean,
+    // The live WMP sessions (the groups' connection plumbing - General's
+    // WMP sessions block reads them; the groups screen keeps the identity).
+    wmpEndpoints: List<org.siros.sdk.wallet.WmpEndpointInfo> = emptyList(),
     // The backend registry (multi-backend add/switch; see BackendProfile).
     // Android-only by design - the Swift sample app keeps a single backend
     // (iOS registers redirect schemes statically in the Info.plist).
@@ -2227,6 +2238,7 @@ fun SettingsTab(
                             state = state, backendUrl = backendUrl, tenantId = tenantId,
                             useWmpProtocol = useWmpProtocol, diipProfile = diipProfile,
                             zkCircuitUrls = zkCircuitUrls,
+                            wmpEndpoints = wmpEndpoints,
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         // Passkeys + other cached accounts: General owns
@@ -2432,6 +2444,7 @@ private fun SettingsGeneral(
     useWmpProtocol: Boolean,
     diipProfile: org.siros.sdk.credentials.interop.DiipProfile,
     zkCircuitUrls: List<String>,
+    wmpEndpoints: List<org.siros.sdk.wallet.WmpEndpointInfo> = emptyList(),
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -2461,6 +2474,41 @@ private fun SettingsGeneral(
         }
     }
     Spacer(modifier = Modifier.height(16.dp))
+
+    // The WMP sessions (the groups' connection plumbing - its home since
+    // the group cards dropped the ⓘ): every live backend this wallet
+    // holds a session on, its session id, its group, its endpoints. The
+    // GROUPS screen keeps the identity (the name, the state, the
+    // capabilities); General keeps the facts.
+    if (wmpEndpoints.isNotEmpty()) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    text = "WMP sessions",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = SirosDesign.secondaryText,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                wmpEndpoints.forEach { ep ->
+                    val title = ep.groupName ?: ep.groupId ?: ep.sessionId ?: return@forEach
+                    SettingsRow(title, ep.state)
+                    ep.sessionId?.let { SettingsRow("    session", it) }
+                    ep.groupId?.let { if (it != ep.sessionId) SettingsRow("    group", it) }
+                    ep.providerUrl?.let { SettingsRow("    provider", it) }
+                    SettingsRow("    send", ep.sendUrl)
+                    ep.sseUrl?.let { SettingsRow("    events", it) }
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
 
     // Appearance folded into General: follow the device, or always light,
     // or always dark.
