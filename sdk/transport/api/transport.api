@@ -2252,6 +2252,19 @@ public final class org/siros/sdk/transport/wmp/MlsKeyPackage {
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class org/siros/sdk/transport/wmp/MtlsBinding {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/MtlsBinding;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/MtlsBinding;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/MtlsBinding;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCertificatePem ()Ljava/lang/String;
+	public final fun getPrivateKeyPem ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class org/siros/sdk/transport/wmp/ResolveParams {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/ResolveParams$Companion;
 	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
@@ -2643,6 +2656,8 @@ public final class org/siros/sdk/transport/wmp/WmpHttpSseTransport : org/siros/s
 }
 
 public final class org/siros/sdk/transport/wmp/WmpHttpSseTransport$Companion {
+	public final fun defaultClient ()Lokhttp3/OkHttpClient;
+	public final fun mtlsClient (Lorg/siros/sdk/transport/wmp/MtlsBinding;)Lokhttp3/OkHttpClient;
 }
 
 public abstract class org/siros/sdk/transport/wmp/WmpMessage {
@@ -2838,17 +2853,19 @@ public final class org/siros/sdk/transport/wmp/WmpSession {
 
 public final class org/siros/sdk/transport/wmp/WmpSessionConfig {
 	public fun <init> ()V
-	public fun <init> (IJIJJ)V
-	public synthetic fun <init> (IJIJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (IJIJJLorg/siros/sdk/transport/wmp/MtlsBinding;)V
+	public synthetic fun <init> (IJIJJLorg/siros/sdk/transport/wmp/MtlsBinding;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()I
 	public final fun component2 ()J
 	public final fun component3 ()I
 	public final fun component4 ()J
 	public final fun component5 ()J
-	public final fun copy (IJIJJ)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpSessionConfig;IJIJJILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
+	public final fun component6 ()Lorg/siros/sdk/transport/wmp/MtlsBinding;
+	public final fun copy (IJIJJLorg/siros/sdk/transport/wmp/MtlsBinding;)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpSessionConfig;IJIJJLorg/siros/sdk/transport/wmp/MtlsBinding;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getMaxReconnectAttempts ()I
+	public final fun getMtlsBinding ()Lorg/siros/sdk/transport/wmp/MtlsBinding;
 	public final fun getReconnectBaseMs ()J
 	public final fun getReconnectMaxMs ()J
 	public final fun getRequestTimeoutMs ()J
