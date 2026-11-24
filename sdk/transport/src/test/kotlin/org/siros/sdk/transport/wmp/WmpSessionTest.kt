@@ -43,6 +43,41 @@ class WmpSessionTest {
         session.close()
     }
 
+    /**
+     * The mTLS binding gate ([WmpSessionConfig.mtlsBinding], wmp-core
+     * §4.4.6: the `ebcore` scheme authenticates with `mtls`): the session
+     * create sends `auth.type = "mtls"` — the certificate the transport
+     * presents at TLS is the credential, so no token rides the params.
+     * The bearer default is the first test's assertion.
+     */
+    @Test
+    fun mtlsBindingFlipsTheCreateAuthType() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(
+            transport = transport,
+            config = WmpSessionConfig(
+                mtlsBinding = MtlsBinding(
+                    certificatePem = "-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----\n",
+                    privateKeyPem = "-----BEGIN PRIVATE KEY-----\nZm9v\n-----END PRIVATE KEY-----\n",
+                ),
+            ),
+        )
+
+        val createJob = launch {
+            session.create(authToken = "app-token", sender = "sample-wallet")
+        }
+
+        waitForSentCount(transport, 1)
+        val createText = transport.sentMessages.last().toString(Charsets.UTF_8)
+        assertTrue(createText.contains("\"type\":\"mtls\""))
+        assertTrue("no bearer rides an mTLS create", !createText.contains("app-token"))
+        val createReq = codec.decodeRequest(transport.sentMessages.last())
+        transport.receiveFromServer(createSuccessResponse(createReq.id!!).toByteArray())
+        createJob.join()
+
+        session.close()
+    }
+
     @Test
     fun sendRequestTimesOutWithoutResponse() = runBlocking {
         val transport = FakeTransport()

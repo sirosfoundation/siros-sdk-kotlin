@@ -8609,6 +8609,16 @@ class SirosWallet private constructor(
                         is WmpEngineProvider.RemoteHttpSse -> org.siros.sdk.transport.wmp.WmpHttpSseTransport(
                             sendUrl = provider.sendUrl,
                             sseUrl = provider.sseUrl,
+                            // The mTLS binding (wmp-core §4.4.6's `ebcore` row):
+                            // the certificate presents at TLS on every request
+                            // and the session create sends `auth.type = "mtls"`
+                            // — no bearer, no token provider. The load balancer
+                            // verifies the certificate and the transport
+                            // authorizes the principal binding (wmp-transport
+                            // §4.3.1).
+                            client = provider.mtlsBinding?.let {
+                                org.siros.sdk.transport.wmp.WmpHttpSseTransport.mtlsClient(it)
+                            } ?: org.siros.sdk.transport.wmp.WmpHttpSseTransport.defaultClient(),
                             // The bearer the engine's TAC gate validates, FRESH PER
                             // REQUEST: the binding is stateless - every POST is its
                             // own request - and the AS's tokens live ~2 minutes, so
@@ -8618,24 +8628,29 @@ class SirosWallet private constructor(
                             // a tenant-mode engine (provider.tenantTokens) takes the
                             // AS's pseudonymous kind - the wallet's traffic attributes
                             // to the tenant, never to a person.
-                            tokenProvider = {
-                                // A TENANT-mode engine always takes the AS's
-                                // pseudonymous engine kind - NEVER the legacy
-                                // app token, whatever the login handed back.
-                                // The legacy token is HMAC-signed, and the
-                                // engine's asymmetric TAC gate (ES256/ES384/
-                                // EdDSA) refuses it as an unsupported
-                                // algorithm before it even fetches the JWKS -
-                                // the session create then dies "Not authorized"
-                                // with no key lookup to debug (found on-device
-                                // against the GDC released engine: the passkey
-                                // login lands a legacy appToken, it won the
-                                // ?: here, and both connect attempts reused
-                                // it while the tenant mint never ran).
-                                if (provider.tenantTokens) {
-                                    authTokens.ensureTenantToken().raw
-                                } else {
-                                    legacyAppToken ?: authTokens.ensureBackendToken().raw
+                            // The mTLS binding skips the bearer entirely.
+                            tokenProvider = if (provider.mtlsBinding != null) {
+                                null
+                            } else {
+                                {
+                                    // A TENANT-mode engine always takes the AS's
+                                    // pseudonymous engine kind - NEVER the legacy
+                                    // app token, whatever the login handed back.
+                                    // The legacy token is HMAC-signed, and the
+                                    // engine's asymmetric TAC gate (ES256/ES384/
+                                    // EdDSA) refuses it as an unsupported
+                                    // algorithm before it even fetches the JWKS -
+                                    // the session create then dies "Not authorized"
+                                    // with no key lookup to debug (found on-device
+                                    // against the GDC released engine: the passkey
+                                    // login lands a legacy appToken, it won the
+                                    // ?: here, and both connect attempts reused
+                                    // it while the tenant mint never ran).
+                                    if (provider.tenantTokens) {
+                                        authTokens.ensureTenantToken().raw
+                                    } else {
+                                        legacyAppToken ?: authTokens.ensureBackendToken().raw
+                                    }
                                 }
                             },
                         )
@@ -8651,7 +8666,16 @@ class SirosWallet private constructor(
                             )
                         )
                     }
-                    val peer = createWmpPeerFromTransport(transport)
+                    val peer = createWmpPeerFromTransport(
+                        transport,
+                        // The binding decision rides the session config: the
+                        // provider's mTLS binding (wmp-core 4.4.6's `ebcore`
+                        // row) flips the session create's `auth.type` to
+                        // `mtls`; the default keeps the bearer.
+                        org.siros.sdk.transport.wmp.WmpSessionConfig(
+                            mtlsBinding = (provider as? WmpEngineProvider.RemoteHttpSse)?.mtlsBinding,
+                        ),
+                    )
                     // The endpoint surface (issue #77): the provider's own
                     // URLs, captured for connectedWmpEndpoints' report.
                     wmpMainUrls = when (provider) {
@@ -11147,7 +11171,7 @@ class SirosWallet private constructor(
                     joinBearerFor(provider)
                 },
             )
-            val peer = createWmpPeerFromTransport(transport)
+            val peer = createWmpPeerFromTransport(transport, org.siros.sdk.transport.wmp.WmpSessionConfig())
             // Cancellation-safe: a cancel mid-join (the back arrow, any
             // navigation away) must not leave a poisoned cache — the nonce is
             // single-use, spent by the create below; a cached half-joined
@@ -15971,10 +15995,13 @@ class SirosWallet private constructor(
          * Builds the WMP peer over a [org.siros.sdk.transport.Transport] - the
          * HTTP+SSE and LOCAL engine modes' entry (the same peer/session
          * stack over a different transport; replaceable for the same reason
-         * [createWmpPeer] is).
+         * [createWmpPeer] is). The session config rides along so the
+         * connect path's binding decision (the mTLS binding, the bearer
+         * default) reaches the session create's `auth` — see
+         * [WmpSessionConfig.mtlsBinding].
          */
-        internal var createWmpPeerFromTransport: (org.siros.sdk.transport.Transport) -> org.siros.sdk.transport.wmp.WmpPeer = { transport ->
-            org.siros.sdk.transport.wmp.WmpPeer(org.siros.sdk.transport.wmp.WmpSession(transport))
+        internal var createWmpPeerFromTransport: (org.siros.sdk.transport.Transport, org.siros.sdk.transport.wmp.WmpSessionConfig) -> org.siros.sdk.transport.wmp.WmpPeer = { transport, config ->
+            org.siros.sdk.transport.wmp.WmpPeer(org.siros.sdk.transport.wmp.WmpSession(transport, config = config))
         }
 
         internal var createEngineSession: (String, String) -> WalletEngineSession =

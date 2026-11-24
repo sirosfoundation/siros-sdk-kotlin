@@ -381,9 +381,76 @@ class WmpHttpSseTransport(
     companion object {
         private const val MAX_SEEN_EVENT_IDS = 4096
 
-        private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
+        fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS) // no read timeout for SSE
             .connectTimeout(30, TimeUnit.SECONDS)
             .build()
+
+        /**
+         * An OkHttpClient presenting the mTLS binding's certificate on
+         * every request ([WmpSessionConfig.mtlsBinding]'s doc cites the
+         * spec): the PEM pair becomes an in-memory PKCS12 key store the
+         * SSLContext's key manager serves, so the TLS handshake answers
+         * the server's CertificateRequest with the subscriber certificate.
+         *
+         * `null`-keyed: the binding's PEMs parse here, once, at client
+         * construction — a malformed pair fails fast with the parse error,
+         * never as a mid-session TLS refusal.
+         */
+        fun mtlsClient(binding: MtlsBinding): OkHttpClient {
+            val certificate = try {
+                java.security.cert.CertificateFactory
+                    .getInstance("X.509")
+                    .generateCertificates(binding.certificatePem.byteInputStream())
+                    .firstOrNull() as? java.security.cert.X509Certificate
+            } catch (e: java.security.cert.CertificateException) {
+                null
+            }
+            ?: throw IllegalArgumentException(
+                "the mtls binding's certificate PEM holds no certificate",
+            )
+            val keyBytes = decodePemBody(binding.privateKeyPem, "PRIVATE KEY")
+            val key = java.security.KeyFactory
+                .getInstance("EC")
+                .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
+            val store = java.security.KeyStore.getInstance("PKCS12")
+            store.load(null, null)
+            store.setKeyEntry(
+                "mtls-binding",
+                key,
+                CharArray(0),
+                arrayOf(certificate),
+            )
+            val kmf = javax.net.ssl.KeyManagerFactory
+                .getInstance(javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm())
+            kmf.init(store, CharArray(0))
+            val sslContext = javax.net.ssl.SSLContext.getInstance("TLSv1.3")
+            sslContext.init(kmf.keyManagers, null, null)
+            return OkHttpClient.Builder()
+                .sslSocketFactory(sslContext.socketFactory, trustManagerForJvm())
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .build()
+        }
+
+        /** The JVM's own trust anchors — the mTLS client still verifies the server. */
+        private fun trustManagerForJvm(): javax.net.ssl.X509TrustManager {
+            val factory = javax.net.ssl.TrustManagerFactory.getInstance(
+                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm(),
+            )
+            factory.init(null as java.security.KeyStore?)
+            return factory.trustManagers
+                .filterIsInstance<javax.net.ssl.X509TrustManager>()
+                .first()
+        }
+
+        /** The PEM body's base64, stripped of the armor and the labels. */
+        private fun decodePemBody(pem: String, label: String): ByteArray {
+            val body = Regex("-----BEGIN $label-----([\\s\\S]*?)-----END $label-----")
+                .find(pem)?.groupValues?.get(1)
+                ?: throw IllegalArgumentException("the PEM holds no $label block")
+            val base64 = body.filter { !it.isWhitespace() }
+            return java.util.Base64.getDecoder().decode(base64)
+        }
     }
 }

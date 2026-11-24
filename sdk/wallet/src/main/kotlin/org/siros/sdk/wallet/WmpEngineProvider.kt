@@ -26,11 +26,19 @@ sealed interface WmpEngineProvider {
      *   §8): the bearer this provider mints is then the AS's
      *   pseudonymous engine kind. Must match the deployment - see
      *   [WalletConfig.wmpTenantTokens]'s doc comment.
+     * @param mtlsBinding the mTLS session binding (wmp-core §4.4.6's
+     *   `ebcore` row; [org.siros.sdk.transport.wmp.MtlsBinding]): when
+     *   set, the transport presents the certificate at TLS on every
+     *   request and the session create sends `auth.type = "mtls"` — no
+     *   bearer. The deployment's load balancer verifies the certificate
+     *   and the transport authorizes the binding (wmp-transport §4.3.1's
+     *   principal binding). Null keeps the bearer binding.
      */
     data class RemoteHttpSse(
         val sendUrl: String,
         val sseUrl: String,
         val tenantTokens: Boolean = false,
+        val mtlsBinding: org.siros.sdk.transport.wmp.MtlsBinding? = null,
     ) : WmpEngineProvider {
         override val label: String = "remote ($sendUrl)"
     }
