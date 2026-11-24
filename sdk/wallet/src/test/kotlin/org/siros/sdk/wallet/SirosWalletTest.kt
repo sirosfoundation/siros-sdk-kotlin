@@ -14829,6 +14829,10 @@ class SirosWalletTest {
         if ("joinPeers" !in values) values["joinPeers"] = java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.transport.wmp.WmpPeer>()
         if ("joinPeerUrls" !in values) values["joinPeerUrls"] = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
         if ("joinGroups" !in values) values["joinGroups"] = java.util.concurrent.ConcurrentHashMap<String, String>()
+        // The joined groups' display names (issue #77, the invitation's
+        // signed `label`): a val with an initializer over the map - seeded
+        // here with the SAME class of NPE protection as joinGroups.
+        if ("joinGroupNames" !in values) values["joinGroupNames"] = java.util.concurrent.ConcurrentHashMap<String, String>()
         if ("joinAsClients" !in values) values["joinAsClients"] = java.util.concurrent.ConcurrentHashMap<String, Pair<String, String>>()
         if ("joinAsTokens" !in values) values["joinAsTokens"] = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
         if ("wmpPollMutex" !in values) values["wmpPollMutex"] = kotlinx.coroutines.sync.Mutex()

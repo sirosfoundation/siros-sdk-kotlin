@@ -1303,6 +1303,7 @@ class SirosWallet private constructor(
         joinPeers.clear()
         joinPeerUrls.clear()
         joinGroups.clear()
+        joinGroupNames.clear()
         // The store dies with the session (the logout/relogin path): the
         // cursors too, so the next login re-reads from the top.
         wmpMessageStore.clear()
@@ -8142,6 +8143,18 @@ class SirosWallet private constructor(
         java.util.concurrent.ConcurrentHashMap<String, String>()
 
     /**
+     * The joined groups' display NAMES (issue #77): each invited backend's
+     * provider URL → the group's label (the invitation's `label` — the
+     * backend-signed group name, wmp-mcp's `group_name`). The group-centric
+     * UI renders it ([WmpEndpointInfo.groupName]); empty/absent on the
+     * invitation falls back to a Signal-style two-word mint
+     * ([mintGroupDisplayName] — readable without trusting a provider
+     * string), never raw ids on the card.
+     */
+    private val joinGroupNames =
+        java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
      * The connected WMP backends (issue #77's endpoint surface): the wallet's
      * configured engine plus every backend a scanned invitation named — the
      * sample apps render the list, the SDK owns the tracking. A join backend
@@ -8173,6 +8186,7 @@ class SirosWallet private constructor(
                     state = peer.state.value.name.lowercase(),
                     sessionId = peer.currentSessionId,
                     groupId = joinGroups[provider],
+                    groupName = joinGroupNames[provider],
                     caps = peer.currentCapabilities?.keys?.toList() ?: emptyList(),
                 ),
             )
@@ -8251,6 +8265,18 @@ class SirosWallet private constructor(
                             ?.get("text") as? kotlinx.serialization.json.JsonPrimitive
                         )?.content ?: continue
                     val id = (envelope["wmp_message_id"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    // The SELF-ECHO (found live in the Madrid loop): the
+                    // engine's group fan-out expands `to: [group]` to every
+                    // member INCLUDING the sender's own session, so the
+                    // wallet's own send loops back as an "inbound" poll
+                    // answer — the trace already recorded it at the send
+                    // (outbound, [WmpGroupMessage.outbound]). The echo's
+                    // envelope carries the SENDER's session id (the original
+                    // params ride verbatim): from == this session = ours.
+                    if (from == sessionId) {
+                        if (id != null) last = id
+                        continue
+                    }
                     val message = WmpGroupMessage(
                         backend = backend,
                         sessionId = sessionId,
@@ -11079,6 +11105,8 @@ class SirosWallet private constructor(
             } else {
                 peer.recreateSession(invitationNonce = nonce)
             }
+            invitationGroup(invitation)?.let { joinGroups[provider] = it }
+            joinGroupNames[provider] = invitationLabel(invitation) ?: mintGroupDisplayName()
             return
         }
         // The cold join: the endpoints discovery and the token mint run
@@ -11143,6 +11171,7 @@ class SirosWallet private constructor(
             joinPeers[provider] = peer
             joinPeerUrls[provider] = urls
             invitationGroup(invitation)?.let { joinGroups[provider] = it }
+            joinGroupNames[provider] = invitationLabel(invitation) ?: mintGroupDisplayName()
         }
     }
 
@@ -11166,11 +11195,55 @@ class SirosWallet private constructor(
      * a `join` invite always carries one; `session` invites name none, the
      * joining session IS the group, and this answers `null`).
      */
+    /**
+     * A Signal-style group display name (the fallback when the invitation
+     * carries no `label`): two random NON-DELIBERATELY-OFFENSIVE words,
+     * adjective + noun, hyphenated — the same idiom Signal's safety-number
+     * groups use. Local only (client-side readability); the backend's own
+     * name (the invitation's signed `label`) always wins when present.
+     */
+    private fun mintGroupDisplayName(): String {
+        val adjectives = listOf(
+            "amber", "arctic", "ashen", "atlas", "aurora", "autumn", "basalt", "beacon",
+            "birch", "boreal", "calm", "cedar", "clear", "cobalt", "coral", "crimson",
+            "crystal", "dawn", "delta", "dune", "ember", "fern", "flint", "gentle",
+            "golden", "harbor", "ivory", "jade", "juniper", "lagoon", "linen", "lunar",
+            "maple", "marble", "meadow", "midnight", "mint", "opal", "pearl", "pebble",
+            "pine", "quartz", "quiet", "river", "rose", "sage", "sand", "silver",
+            "slate", "snow", "solar", "spruce", "stone", "summer", "sunset", "tundra",
+            "vanilla", "velvet", "walnut", "willow", "winter", "zenith",
+        )
+        val nouns = listOf(
+            "anchor", "apple", "arch", "atlas", "aurora", "badger", "bamboo", "banjo",
+            "beacon", "bison", "canyon", "cedar", "channel", "cliff", "cloud", "comet",
+            "compass", "coral", "crane", "dolphin", "eagle", "echo", "fable", "falcon",
+            "fern", "fjord", "fox", "gecko", "glacier", "harbor", "heron", "ibis",
+            "iris", "island", "kelp", "koala", "lagoon", "lantern", "lemur", "lynx",
+            "mantis", "meadow", "mirage", "moon", "narwhal", "oasis", "otter", "panda",
+            "pelican", "penguin", "quasar", "raven", "reef", "robin", "sable",
+            "salmon", "sequoia", "sparrow", "summit", "thrush", "tulip", "valley",
+            "walrus", "willow", "zebra",
+        )
+        return "${adjectives.random()}-${nouns.random()}"
+    }
+
     private fun invitationGroup(
         invitation: kotlinx.serialization.json.JsonObject,
     ): String? =
         (invitation["session_id"] as? kotlinx.serialization.json.JsonPrimitive)
             ?.content?.takeIf { it.isNotBlank() }
+
+    /**
+     * The group's display name an invitation carries (issue #77): the
+     * signed payload's `label` (wmp-mcp's `group_name`, embedded+signed by
+     * the minting engine). Null when the invitation carries none — the UI
+     * falls back to the group id.
+     */
+    private fun invitationLabel(
+        invitation: kotlinx.serialization.json.JsonObject,
+    ): String? =
+        (invitation["label"] as? kotlinx.serialization.json.JsonPrimitive)
+            ?.content?.trim()?.takeIf { it.isNotBlank() }
 
     /**
      * Reply to the GROUP an invited backend's invitation named (issue #77):
@@ -11203,8 +11276,12 @@ class SirosWallet private constructor(
      */
     private val wmpDiscoveryClient by lazy {
         okhttp3.OkHttpClient.Builder()
-            .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            // 20s: the invited AS's well-known answered in 8.2s on its cold
+            // path (found live) - a 5s timeout made the rung-3 chain fall to
+            // the wrong-token fallback and the join refuse. The join's own
+            // UX budget absorbs a slow window; a silent fallback cannot.
+            .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
             .build()
     }
 
@@ -11375,17 +11452,42 @@ class SirosWallet private constructor(
         joinAsTokens[provider]?.let { (token, expAt) ->
             if (expAt > System.currentTimeMillis()) return token
         }
+        // The fallback is the wallet's OWN backend token — a strict invited
+        // engine (foreign issuer) REFUSES it. Found live: the invited AS's
+        // 8414 route answered in 8.2s (an intermittent cold path), the 5s
+        // discovery timeout fell to the fallback, and the join refused
+        // -31002 with no hint of the real cause. Every step logs now, and
+        // the discovery timeouts ride the join budget (20s), not the 5s
+        // default: a slow AS window degrades to a slow join, never to a
+        // wrong-token refusal.
+        val t0 = android.os.SystemClock.elapsedRealtime()
         val meta = discoverAsMetadata(provider)
-        if (meta != null) {
-            val client = joinAsClients[provider]
-                ?: dcrRegister(meta.registrationEndpoint ?: return fallbackJoinBearer(), "siros-wallet-android")
-                ?: return fallbackJoinBearer()
-            val minted = tokenViaClientCredentials(meta.tokenEndpoint, client) ?: return fallbackJoinBearer()
-            joinAsClients[provider] = client
-            joinAsTokens[provider] = minted
-            return minted.first
+        if (meta == null) {
+            android.util.Log.w(
+                "SirosWallet",
+                "issue77 join: the invited backend's AS metadata failed " +
+                    "(${android.os.SystemClock.elapsedRealtime() - t0}ms) - falling back to the wallet's own token",
+            )
+            return fallbackJoinBearer()
         }
-        return fallbackJoinBearer()
+        val client = joinAsClients[provider]
+            ?: dcrRegister(meta.registrationEndpoint ?: return fallbackJoinBearer(), "siros-wallet-android")
+        if (client == null) {
+            android.util.Log.w("SirosWallet", "issue77 join: the invited backend's DCR failed - falling back to the wallet's own token")
+            return fallbackJoinBearer()
+        }
+        val minted = tokenViaClientCredentials(meta.tokenEndpoint, client)
+        if (minted == null) {
+            android.util.Log.w("SirosWallet", "issue77 join: the invited backend's token mint failed - falling back to the wallet's own token")
+            return fallbackJoinBearer()
+        }
+        android.util.Log.i(
+            "SirosWallet",
+            "issue77 join: rung-3 chain done in ${android.os.SystemClock.elapsedRealtime() - t0}ms",
+        )
+        joinAsClients[provider] = client
+        joinAsTokens[provider] = minted
+        return minted.first
     }
 
     /** The fall back: the wallet's own AS token (the no-AS backends' path). */
