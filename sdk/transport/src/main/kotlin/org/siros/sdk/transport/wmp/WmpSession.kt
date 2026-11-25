@@ -500,7 +500,16 @@ enum class WmpSessionState {
 }
 
 data class WmpSessionConfig(
-    val sessionTtlSeconds: Int = 3600,
+    /**
+     * The session create's requested TTL, seconds. **Null (the default)
+     * omits the `ttl` member** so the engine's own default applies — an
+     * explicit value overrides it (the reference engine caps it at its
+     * max). The old 3600 default reaped live join sessions at one hour
+     * against engines defaulting to days (found live: golden-fox,
+     * 2026-11-25 — the join session died at its ttl while the inviter's
+     * carried 24h, and the group vanished on restart).
+     */
+    val sessionTtlSeconds: Int? = null,
     val requestTimeoutMs: Long = 30_000,
     val maxReconnectAttempts: Int = 10,
     val reconnectBaseMs: Long = 1_000,

@@ -62,6 +62,25 @@ data class SessionCreateParams(
     val participants: List<String>? = null,
     @SerialName("capabilities_offered") val capabilitiesOffered: JsonObject? = null,
     val security: JsonObject? = null,
+    /**
+     * The session's requested TTL (wmp-core §4.4: OPTIONAL — the server
+     * MAY cap it, and its own default applies when omitted).
+     *
+     * NEVER-encoded at its default ([null]) — the codec's `encodeDefaults`
+     * is true, so a null would serialize as `"ttl": null` on every create,
+     * and an engine whose field is a plain `Int` (no explicit-null
+     * acceptance) refuses the whole params. The same lesson as
+     * [invitationNonce]'s null handling, one field over.
+     *
+     * The null default is deliberate: an EXPLICIT short ttl overrides the
+     * engine's own default (the reference engine's rule: the named ttl
+     * wins, capped at its max) — the SDK naming 3600 reaped a live join
+     * session at one hour against an engine defaulting to 7 days, and the
+     * group vanished from the wallet on the next restart (found live on
+     * the Pixel, golden-fox, 2026-11-25). Null = the deployment's policy
+     * decides; a caller that wants a bounded session names one.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
     val ttl: Int? = null,
     val auth: SessionAuth? = null,
     /**
