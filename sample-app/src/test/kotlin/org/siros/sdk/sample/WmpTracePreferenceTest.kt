@@ -1,7 +1,9 @@
 package org.siros.sdk.sample
 
 import android.content.SharedPreferences
+import io.mockk.Runs
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
 import io.mockk.verify
 import org.junit.Assert.assertFalse
@@ -11,9 +13,21 @@ import org.junit.Test
 /** Per-group trace visibility: opt-in, independent per backend, persisted. */
 class WmpTracePreferenceTest {
     @Test
-    fun traceIsOffByDefaultAndTogglesPerGroup() {
+    fun traceIsOffByDefaultAndTogglesDynamicallyOnAndOff() {
+        val store = mutableMapOf<String, Any?>()
+        val editor = mockk<SharedPreferences.Editor>(relaxed = true) {
+            every { putBoolean(any(), any()) } answers {
+                store[firstArg<String>()] = secondArg<Boolean>()
+                this@mockk
+            }
+            every { apply() } just Runs
+        }
         val prefs = mockk<SharedPreferences>(relaxed = true) {
-            every { getBoolean(any(), any()) } returns false
+            every { getBoolean(any(), any()) } answers {
+                store[firstArg()] as? Boolean ?: secondArg()
+            }
+            every { edit() } returns editor
+            every { all } returns store
         }
         val trace = WmpTracePreferences(prefs)
         val engine = org.siros.sdk.wallet.WmpEndpointInfo.ORIGIN_ENGINE
@@ -23,11 +37,12 @@ class WmpTracePreferenceTest {
         assertFalse(trace.isEnabled(invited))
 
         trace.setEnabled(invited, true)
+        assertTrue(trace.isEnabled(invited))
         assertFalse(trace.isEnabled(engine))
-        verify { prefs.edit().putBoolean("wmp.trace.$invited", true) }
 
         trace.setEnabled(invited, false)
-        verify { prefs.edit().putBoolean("wmp.trace.$invited", false) }
+        assertFalse(trace.isEnabled(invited))
+        assertTrue(trace.load()["wmp.trace.$invited"] == false)
     }
 
     @Test
