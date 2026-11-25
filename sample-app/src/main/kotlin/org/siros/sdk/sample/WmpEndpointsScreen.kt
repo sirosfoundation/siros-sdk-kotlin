@@ -81,6 +81,8 @@ private fun DetailLine(label: String, value: String) {
 fun WmpEndpointsScreen(
     endpoints: List<WmpEndpointInfo>,
     messages: List<org.siros.sdk.wallet.WmpGroupMessage>,
+    traceEnabled: Map<String, Boolean>,
+    onToggleTrace: (backend: String, enabled: Boolean) -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSend: (backend: String, text: String) -> Unit,
@@ -205,12 +207,11 @@ fun WmpEndpointsScreen(
                                 }
                             }
                         }
-                        // The group's TRACE (issue #77, both directions): the
-                        // store's record for this group's session — → the
-                        // wallet's sends ([WmpGroupMessage.outbound]), ← the
-                        // arrivals — the machine traffic rendered as an
-                        // inspection log, newest first. Not a chat transcript.
+                        // Per-group TRACE (opt-in): the message category that
+                        // shows the group's WMP traffic. The toggle is
+                        // persisted by backend, so it survives restarts.
                         if (ep.sessionId != null) {
+                            val backend = ep.providerUrl ?: WmpEndpointInfo.ORIGIN_ENGINE
                             val trace = messages.filter {
                                 (it.sessionId == ep.sessionId) &&
                                     (
@@ -218,13 +219,30 @@ fun WmpEndpointsScreen(
                                         (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION && it.backend == ep.providerUrl)
                                     )
                             }
+                            val enabled = traceEnabled[backend] == true
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(
-                                    stringResource(R.string.wmp_endpoint_trace),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Medium,
-                                )
-                                if (trace.isEmpty()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(
+                                        stringResource(R.string.wmp_endpoint_trace),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                    androidx.compose.material3.Switch(
+                                        checked = enabled,
+                                        onCheckedChange = { onToggleTrace(backend, it) },
+                                    )
+                                }
+                                if (!enabled) {
+                                    Text(
+                                        stringResource(R.string.wmp_endpoint_trace_off),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
+                                } else if (trace.isEmpty()) {
                                     Text(
                                         stringResource(R.string.wmp_endpoint_trace_empty),
                                         style = MaterialTheme.typography.bodySmall,

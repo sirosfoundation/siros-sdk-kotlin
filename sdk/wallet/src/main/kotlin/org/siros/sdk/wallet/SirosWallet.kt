@@ -8215,6 +8215,44 @@ class SirosWallet private constructor(
         return out
     }
 
+    /** Snapshot of a joined backend for persistence after an app restart. */
+    fun wmpJoinRecord(provider: String): WmpJoinRecord? {
+        val peer = joinPeers[provider] ?: return null
+        val urls = joinPeerUrls[provider] ?: return null
+        val sessionId = peer.currentSessionId ?: return null
+        val token = peer.currentResumptionToken ?: return null
+        return WmpJoinRecord(
+            providerUrl = provider,
+            sendUrl = urls.first,
+            sseUrl = urls.second,
+            sessionId = sessionId,
+            resumptionToken = token,
+            groupId = joinGroups[provider],
+            groupName = joinGroupNames[provider],
+        )
+    }
+
+    /** Restore a persisted group after an app restart (resumption token, no nonce reuse). */
+    suspend fun resumeWmpJoin(record: WmpJoinRecord): Boolean {
+        val transport = org.siros.sdk.transport.wmp.WmpHttpSseTransport(
+            sendUrl = record.sendUrl,
+            sseUrl = record.sseUrl,
+            tokenProvider = { joinBearerFor(record.providerUrl) },
+        )
+        val peer = createWmpPeerFromTransport(transport, org.siros.sdk.transport.wmp.WmpSessionConfig())
+        return try {
+            peer.resume(record.sessionId, record.resumptionToken)
+            joinPeers[record.providerUrl] = peer
+            joinPeerUrls[record.providerUrl] = record.sendUrl to record.sseUrl
+            record.groupId?.let { joinGroups[record.providerUrl] = it }
+            record.groupName?.let { joinGroupNames[record.providerUrl] = it }
+            true
+        } catch (e: Exception) {
+            Timber.w(e, "WMP group resume failed for ${record.providerUrl}")
+            false
+        }
+    }
+
     /**
      * Pull the recent group messages (issue #77): one `wmp.message.poll`
      * per connected session — the engine's mailbox fan-out (`to` naming a
