@@ -117,6 +117,9 @@ import org.siros.sdk.transport.engine.SignRequestParams
 import org.siros.sdk.transport.engine.WalletEngineSession
 
 @OptIn(ExperimentalCoroutinesApi::class)
+/** A stand-in invited backend for the join/leave tests. */
+private const val RELAY = "https://relay.example.com"
+
 class SirosWalletTest {
 
     private val dispatcher = StandardTestDispatcher()
@@ -14839,6 +14842,50 @@ class SirosWalletTest {
         } finally {
             SirosWallet.createWmpPeerFromTransport = originalFactory
         }
+    }
+
+    @Test
+    fun leavingAWmpJoinClosesTheSessionAndForgetsTheBackend() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val wallet = newWallet(
+            "joinPeers" to java.util.concurrent.ConcurrentHashMap(mapOf(RELAY to peer)),
+            "joinPeerUrls" to java.util.concurrent.ConcurrentHashMap(
+                mapOf(RELAY to (RELAY + "/wmp" to RELAY + "/wmp/events")),
+            ),
+            "joinGroups" to java.util.concurrent.ConcurrentHashMap(mapOf(RELAY to "group-1")),
+            "joinGroupNames" to java.util.concurrent.ConcurrentHashMap(mapOf(RELAY to "meadow")),
+            "joinAsClients" to java.util.concurrent.ConcurrentHashMap(mapOf(RELAY to ("client" to "secret"))),
+        )
+
+        wallet.leaveWmpJoin(RELAY)
+
+        // wmp-core §4.6's close — the backend releases the session and its
+        // mailbox; the reason names the leave.
+        coVerify { peer.close("left_group") }
+        for (field in listOf("joinPeers", "joinPeerUrls", "joinGroups", "joinGroupNames", "joinAsClients")) {
+            assertTrue(
+                "$field still holds the left backend",
+                (getField(wallet, field) as Map<*, *>).isEmpty(),
+            )
+        }
+    }
+
+    @Test
+    fun leavingAWmpJoinDropsTheLocalStateEvenWhenTheCloseFails() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>()
+        coEvery { peer.close(any()) } throws java.io.IOException("the backend is down")
+        val wallet = newWallet(
+            "joinPeers" to java.util.concurrent.ConcurrentHashMap(mapOf(RELAY to peer)),
+            "joinGroups" to java.util.concurrent.ConcurrentHashMap(mapOf(RELAY to "group-1")),
+        )
+
+        wallet.leaveWmpJoin(RELAY)
+
+        // A dead backend must not pin the membership in the wallet: the
+        // session there dies at its TTL regardless, and the local record is
+        // gone either way.
+        assertTrue((getField(wallet, "joinPeers") as Map<*, *>).isEmpty())
+        assertTrue((getField(wallet, "joinGroups") as Map<*, *>).isEmpty())
     }
 
     internal fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {

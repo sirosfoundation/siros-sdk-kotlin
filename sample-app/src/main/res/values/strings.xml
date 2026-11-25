@@ -186,6 +186,10 @@
     <string name="wmp_group_message_arrived">Group message: %1$s</string>
     <string name="wmp_endpoint_reply">Reply to the group…</string>
     <string name="wmp_endpoint_reply_send">Send</string>
+    <string name="wmp_endpoint_leave">Leave group</string>
+    <string name="wmp_endpoint_leave_confirm_title">Leave group?</string>
+    <string name="wmp_endpoint_leave_confirm_text">The wallet closes its session in \"%1$s\" and forgets the group. Rejoining needs a fresh invite.</string>
+    <string name="wmp_endpoint_leave_confirm">Leave</string>
     <string name="wmp_endpoint_reply_sent">Reply sent: %1$s</string>
     <string name="flow_cancel">Cancel</string>
     <string name="flow_close">Close</string>

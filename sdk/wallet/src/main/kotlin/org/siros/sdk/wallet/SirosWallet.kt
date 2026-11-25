@@ -8289,6 +8289,33 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Leave one invited backend's group — the reverse of the join: closes
+     * that join peer's session (`wmp.session.close` — the backend releases
+     * the session and its mailbox) and forgets the backend's join state.
+     * The wallet's other joined backends and its engine session are
+     * untouched. The invitation nonce is single-use and never replayable:
+     * rejoining needs a fresh invite. The app removes its persisted record
+     * so the next startup does not try to resume a closed session.
+     *
+     * Local state is dropped even when the close POST fails (the backend
+     * sweeps the session at its TTL regardless); the failure is logged.
+     */
+    suspend fun leaveWmpJoin(provider: String) {
+        val peer = joinPeers.remove(provider) ?: return
+        joinPeerUrls.remove(provider)
+        joinGroups.remove(provider)
+        joinGroupNames.remove(provider)
+        joinAsClients.remove(provider)
+        joinAsTokens.remove(provider)
+        try {
+            peer.close("left_group")
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Timber.w(e, "WMP group close failed for $provider - the local state is dropped regardless")
+        }
+    }
+
+    /**
      * Pull the recent group messages (issue #77): one `wmp.message.poll`
      * per connected session — the engine's mailbox fan-out (`to` naming a
      * group expands to every member's box, handler.rs) lands them there;

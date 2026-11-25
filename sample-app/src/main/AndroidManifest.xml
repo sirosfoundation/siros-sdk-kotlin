@@ -73,6 +73,16 @@
                 <data android:scheme="openid-credential-offer" />
             </intent-filter>
 
+            <!-- WMP group invitations (wmp-invitation §4.2: the QR encodes
+                 wmp://invite?data=...) — the same URI the in-app scanner
+                 reads, also deliverable as a deep link. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="wmp" android:host="invite" />
+            </intent-filter>
+
             <!-- OID4VP presentation request deep links. "mdoc-openid4vp" is
                  ISO 18013-7 Annex B's mdoc-specific scheme, using the same
                  wire shape as plain "openid4vp". -->

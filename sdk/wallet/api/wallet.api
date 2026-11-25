@@ -1025,6 +1025,7 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun interopProfileFor (Ljava/lang/String;)Lorg/siros/sdk/credentials/interop/InteropProfile;
 	public final fun isTransactionDataEffectivelyEnabled ()Z
 	public final fun joinedGroups ()Ljava/util/Map;
+	public final fun leaveWmpJoin (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun listAccounts ()Ljava/util/List;
 	public final fun listLoginableAccounts ()Ljava/util/List;
 	public final fun listPasskeys ()Ljava/util/List;

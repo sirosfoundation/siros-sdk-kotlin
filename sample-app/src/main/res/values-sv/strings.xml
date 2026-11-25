@@ -474,5 +474,9 @@
     <string name="wmp_group_message_arrived">Gruppmeddelande: %1$s</string>
     <string name="wmp_endpoint_reply">Svara gruppen…</string>
     <string name="wmp_endpoint_reply_send">Skicka</string>
+    <string name="wmp_endpoint_leave">Lämna grupp</string>
+    <string name="wmp_endpoint_leave_confirm_title">Lämna gruppen?</string>
+    <string name="wmp_endpoint_leave_confirm_text">Plånboken stänger sin session i \"%1$s\" och glömmer gruppen. För att gå med igen krävs en ny inbjudan.</string>
+    <string name="wmp_endpoint_leave_confirm">Lämna</string>
     <string name="wmp_endpoint_reply_sent">Svar skickat: %1$s</string>
 </resources>

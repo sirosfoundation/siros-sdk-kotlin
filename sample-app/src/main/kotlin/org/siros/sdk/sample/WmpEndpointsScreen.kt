@@ -86,7 +86,11 @@ fun WmpEndpointsScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSend: (backend: String, text: String) -> Unit,
+    onLeave: (backend: String) -> Unit,
 ) {
+    // The pending leave confirmation (null = no dialog): the group card
+    // sets it, the AlertDialog below renders it.
+    var leaveTarget by remember { mutableStateOf<WmpEndpointInfo?>(null) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -309,11 +313,68 @@ fun WmpEndpointsScreen(
                                         Text(stringResource(R.string.wmp_endpoint_reply_send))
                                     }
                                 }
+                                // Leaving is invitation-card-only: the engine
+                                // card's "session" is the wallet's own
+                                // connection, not a group membership.
+                                if (ep.origin == WmpEndpointInfo.ORIGIN_INVITATION) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                    ) {
+                                        androidx.compose.material3.TextButton(
+                                            onClick = { leaveTarget = ep },
+                                        ) {
+                                            Text(
+                                                stringResource(R.string.wmp_endpoint_leave),
+                                                color = MaterialTheme.colorScheme.error,
+                                                style = MaterialTheme.typography.labelMedium,
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    // The leave is destructive (a fresh invite is needed to rejoin) — it
+    // confirms first, naming the group.
+    leaveTarget?.let { target ->
+        val backend = target.providerUrl ?: return@let
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { leaveTarget = null },
+            title = { Text(stringResource(R.string.wmp_endpoint_leave_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.wmp_endpoint_leave_confirm_text,
+                        target.groupName ?: target.groupId ?: backend,
+                    ),
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        leaveTarget = null
+                        onLeave(backend)
+                    },
+                ) {
+                    Text(
+                        stringResource(R.string.wmp_endpoint_leave_confirm),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { leaveTarget = null },
+                ) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 }

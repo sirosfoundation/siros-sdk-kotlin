@@ -3291,6 +3291,26 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     }
 
     /**
+     * Issue #77: leave one invited backend's group — the SDK closes the
+     * join session server-side and forgets the backend; the persisted
+     * record goes with it so a restart never resumes a closed session.
+     * Rejoining needs a fresh invite (the nonce is single-use).
+     */
+    fun leaveGroup(backend: String) {
+        viewModelScope.launch {
+            try {
+                wallet.leaveWmpJoin(backend)
+                wmpJoinStore.remove(backend)
+            } catch (e: Exception) {
+                if (isSilentCancellation(e)) throw e
+                reportError(e.message ?: "Leaving the group failed", cause = e, context = "wmp:$backend")
+            }
+            refreshWmpEndpoints()
+            refreshWmpMessages()
+        }
+    }
+
+    /**
      * Issue #77: reply to the group an invited backend's invitation named —
      * the message rides that backend's join peer. (The engine backend has
      * no joined group on the invitation path: this refuses there; the
