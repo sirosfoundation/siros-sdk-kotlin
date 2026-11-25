@@ -1849,9 +1849,31 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     private var presentationContinuation: kotlinx.coroutines.CancellableContinuation<List<Long>>? = null
 
+    private val wmpJoinStore = JsonFileWmpJoinStore(activity.filesDir)
+
     init {
         observeWalletState()
         setupEventListener()
+        viewModelScope.launch { restoreWmpJoins() }
+    }
+
+    /** Restore every joined group whose session still exists on its backend. */
+    private suspend fun restoreWmpJoins() {
+        wmpJoinStore.load().forEach { record ->
+            if (wallet.resumeWmpJoin(record)) {
+                persistJoinedGroups()
+            }
+        }
+        refreshWmpEndpoints()
+    }
+
+    /** Persist the latest session + resumption token for every joined group. */
+    private fun persistJoinedGroups() {
+        wallet.connectedWmpEndpoints().forEach { endpoint ->
+            endpoint.providerUrl?.let { provider ->
+                wallet.wmpJoinRecord(provider)?.let(wmpJoinStore::save)
+            }
+        }
     }
 
     private fun setupEventListener() {
@@ -2320,6 +2342,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     }
 
     fun disconnect() {
+        wmpJoinStore.clear()
         wallet.logout()
         _showAddCredential.value = false
         _availableCredentials.value = emptyList()
@@ -3876,6 +3899,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     is DeepLinkType.Invitation -> {
                         Log.i(TAG, "Routing to invitation consume")
                         wallet.consumeInvitation(link.uri)
+                        // Persist the joined session + the latest resumption
+                        // token so the group restores after an app restart.
+                        persistJoinedGroups()
                         // The join is NOT a flow: nothing transitions, so
                         // without this the success was silent (the scan
                         // closed, home screen, no signal). Name the outcome.

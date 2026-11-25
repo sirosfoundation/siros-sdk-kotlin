@@ -49,6 +49,16 @@ class WmpPeer(
     val currentCapabilities: JsonObject?
         get() = session.currentCapabilities
 
+    /** The latest resumption token (rotated on every resume), for persistence. */
+    val currentResumptionToken: String?
+        get() = session.currentResumptionToken
+
+    /** Restore a persisted session after an app restart and resume it. */
+    suspend fun resume(sessionId: String, resumptionToken: String) {
+        session.resumeWith(sessionId, resumptionToken)
+        startDispatch()
+    }
+
     private val registry = WmpRegistry()
     override val codec: WmpCodec get() = session.codec
 

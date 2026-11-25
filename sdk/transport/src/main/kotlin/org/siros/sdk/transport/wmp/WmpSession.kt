@@ -47,6 +47,11 @@ class WmpSession(
     val currentCapabilities: JsonObject?
         get() = sessionId?.let { capabilities }
     private var resumptionToken: String? = null
+
+    /** The latest resumption token (rotated on every resume), for persistence. */
+    val currentResumptionToken: String?
+        get() = resumptionToken
+
     private var lastReceivedId: String? = null
     // Saved from the create() call so the fresh-create fallback after a
     // resume exhaustion replays the same auth, sender and capabilities.
@@ -157,6 +162,16 @@ class WmpSession(
 
         _state.value = WmpSessionState.ACTIVE
         Timber.i("WMP session created: $sessionId")
+    }
+
+    /**
+     * Restore a previously persisted session and resume it (after an app
+     * restart): seeds the stored session id + token, then runs [resume].
+     */
+    suspend fun resumeWith(sessionId: String, resumptionToken: String) {
+        this.sessionId = sessionId
+        this.resumptionToken = resumptionToken
+        resume()
     }
 
     /** Resume an existing session after reconnection. */
