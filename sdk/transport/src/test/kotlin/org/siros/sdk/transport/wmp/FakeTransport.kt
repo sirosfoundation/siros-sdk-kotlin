@@ -20,9 +20,14 @@ class FakeTransport : Transport {
     private val _incoming = Channel<ByteArray>(Channel.BUFFERED)
     private val _sent = CopyOnWriteArrayList<ByteArray>()
     val sentMessages: List<ByteArray> get() = _sent.toList()
+    val sessionCreatedIds = CopyOnWriteArrayList<String>()
 
     override suspend fun connect() {
         _state.value = TransportState.CONNECTED
+    }
+
+    override suspend fun onSessionCreated(sessionId: String) {
+        sessionCreatedIds.add(sessionId)
     }
 
     override suspend fun send(message: ByteArray) {

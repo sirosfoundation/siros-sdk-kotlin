@@ -1850,11 +1850,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private var presentationContinuation: kotlinx.coroutines.CancellableContinuation<List<Long>>? = null
 
     private val wmpJoinStore = JsonFileWmpJoinStore(activity.filesDir)
+    private var wmpJoinRestoreJob: Job? = null
 
     init {
         observeWalletState()
         setupEventListener()
-        viewModelScope.launch { restoreWmpJoins() }
+        wmpJoinRestoreJob = viewModelScope.launch { restoreWmpJoins() }
     }
 
     /** Restore every joined group whose session still exists on its backend. */
@@ -3246,17 +3247,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /** Issue #77: open the endpoint list (refreshing the snapshot + starting the live collector). */
     fun openWmpEndpoints() {
         _showWmpEndpoints.value = true
-        refreshWmpEndpoints()
-        refreshWmpMessages()
-        if (wmpEventsJob == null) {
-            wmpEventsJob = viewModelScope.launch {
-                wallet.groupMessageEvents().collect { msg ->
-                    _wmpMessages.value = wallet.wmpGroupInbox()
-                    reportInfo(
-                        activity.getString(R.string.wmp_group_message_arrived, msg.text),
-                        context = "wmp:${msg.backend}",
-                    )
-                }
+        wmpEventsJob?.cancel()
+        wmpEventsJob = viewModelScope.launch {
+            // Startup restore and the login-time wallet rebuild are async.
+            // Snapshotting before their replacement wallet has resumed its
+            // joins produces an empty Groups screen that never catches up.
+            wmpJoinRestoreJob?.join()
+            refreshWmpEndpoints()
+            refreshWmpMessages()
+            wallet.groupMessageEvents().collect { msg ->
+                _wmpMessages.value = wallet.wmpGroupInbox()
+                reportInfo(
+                    activity.getString(R.string.wmp_group_message_arrived, msg.text),
+                    context = "wmp:${msg.backend}",
+                )
             }
         }
     }
@@ -3937,6 +3941,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val current = wallet
         val currentState = current.state.value
         if (currentState is WalletState.Disconnected || currentState is WalletState.Error) {
+            wmpJoinRestoreJob?.cancel()
             current.destroy()
             // Review of #298: the add-credential chooser's offersJob (see openAddCredential) collects the OLD
             // wallet's availableCredentials StateFlow by reference - left running, it would silently go on
@@ -3953,6 +3958,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             }
             observeWalletState()
             setupEventListener()
+            // Join peers live on the SirosWallet instance. Rebuilding for a
+            // login destroyed the startup-restored peers, so restore them
+            // again on the replacement before Groups takes its snapshot.
+            wmpJoinRestoreJob = viewModelScope.launch { restoreWmpJoins() }
         }
     }
 

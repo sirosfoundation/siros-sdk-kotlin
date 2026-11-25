@@ -32,8 +32,12 @@ class JsonFileWmpMessageStore(dir: File) : WmpMessageStore {
         val from: String? = null,
         val text: String,
         val messageId: String? = null,
+        // The direction flag (the trace's →/← marker): absent in records
+        // written before it existed — `false` (inbound) is the correct
+        // reading for those, so a plain default suffices.
+        val outbound: Boolean = false,
     ) {
-        fun plain() = WmpGroupMessage(backend, sessionId, from, text, messageId)
+        fun plain() = WmpGroupMessage(backend, sessionId, from, text, messageId, outbound)
         fun key() = "${backend}:${sessionId}:${messageId ?: text}"
     }
 
@@ -67,6 +71,7 @@ class JsonFileWmpMessageStore(dir: File) : WmpMessageStore {
         val box = state.boxes[boxKey].orEmpty()
         val stored = Stored(
             message.backend, message.sessionId, message.from, message.text, message.messageId,
+            message.outbound,
         )
         if (box.none { it.key() == stored.key() }) {
             write(state.copy(boxes = state.boxes + (boxKey to listOf(stored) + box)))

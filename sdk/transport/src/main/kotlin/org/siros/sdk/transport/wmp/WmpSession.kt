@@ -61,6 +61,7 @@ class WmpSession(
 
     private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<JsonRpcResponse>>()
     private val incomingNotifications = Channel<JsonRpcRequest>(Channel.BUFFERED)
+    private var messageLoopStarted = false
 
     /** Notifications from the server (flow.progress, flow.complete, etc.). */
     fun notifications(): Flow<JsonRpcRequest> = incomingNotifications.receiveAsFlow()
@@ -215,6 +216,12 @@ class WmpSession(
         if (result?.resumptionToken != null) {
             resumptionToken = result.resumptionToken
         }
+
+        // A cold restore has never told the HTTP+SSE transport which session
+        // its stream belongs to: resumeWith seeded THIS session, not the
+        // transport. Open the stream now, exactly as create does, or the
+        // resumed peer can poll but never receives live deliveries.
+        transport.onSessionCreated(sid)
 
         _state.value = WmpSessionState.ACTIVE
         Timber.i("WMP session resumed: $sessionId")
@@ -375,7 +382,13 @@ class WmpSession(
         transport.send(msg)
     }
 
+    @Synchronized
     private fun startMessageLoop() {
+        // create, every resume, and every reconnect share this scope. Starting
+        // another pair of collectors would make them compete for responses and
+        // notifications; one pair owns the transport for the session's life.
+        if (messageLoopStarted) return
+        messageLoopStarted = true
         scope.launch {
             transport.incoming().collect { data ->
                 try {
