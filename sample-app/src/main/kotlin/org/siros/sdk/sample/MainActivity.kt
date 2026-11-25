@@ -896,6 +896,7 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                     viewModel.refreshWmpMessages()
                 },
                 onSend = viewModel::replyToGroup,
+                onLeave = viewModel::leaveGroup,
             )
 
             // Consolidated WSCD settings sub-screen (one tab per plugin -
