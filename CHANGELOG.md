@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.4] - 2026-11-25
+
+### Added
+- **Per-group opt-in WMP message trace** (#442): a persisted Trace toggle per backend, off by default. The trace
+  category shows the latest six messages for the group (outbound → / inbound ←). Toggles take effect immediately and
+  independently per group; messages need no restart persistence.
+- **Joined-group persistence across app restarts** (#442): sessions persist their id and latest resumption token.
+  On startup, joined groups resume by token (rotated on every resume), never by re-consuming a spent invitation nonce.
+  Logout clears the store. Includes the startup crash fix and the API dumps for the resume surface.
+- **The invite-join's create carries the invited backend's own AS token** (the DCR chain), fixing the strict-engine
+  -31002 when the wallet-backend's token was sent instead.
+
+
+
 ## [0.24.3] - 2026-11-24
 
 ### Fixed
