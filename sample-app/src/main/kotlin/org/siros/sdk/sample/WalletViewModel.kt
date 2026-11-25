@@ -1864,7 +1864,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 persistJoinedGroups()
             }
         }
-        refreshWmpEndpoints()
+        // Deliberately no refreshWmpEndpoints() here: this runs from a
+        // constructor-time launch, before that StateFlow is initialized.
+        // openWmpEndpoints() refreshes on entry.
     }
 
     /** Persist the latest session + resumption token for every joined group. */
