@@ -18,6 +18,12 @@ import org.junit.Test
  * the refusal (the transport-disconnect recovery never fires when no
  * disconnect was observed - the wallet foregrounded straight into a scan).
  *
+ * And the stalled-stream recovery (#447): a flow start that times out on
+ * the transport tears the stream down, resumes (the token rotation) and
+ * reopens it BEFORE the retry — the engine's asks ride the SSE stream, so
+ * a retry on the still-dead one orphans the flow exactly like the first
+ * attempt did.
+ *
  * Driven with a scripted responder: a coroutine that watches the fake
  * transport's outgoing messages and answers each per the script, while the
  * flow under test runs on the runBlocking main path.
@@ -55,6 +61,11 @@ class WmpPeerSessionLossTest {
     /** A successful flow start response for `id`. */
     private fun startResponse(): (id: String) -> String = { id ->
         """{"jsonrpc":"2.0","id":"$id","result":{"wmp":{"session_id":"s-any","version":"0.1"},"flow_id":"flow-1","flow_type":"oid4vp"}}"""
+    }
+
+    /** A successful resume response for `id`, rotating the resumption token. */
+    private fun resumeResponse(): (id: String) -> String = { id ->
+        """{"jsonrpc":"2.0","id":"$id","result":{"wmp":{"session_id":"s-one","version":"0.1"},"resumed":true,"resumption_token":"tok-rotated"}}"""
     }
 
     /** A `-31000` "Session not found" refusal for `id`, session `sid`. */
@@ -187,15 +198,20 @@ class WmpPeerSessionLossTest {
         val peer = WmpPeer(session)
 
         // Script: the create answers; the FIRST flow.start is never answered
-        // (the severed connection); the RETRY (a fresh POST) answers.
+        // (the severed connection); the recovery's resume answers (the
+        // stream teardown reopens before the retry — #447); the RETRY (a
+        // fresh POST on the recovered stream) answers.
         val responder = launch {
             waitForSentCount(transport, 1)
             respond(transport, 1, createResponse("s-one"))
             // The first start: recorded, deliberately never answered.
             waitForSentCount(transport, 2)
-            // The retry after the timeout.
+            // #447: the timed-out start's recovery — the resume.
             waitForSentCount(transport, 3)
-            respond(transport, 3, startResponse())
+            respond(transport, 3, resumeResponse())
+            // The retry on the recovered stream.
+            waitForSentCount(transport, 4)
+            respond(transport, 4, startResponse())
         }
 
         session.create("token")
@@ -208,11 +224,76 @@ class WmpPeerSessionLossTest {
             request(transport, 2).method,
         )
         assertEquals(
-            "the retry is a fresh POST of the same flow",
-            "wmp.flow.start",
+            "the timed-out start recovers the session before the retry",
+            "wmp.session.resume",
             request(transport, 3).method,
         )
-        assertEquals(3, transport.sentMessages.size)
+        assertEquals(
+            "the retry is a fresh POST of the same flow",
+            "wmp.flow.start",
+            request(transport, 4).method,
+        )
+        assertEquals(4, transport.sentMessages.size)
+        responder.cancel()
+    }
+
+    /**
+     * #447's own shape: the timed-out POST is only half the failure — the
+     * SSE stream (the engine's asks ride it, wmp-transport.md §4.3.4's
+     * binding) is the engine's OTHER connection to the same machine and
+     * usually died with it. The retry must ride a REOPENED stream, in
+     * order: teardown → resume (the token rotation) → reopen → the fresh
+     * POST. The single-flight recovery runs exactly once even though the
+     * session's transport-state collector ALSO reacts to the same
+     * disconnect.
+     */
+    @Test
+    fun aTimedOutFlowStartTearsDownAndReopensTheStreamBeforeTheRetry() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(
+            transport,
+            config = WmpSessionConfig(requestTimeoutMs = 300, reconnectBaseMs = 1, reconnectMaxMs = 1),
+        )
+        val peer = WmpPeer(session)
+
+        val responder = launch {
+            waitForSentCount(transport, 1)
+            respond(transport, 1, createResponse("s-one"))
+            // The first start: recorded, deliberately never answered.
+            waitForSentCount(transport, 2)
+            // The recovery's resume; then the retried start.
+            waitForSentCount(transport, 3)
+            respond(transport, 3, resumeResponse())
+            waitForSentCount(transport, 4)
+            respond(transport, 4, startResponse())
+        }
+
+        session.create("token")
+        val result = peer.startFlow("oid4vp", "flow-1")
+
+        assertEquals("flow-1", result.flowId)
+
+        // The order, from the transport's own event log:
+        val events = transport.events
+        val firstStart = events.indexOf("send:wmp.flow.start")
+        val teardown = events.indexOf("disconnect")
+        val reopen = events.drop(teardown + 1).indexOf("connect").let { if (it < 0) -1 else it + teardown + 1 }
+        val resume = events.indexOf("send:wmp.session.resume")
+        val retry = events.lastIndexOf("send:wmp.flow.start")
+
+        assertTrue("the first start went out before the teardown", firstStart in 0 until teardown)
+        assertTrue("the stream teardown precedes the resume", teardown < resume)
+        assertTrue("the stream reopens before the resume is sent", reopen in (teardown + 1)..resume)
+        assertTrue("the retry rides the reopened stream, after the resume", resume < retry)
+        assertEquals(
+            "the recovery runs exactly once (single-flight): one resume, one teardown",
+            1,
+            events.count { it == "send:wmp.session.resume" },
+        )
+        assertEquals(1, events.count { it == "disconnect" })
+        // The resume the recovery sent rotated the token (the next
+        // disconnect must present THIS one, not the spent one).
+        assertEquals("tok-rotated", session.currentResumptionToken)
         responder.cancel()
     }
 }

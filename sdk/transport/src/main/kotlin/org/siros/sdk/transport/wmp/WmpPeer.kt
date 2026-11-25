@@ -225,18 +225,42 @@ class WmpPeer(
             // transport error (it arrived - the connection was alive), so
             // the two retries never stack on one failure.
             if (e.cause is java.io.IOException) {
-                Timber.w("flow.start for $flowId failed on the transport (${e.message}); retrying once on a fresh connection")
+                // #417's severed connection, and #447's recovery: the SSE
+                // stream is the engine's OTHER connection to the same
+                // machine — when the POST's connection died, the stream
+                // usually died with it. The bare retry rode a fresh POST
+                // connection but left the stream dead: the engine's asks
+                // went nowhere and the flow orphaned anyway (found live,
+                // the Cleverbase Echo E2E round: every retry answered
+                // "flow_id in use — re-attaching" and the wallet sat at
+                // "contacting verifier" forever). Recover the stream first
+                // — teardown, resume (the token rotation), reopen — THEN
+                // the fresh POST. A session-loss error is NOT a transport
+                // error (it arrived - the connection was alive), so the
+                // two retries never stack on one failure.
+                Timber.w("flow.start for $flowId failed on the transport (${e.message}); reconnecting the stream before the retry")
+                session.recoverTransport()
                 return performStart(flowType, flowId, params)
             }
             throw e
         } catch (e: WmpTimeoutException) {
-            // #417's own shape: the request timeout on a POST that hung on
-            // the severed connection - the start never reached the engine,
-            // the flow id is unused server-side, the cancelled call has
-            // evicted the dead pooled connection. One retry, fresh
-            // connection; if the fresh POST also times out (a genuinely
-            // slow-but-live flow), the rethrow below surfaces it.
-            Timber.w("flow.start for $flowId timed out on the transport; retrying once on a fresh connection")
+            // #417's timeout, #447's recovery: the request timeout on a
+            // POST that hung on the severed connection means the start
+            // never reached the engine, the flow id is unused server-side,
+            // and the cancelled call has evicted the dead pooled
+            // connection. But the POST is only HALF the transport: the
+            // engine's asks and the completion ride the SSE stream, the
+            // other connection to the same machine, and a retry on the
+            // still-dead stream orphans the flow exactly like the first
+            // attempt did — the asks go nowhere, the POST times out
+            // again, the retry answers "flow_id in use" against a flow
+            // whose asks the wallet will never see. Force the stream's
+            // recovery before the retry (teardown → resume, the token
+            // rotation → reopen), and if the fresh POST also times out (a
+            // genuinely slow-but-live flow), the rethrow below surfaces
+            // it.
+            Timber.w("flow.start for $flowId timed out on the transport; reconnecting the stream before the retry")
+            session.recoverTransport()
             return performStart(flowType, flowId, params)
         }
     }
