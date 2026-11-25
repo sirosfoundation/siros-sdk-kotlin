@@ -469,6 +469,7 @@
     <string name="wmp_endpoint_caps">Förmågor</string>
     <string name="wmp_endpoint_trace">Meddelandespår</string>
     <string name="wmp_endpoint_trace_empty">Ingen trafik ännu - gruppens meddelanden landar här.</string>
+    <string name="wmp_endpoint_trace_off">Spår avstängt - aktivera för att granska gruppens WMP-meddelanden.</string>
     <string name="wmp_endpoint_messages_empty">Inga gruppmeddelanden ännu - meddelanden gruppen skickar landar här.</string>
     <string name="wmp_group_message_arrived">Gruppmeddelande: %1$s</string>
     <string name="wmp_endpoint_reply">Svara gruppen…</string>

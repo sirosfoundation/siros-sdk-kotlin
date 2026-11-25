@@ -3189,6 +3189,33 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      */
     private val _wmpMessages = MutableStateFlow<List<org.siros.sdk.wallet.WmpGroupMessage>>(emptyList())
     val wmpMessages: StateFlow<List<org.siros.sdk.wallet.WmpGroupMessage>> = _wmpMessages
+
+    /**
+     * Per-group trace visibility (user opt-in): the backend whose Trace is on.
+     * Persisted in the settings store, so the toggle survives app restarts.
+     * The key is the provider URL, or ORIGIN_ENGINE for the wallet's own
+     * engine session.
+     */
+    private val _traceEnabled = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val traceEnabled: StateFlow<Map<String, Boolean>> = _traceEnabled
+
+    private val tracePreferences = WmpTracePreferences(
+        activity.getSharedPreferences(SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
+    )
+
+    init {
+        _traceEnabled.value = tracePreferences.load()
+    }
+
+    /** Whether this group's message trace is visible (default off). */
+    fun isTraceEnabled(backend: String): Boolean = _traceEnabled.value[backend] == true
+
+    /** Turn one group's message trace on or off, persisted. */
+    fun setTraceEnabled(backend: String, enabled: Boolean) {
+        tracePreferences.setEnabled(backend, enabled)
+        _traceEnabled.value = _traceEnabled.value + (backend to enabled)
+    }
+
     private var wmpEventsJob: kotlinx.coroutines.Job? = null
 
     /** Issue #77: open the endpoint list (refreshing the snapshot + starting the live collector). */

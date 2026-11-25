@@ -888,6 +888,8 @@ fun WalletScreen(viewModel: WalletViewModel, onVerify: () -> Unit) {
                     it.origin == org.siros.sdk.wallet.WmpEndpointInfo.ORIGIN_INVITATION
                 },
                 messages = viewModel.wmpMessages.collectAsState().value,
+                traceEnabled = viewModel.traceEnabled.collectAsState().value,
+                onToggleTrace = viewModel::setTraceEnabled,
                 onBack = viewModel::closeWmpEndpoints,
                 onRefresh = {
                     viewModel.refreshWmpEndpoints()

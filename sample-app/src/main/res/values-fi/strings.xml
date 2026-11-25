@@ -469,6 +469,7 @@
     <string name="wmp_endpoint_caps">Kykyvyt</string>
     <string name="wmp_endpoint_trace">Viestijälki</string>
     <string name="wmp_endpoint_trace_empty">Ei vielä liikennettä - ryhmän viestit ilmestyvät tähän.</string>
+    <string name="wmp_endpoint_trace_off">Jälki pois päältä - ota se käyttöön nähdäksesi ryhmän WMP-viestit.</string>
     <string name="wmp_endpoint_messages_empty">Ryhmän viestejä ei vielä - ryhmän lähettämät viestit ilmestyvät tähän.</string>
     <string name="wmp_group_message_arrived">Ryhmäviesti: %1$s</string>
     <string name="wmp_endpoint_reply">Vastaa ryhmäään…</string>
