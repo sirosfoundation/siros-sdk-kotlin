@@ -7,6 +7,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -224,6 +225,47 @@ class WmpSessionTest {
 
     private fun createSuccessResponse(requestId: String): String {
         return """{"jsonrpc":"2.0","id":"$requestId","result":{"wmp":{"version":"0.1","session_id":"session-123"},"resumption_token":"resume-abc"}}"""
+    }
+
+    /**
+     * wmp-core §4.4: `ttl` is OPTIONAL — omitted, the ENGINE's default
+     * applies. The SDK naming a short explicit ttl reaped live join
+     * sessions at one hour against engines defaulting to days (found live:
+     * golden-fox, 2026-11-25), so the default is to not name one.
+     */
+    @Test
+    fun createOmitsTheTtlByDefault_TheEnginesOwnDefaultApplies() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(transport = transport, config = WmpSessionConfig())
+
+        val createJob = launch { session.create(authToken = "tok") }
+        waitForSentCount(transport, 1)
+        val text = transport.sentMessages.last().toString(Charsets.UTF_8)
+        val createReq = codec.decodeRequest(transport.sentMessages.last())
+        transport.receiveFromServer(createSuccessResponse(createReq.id!!).toByteArray())
+        createJob.join()
+
+        assertFalse("an omitted ttl must not ride as an explicit null", text.contains("\"ttl\""))
+        session.close()
+    }
+
+    @Test
+    fun createNamesTheTtlWhenConfigured() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(
+            transport = transport,
+            config = WmpSessionConfig(sessionTtlSeconds = 120),
+        )
+
+        val createJob = launch { session.create(authToken = "tok") }
+        waitForSentCount(transport, 1)
+        val text = transport.sentMessages.last().toString(Charsets.UTF_8)
+        val createReq = codec.decodeRequest(transport.sentMessages.last())
+        transport.receiveFromServer(createSuccessResponse(createReq.id!!).toByteArray())
+        createJob.join()
+
+        assertTrue(text.contains("\"ttl\":120"))
+        session.close()
     }
 
     @Test

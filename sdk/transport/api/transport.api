@@ -2857,23 +2857,23 @@ public final class org/siros/sdk/transport/wmp/WmpSession {
 
 public final class org/siros/sdk/transport/wmp/WmpSessionConfig {
 	public fun <init> ()V
-	public fun <init> (IJIJJLorg/siros/sdk/transport/wmp/MtlsBinding;)V
-	public synthetic fun <init> (IJIJJLorg/siros/sdk/transport/wmp/MtlsBinding;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()I
+	public fun <init> (Ljava/lang/Integer;JIJJLorg/siros/sdk/transport/wmp/MtlsBinding;)V
+	public synthetic fun <init> (Ljava/lang/Integer;JIJJLorg/siros/sdk/transport/wmp/MtlsBinding;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/Integer;
 	public final fun component2 ()J
 	public final fun component3 ()I
 	public final fun component4 ()J
 	public final fun component5 ()J
 	public final fun component6 ()Lorg/siros/sdk/transport/wmp/MtlsBinding;
-	public final fun copy (IJIJJLorg/siros/sdk/transport/wmp/MtlsBinding;)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpSessionConfig;IJIJJLorg/siros/sdk/transport/wmp/MtlsBinding;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
+	public final fun copy (Ljava/lang/Integer;JIJJLorg/siros/sdk/transport/wmp/MtlsBinding;)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpSessionConfig;Ljava/lang/Integer;JIJJLorg/siros/sdk/transport/wmp/MtlsBinding;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getMaxReconnectAttempts ()I
 	public final fun getMtlsBinding ()Lorg/siros/sdk/transport/wmp/MtlsBinding;
 	public final fun getReconnectBaseMs ()J
 	public final fun getReconnectMaxMs ()J
 	public final fun getRequestTimeoutMs ()J
-	public final fun getSessionTtlSeconds ()I
+	public final fun getSessionTtlSeconds ()Ljava/lang/Integer;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
