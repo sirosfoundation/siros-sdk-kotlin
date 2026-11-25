@@ -8266,10 +8266,21 @@ class SirosWallet private constructor(
                 // An invitation front may have substituted its own anonymous
                 // principal on the nonce-bearing create. That substitution is
                 // invisible to the SDK, so the stored DCR principal is refused
-                // on resume even though it was presented on the join. Retry
-                // once without Authorization; the front then supplies the SAME
-                // anonymous principal. The resumption token remains mandatory.
-                if (!useJoinBearer || e.message?.contains("Session not found") != true) throw e
+                // on resume even though it was presented on the join. The same
+                // hole appears when the front's AS registry was wiped (a
+                // redeploy): the stored client's mint fails, the bearer falls
+                // back to the wallet's OWN token, and a strict engine refuses
+                // the foreign issuer (-31002 "Not authorized") just as it
+                // refuses an unknown principal (-31000 "Session not found" —
+                // wmp-transport §4.3.1 makes the two indistinguishable
+                // server-side, but a foreign-issuer refusal names itself).
+                // Retry once without Authorization; the front then supplies
+                // the SAME anonymous principal its proxy used at the join.
+                // The resumption token remains mandatory either way.
+                val refusal = e.message?.let {
+                    it.contains("Session not found") || it.contains("Not authorized")
+                } == true
+                if (!useJoinBearer || !refusal) throw e
                 Timber.i("WMP group resume retrying with the invitation principal for ${record.providerUrl}")
                 useJoinBearer = false
                 joinAsClients.remove(record.providerUrl)

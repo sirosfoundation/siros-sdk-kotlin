@@ -14888,6 +14888,44 @@ class SirosWalletTest {
         assertTrue((getField(wallet, "joinGroups") as Map<*, *>).isEmpty())
     }
 
+    @Test
+    fun restoringJoinedGroupRetriesWithoutAuthorizationWhenTheStoredClientIsRefused() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        var resumeCalls = 0
+        coEvery { peer.resume("session-123", "stored-token") } coAnswers {
+            resumeCalls++
+            // The front's redeploy wiped its AS registry: the stored client's
+            // mint failed, the bearer fell back to the wallet's OWN token, and
+            // the strict engine refused the foreign issuer.
+            if (resumeCalls == 1) throw org.siros.sdk.transport.wmp.WmpSessionException(
+                "Session resume failed: Not authorized",
+            )
+        }
+        val originalFactory = SirosWallet.createWmpPeerFromTransport
+        SirosWallet.createWmpPeerFromTransport = { _, _ -> peer }
+        try {
+            val wallet = newWallet()
+            val record = WmpJoinRecord(
+                providerUrl = "https://relay.example.com",
+                sendUrl = "https://relay.example.com/wmp",
+                sseUrl = "https://relay.example.com/wmp/events",
+                sessionId = "session-123",
+                resumptionToken = "stored-token",
+                asClientId = "wiped-by-the-deploy",
+                asClientSecret = "gone",
+            )
+
+            assertTrue(wallet.resumeWmpJoin(record))
+            assertEquals("the refusal retried once without Authorization", 2, resumeCalls)
+            assertNull(
+                "the dead client is dropped so later joins re-register a fresh one",
+                (getField(wallet, "joinAsClients") as Map<*, *>)[record.providerUrl],
+            )
+        } finally {
+            SirosWallet.createWmpPeerFromTransport = originalFactory
+        }
+    }
+
     internal fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())
