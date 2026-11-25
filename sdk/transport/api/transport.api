@@ -2790,6 +2790,7 @@ public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport
 	public fun forgetFlow (Ljava/lang/String;)V
 	public fun getCodec ()Lorg/siros/sdk/transport/wmp/WmpCodec;
 	public final fun getCurrentCapabilities ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getCurrentResumptionToken ()Ljava/lang/String;
 	public final fun getCurrentSessionId ()Ljava/lang/String;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun messageDeliveries ()Lkotlinx/coroutines/flow/Flow;
@@ -2797,6 +2798,7 @@ public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport
 	public fun notifyIf (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun recreateSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun recreateSession$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun resume (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun send (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendCredentialNotification (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun sendCredentialNotification$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
@@ -2839,6 +2841,7 @@ public final class org/siros/sdk/transport/wmp/WmpSession {
 	public final fun create (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun create$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun getCurrentCapabilities ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getCurrentResumptionToken ()Ljava/lang/String;
 	public final fun getCurrentSessionId ()Ljava/lang/String;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun isSessionGone (Ljava/lang/String;)Z
@@ -2846,6 +2849,7 @@ public final class org/siros/sdk/transport/wmp/WmpSession {
 	public final fun recreate (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun recreate$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun resume (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun resumeWith (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendNotification (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendRequest (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun sendRequest$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
