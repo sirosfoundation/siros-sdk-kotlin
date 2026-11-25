@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.5] - 2026-11-25
+
+### Fixed
+
+- **A restored join actually receives (#443):** the resume path never opened the SSE event stream for a
+  cold-restored session — `resumeWith` seeded the session into `WmpSession` but not the transport, so a
+  restored peer could poll yet never received live deliveries. Resume now calls `onSessionCreated` and opens
+  the stream, and the message loop is idempotent so a reconnect's second collector pair never steals the
+  first's responses.
+- **The restore reuses the join's AS client (#443):** HTTPS sessions are bound to the authenticated principal,
+  so a restart's fresh RFC 8414/7591 registration was a DIFFERENT principal and the engine answered the spec's
+  indistinguishable `-31000`. `WmpJoinRecord` now carries the registered client (persisted by the sample); a
+  `-31000` on resume falls back once to no `Authorization` — an invitation front's substituted principal is the
+  one the session actually belongs to. The resumption token stays mandatory either way.
+- **Groups no longer snapshots mid-restore (#443):** opening Groups waits for the restore job and always
+  restarts its collector (a backend joined after the first collection streamed nowhere); the login-time wallet
+  rebuild re-runs the restore on the replacement wallet. A cancelled restore propagates its
+  `CancellationException` instead of being swallowed as a failure.
+- **The trace renders the wallet's own sends as → after a reload (#443):** the sample's message store persists
+  `WmpGroupMessage.outbound` — a reloaded record read `false` for every send, rendering the reply path inbound.
+
+
+
 ## [0.24.4] - 2026-11-25
 
 ### Added
