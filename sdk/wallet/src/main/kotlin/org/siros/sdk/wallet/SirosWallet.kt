@@ -8221,6 +8221,7 @@ class SirosWallet private constructor(
         val urls = joinPeerUrls[provider] ?: return null
         val sessionId = peer.currentSessionId ?: return null
         val token = peer.currentResumptionToken ?: return null
+        val asClient = joinAsClients[provider]
         return WmpJoinRecord(
             providerUrl = provider,
             sendUrl = urls.first,
@@ -8229,25 +8230,59 @@ class SirosWallet private constructor(
             resumptionToken = token,
             groupId = joinGroups[provider],
             groupName = joinGroupNames[provider],
+            asClientId = asClient?.first,
+            asClientSecret = asClient?.second,
         )
     }
 
     /** Restore a persisted group after an app restart (resumption token, no nonce reuse). */
     suspend fun resumeWmpJoin(record: WmpJoinRecord): Boolean {
+        // HTTPS sessions belong to the authenticated principal, not to the
+        // bearer string. Reuse the join's registered client so its renewed
+        // token still names that principal; a fresh DCR registration is a
+        // DIFFERENT principal and gets the spec's indistinguishable -31000.
+        val asClient = record.asClientId?.takeIf { it.isNotBlank() }?.let { id ->
+            record.asClientSecret?.takeIf { it.isNotBlank() }?.let { secret -> id to secret }
+        }
+        if (asClient != null) joinAsClients[record.providerUrl] = asClient
+
+        // Records from before client persistence have no principal to reuse.
+        // Let the deployment front supply the invitation-join principal (the
+        // wmp-mcp public wallet door's behavior) instead of inventing a fresh
+        // DCR principal that cannot own the old session.
+        var useJoinBearer = asClient != null
         val transport = org.siros.sdk.transport.wmp.WmpHttpSseTransport(
             sendUrl = record.sendUrl,
             sseUrl = record.sseUrl,
-            tokenProvider = { joinBearerFor(record.providerUrl) },
+            tokenProvider = {
+                if (useJoinBearer) joinBearerFor(record.providerUrl) else null
+            },
         )
         val peer = createWmpPeerFromTransport(transport, org.siros.sdk.transport.wmp.WmpSessionConfig())
         return try {
-            peer.resume(record.sessionId, record.resumptionToken)
+            try {
+                peer.resume(record.sessionId, record.resumptionToken)
+            } catch (e: Exception) {
+                // An invitation front may have substituted its own anonymous
+                // principal on the nonce-bearing create. That substitution is
+                // invisible to the SDK, so the stored DCR principal is refused
+                // on resume even though it was presented on the join. Retry
+                // once without Authorization; the front then supplies the SAME
+                // anonymous principal. The resumption token remains mandatory.
+                if (!useJoinBearer || e.message?.contains("Session not found") != true) throw e
+                Timber.i("WMP group resume retrying with the invitation principal for ${record.providerUrl}")
+                useJoinBearer = false
+                joinAsClients.remove(record.providerUrl)
+                joinAsTokens.remove(record.providerUrl)
+                peer.resume(record.sessionId, record.resumptionToken)
+            }
             joinPeers[record.providerUrl] = peer
             joinPeerUrls[record.providerUrl] = record.sendUrl to record.sseUrl
             record.groupId?.let { joinGroups[record.providerUrl] = it }
             record.groupName?.let { joinGroupNames[record.providerUrl] = it }
             true
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Timber.w(e, "WMP group resume failed for ${record.providerUrl}")
             false
         }
@@ -8271,7 +8306,10 @@ class SirosWallet private constructor(
             val out = mutableListOf<WmpGroupMessage>()
         for ((backend, peer) in allWmpPeers()) {
             val sessionId = peer.currentSessionId ?: continue
-            if (peer.state.value != org.siros.sdk.transport.wmp.WmpSessionState.ACTIVE) continue
+            if (peer.state.value != org.siros.sdk.transport.wmp.WmpSessionState.ACTIVE) {
+                Timber.d("WMP poll skipped $backend: state=${peer.state.value}")
+                continue
+            }
             try {
                 val response = peer.call(
                     org.siros.sdk.transport.wmp.WmpMethods.MESSAGE_POLL,
@@ -8284,6 +8322,10 @@ class SirosWallet private constructor(
                         put("limit", kotlinx.serialization.json.JsonPrimitive(limit))
                     },
                 )
+                if (response.error != null) {
+                    Timber.w("WMP poll $backend failed: ${response.error}")
+                    continue
+                }
                 val result = response.result as? kotlinx.serialization.json.JsonObject ?: continue
                 val messages = result["messages"] as? kotlinx.serialization.json.JsonArray ?: continue
                 var last: String? = null

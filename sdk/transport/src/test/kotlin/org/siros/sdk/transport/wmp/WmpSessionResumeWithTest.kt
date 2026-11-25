@@ -3,6 +3,9 @@ package org.siros.sdk.transport.wmp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -29,6 +32,13 @@ class WmpSessionResumeWithTest {
         assertEquals("wmp.session.resume", req.method)
         assertTrue(text.contains("session-123"))
         assertTrue(text.contains("resume-abc"))
+        val params = req.params!!.jsonObject
+        assertEquals("session-123", params.getValue("session_id").jsonPrimitive.content)
+        assertEquals("session-123", params.getValue("wmp").jsonObject.getValue("session_id").jsonPrimitive.content)
+        assertEquals("resume-abc", params.getValue("resumption_token").jsonPrimitive.content)
+        // A cold restore has no event cursor. The live relay accepts both this
+        // explicit null and an empty string; neither changes session lookup.
+        assertEquals(JsonNull, params.getValue("last_received_id"))
 
         transport.receiveFromServer(
             """{"jsonrpc":"2.0","id":"${req.id}","result":{"wmp":{"version":"0.1","session_id":"session-123"},"resumed":true,"resumption_token":"resume-rotated"}}"""
@@ -38,5 +48,6 @@ class WmpSessionResumeWithTest {
 
         assertEquals("session-123", session.currentSessionId)
         assertEquals("resume-rotated", session.currentResumptionToken)
+        assertEquals(listOf("session-123"), transport.sessionCreatedIds)
     }
 }

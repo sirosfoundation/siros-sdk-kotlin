@@ -20,6 +20,8 @@ class WmpJoinStoreTest {
                 resumptionToken = "token-1",
                 groupId = "group-1",
                 groupName = "Echo re-run",
+                asClientId = "client-from-the-original-join",
+                asClientSecret = "client-secret",
             )
             store.save(record)
 
@@ -29,6 +31,26 @@ class WmpJoinStoreTest {
             assertEquals(1, loaded.size)
             assertEquals("token-2", loaded.single().resumptionToken)
             assertEquals("Echo re-run", loaded.single().groupName)
+            assertEquals("client-from-the-original-join", loaded.single().asClientId)
+            assertEquals("client-secret", loaded.single().asClientSecret)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aRecordFromBeforeClientPersistenceStillLoads() {
+        val dir = File(System.getProperty("java.io.tmpdir"), "wmp-join-store-legacy-${System.nanoTime()}")
+        dir.mkdirs()
+        try {
+            File(dir, "wmp-joins.json").writeText(
+                """{"joins":[{"providerUrl":"https://sirosid-gdc-wmp-mcp.fly.dev","sendUrl":"https://sirosid-gdc-wmp-mcp.fly.dev/wmp","sseUrl":"https://sirosid-gdc-wmp-mcp.fly.dev/wmp/events","sessionId":"ses-89e292333cb81607734436da10c57784","resumptionToken":"stored-token","groupId":"ses-fedd4da1804e7cb6f26e5cdcd245de6c","groupName":"meadow-mirage"}]}""",
+            )
+            val record = JsonFileWmpJoinStore(dir).load().single()
+            assertEquals("ses-89e292333cb81607734436da10c57784", record.sessionId)
+            assertEquals("stored-token", record.resumptionToken)
+            assertEquals(null, record.asClientId)
+            assertEquals(null, record.asClientSecret)
         } finally {
             dir.deleteRecursively()
         }

@@ -27,8 +27,20 @@ class JsonFileWmpJoinStore(dir: File) {
         val resumptionToken: String,
         val groupId: String? = null,
         val groupName: String? = null,
+        val asClientId: String? = null,
+        val asClientSecret: String? = null,
     ) {
-        fun record() = WmpJoinRecord(providerUrl, sendUrl, sseUrl, sessionId, resumptionToken, groupId, groupName)
+        fun record() = WmpJoinRecord(
+            providerUrl,
+            sendUrl,
+            sseUrl,
+            sessionId,
+            resumptionToken,
+            groupId,
+            groupName,
+            asClientId,
+            asClientSecret,
+        )
     }
 
     @Serializable
@@ -66,6 +78,8 @@ class JsonFileWmpJoinStore(dir: File) {
             record.resumptionToken,
             record.groupId,
             record.groupName,
+            record.asClientId,
+            record.asClientSecret,
         )
         write(state.copy(joins = state.joins.filter { it.providerUrl != record.providerUrl } + stored))
     }

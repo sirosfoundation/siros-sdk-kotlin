@@ -14805,6 +14805,42 @@ class SirosWalletTest {
         assertTrue(getField(wallet, "issuanceInFlight") as Boolean)
     }
 
+    @Test
+    fun restoringJoinedGroupReusesTheOriginalAsClient() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        coEvery { peer.resume("session-123", "stored-token") } just runs
+        every { peer.currentSessionId } returns "session-123"
+        every { peer.currentResumptionToken } returns "rotated-token"
+        val originalFactory = SirosWallet.createWmpPeerFromTransport
+        SirosWallet.createWmpPeerFromTransport = { _, _ -> peer }
+        try {
+            val wallet = newWallet()
+            val record = WmpJoinRecord(
+                providerUrl = "https://relay.example.com",
+                sendUrl = "https://relay.example.com/wmp",
+                sseUrl = "https://relay.example.com/wmp/events",
+                sessionId = "session-123",
+                resumptionToken = "stored-token",
+                groupId = "group-123",
+                groupName = "meadow-mirage",
+                asClientId = "original-client",
+                asClientSecret = "original-secret",
+            )
+
+            assertTrue(wallet.resumeWmpJoin(record))
+            assertEquals(
+                "original-client" to "original-secret",
+                (getField(wallet, "joinAsClients") as Map<*, *>)[record.providerUrl],
+            )
+            assertEquals(
+                record.copy(resumptionToken = "rotated-token"),
+                wallet.wmpJoinRecord(record.providerUrl),
+            )
+        } finally {
+            SirosWallet.createWmpPeerFromTransport = originalFactory
+        }
+    }
+
     internal fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())
