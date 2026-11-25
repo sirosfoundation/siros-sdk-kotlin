@@ -474,5 +474,9 @@
     <string name="wmp_group_message_arrived">Μήνυμα ομάδας: %1$s</string>
     <string name="wmp_endpoint_reply">Απάντηση στην ομάδα…</string>
     <string name="wmp_endpoint_reply_send">Αποστολή</string>
-    <string name="wmp_endpoint_reply_sent">Η απάντηση εστάλη: %1$s</string>
+        <string name="wmp_endpoint_leave">Αποχώρηση από την ομάδα</string>
+    <string name="wmp_endpoint_leaveConfirmTitle">Αποχώρηση από την ομάδα;</string>
+    <string name="wmp_endpoint_leaveConfirmText">Το πορτοφόλι κλείνει τη συνεδρία του στην ομάδα \"%1$s\" και ξεχνά την ομάδα. Η επανένταξη απαιτεί νέα πρόσκληση.</string>
+    <string name="wmp_endpoint_leaveConfirm">Αποχώρηση</string>
+<string name="wmp_endpoint_reply_sent">Η απάντηση εστάλη: %1$s</string>
 </resources>

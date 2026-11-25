@@ -474,5 +474,9 @@
     <string name="wmp_group_message_arrived">Ryhmäviesti: %1$s</string>
     <string name="wmp_endpoint_reply">Vastaa ryhmäään…</string>
     <string name="wmp_endpoint_reply_send">Lähetä</string>
-    <string name="wmp_endpoint_reply_sent">Vastaus lähetetty: %1$s</string>
+        <string name="wmp_endpoint_leave">Poistu ryhmästä</string>
+    <string name="wmp_endpoint_leaveConfirmTitle">Poistutaanko ryhmästä?</string>
+    <string name="wmp_endpoint_leaveConfirmText">Lompakko sulkee istunnonsa ryhmässä \"%1$s\" ja unohtaa ryhmän. Uudelleenliittyminen vaatii uuden kutsun.</string>
+    <string name="wmp_endpoint_leaveConfirm">Poistu</string>
+<string name="wmp_endpoint_reply_sent">Vastaus lähetetty: %1$s</string>
 </resources>

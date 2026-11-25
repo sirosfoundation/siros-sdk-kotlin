@@ -474,5 +474,9 @@
     <string name="wmp_group_message_arrived">Mensagem do grupo: %1$s</string>
     <string name="wmp_endpoint_reply">Responder ao grupo…</string>
     <string name="wmp_endpoint_reply_send">Enviar</string>
-    <string name="wmp_endpoint_reply_sent">Resposta enviada: %1$s</string>
+        <string name="wmp_endpoint_leave">Sair do grupo</string>
+    <string name="wmp_endpoint_leaveConfirmTitle">Sair do grupo?</string>
+    <string name="wmp_endpoint_leaveConfirmText">A carteira encerra a sua sessão em \"%1$s\" e esquece o grupo. Voltar a juntar-se requer um novo convite.</string>
+    <string name="wmp_endpoint_leaveConfirm">Sair</string>
+<string name="wmp_endpoint_reply_sent">Resposta enviada: %1$s</string>
 </resources>
