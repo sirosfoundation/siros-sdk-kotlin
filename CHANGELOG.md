@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-26
+
+### Added
+
+- **Leave a group from the UX (#445):** the group list's leave action — the
+  `wmp.group.leave` call, the membership teardown, the confirmation and its
+  translated strings in every locale.
+- **The SSE keepalive (#448):** the engine session's SSE stream gained a
+  liveness watchdog (a dead idle stream surfaces within the keepalive window
+  instead of hanging silently), a reconnect-on-demand on the flow-start
+  timeout, and a session-state guard that keeps a reconnect from stealing a
+  live session's responses. Found live on the GDC acceptance round: hours of
+  idle killed the stream and every subsequent `flow.start` orphaned.
+
+### Fixed
+
+- **The create names no ttl by default (#446):** the session create omits the
+  `ttl` member and the engine's own default applies — a wallet-sent ttl
+  shorter than the deployment's expectations expired the consignment sessions
+  early.
+
 ## [0.24.5] - 2026-11-25
 
 ### Fixed
