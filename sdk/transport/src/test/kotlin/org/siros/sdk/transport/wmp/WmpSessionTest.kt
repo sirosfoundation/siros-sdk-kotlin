@@ -197,6 +197,73 @@ class WmpSessionTest {
         assertEquals(WmpSessionState.FAILED, session.state.value)
     }
 
+    @Test
+    fun aTransportFailureIsHandledEvenWhenTheSessionIsNotActive() = runBlocking {
+        // #447's third leg: the collector's historic ACTIVE-only guard
+        // silently dropped the transport's FAILED whenever the session sat
+        // in RESUMING, CONNECTING or FAILED — the stranded-forever case
+        // (the stream's liveness deadline fired mid-resume and no path
+        // retried; the wallet sat on a dead stream until a force-stop).
+        // The failure must be handled whatever the session's own state is:
+        // the recovery is token-guarded and single-flight.
+        val transport = FakeTransport()
+        val session = WmpSession(
+            transport,
+            config = WmpSessionConfig(
+                requestTimeoutMs = 1_000,
+                maxReconnectAttempts = 2,
+                reconnectBaseMs = 1,
+                reconnectMaxMs = 5,
+            ),
+        )
+
+        // Create → ACTIVE, with a resumption token.
+        val createJob = launch { session.create("token") }
+        waitForSentCount(transport, 1)
+        val createReq = codec.decodeRequest(transport.sentMessages.last())
+        transport.receiveFromServer(createSuccessResponse(createReq.id!!).toByteArray())
+        createJob.join()
+        assertEquals(WmpSessionState.ACTIVE, session.state.value)
+
+        // A resume that FAILS: the session lands FAILED — not ACTIVE. This
+        // is the state the historic guard dropped the disconnect in.
+        val resumeJob = launch {
+            try {
+                session.resume()
+            } catch (ignored: Exception) {
+            }
+        }
+        waitForSentCount(transport, 2)
+        val resumeReq = codec.decodeRequest(transport.sentMessages.last())
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","id":"${resumeReq.id}","error":{"code":-31001,"message":"resume failed"}}"""
+                .toByteArray()
+        )
+        resumeJob.join()
+        assertEquals(WmpSessionState.FAILED, session.state.value)
+
+        // NOW the transport fails while the session is FAILED (not
+        // ACTIVE) — the keepalive's verdict on a silent stream (#447).
+        transport.simulateFailure()
+
+        // The collector handles it instead of dropping it: a resume
+        // attempt appears, and answered, the session is ACTIVE again.
+        waitForSentCount(transport, 3)
+        val recoveryReq = codec.decodeRequest(transport.sentMessages.last())
+        assertEquals("wmp.session.resume", recoveryReq.method)
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","id":"${recoveryReq.id}","result":{"wmp":{"version":"0.1","session_id":"session-123"},"resumed":true}}"""
+                .toByteArray()
+        )
+
+        withTimeout(2_000) {
+            while (session.state.value != WmpSessionState.ACTIVE) {
+                delay(10)
+            }
+        }
+        assertEquals(WmpSessionState.ACTIVE, session.state.value)
+    }
+
     private suspend fun waitForSentCount(transport: FakeTransport, expected: Int) {
         withTimeout(2_000) {
             while (transport.sentMessages.size < expected) {

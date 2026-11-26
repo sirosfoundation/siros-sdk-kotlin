@@ -239,10 +239,15 @@ class WmpSession(
         )
 
         sendNotification("wmp.session.close", params)
-        transport.disconnect()
-        _state.value = WmpSessionState.CLOSED
+        // The session is terminal from here on, BEFORE the transport is torn
+        // down (#447): the collector below now handles every transport
+        // failure regardless of the session's own state, so the resumption
+        // token must already be gone when the disconnect's emission reaches
+        // it — a closing session must not resume itself.
         sessionId = null
         resumptionToken = null
+        transport.disconnect()
+        _state.value = WmpSessionState.CLOSED
         scope.cancel()
         Timber.i("WMP session closed: $sid")
     }
@@ -404,9 +409,19 @@ class WmpSession(
             transport.state.collect { transportState ->
                 when (transportState) {
                     TransportState.DISCONNECTED, TransportState.FAILED -> {
-                        if (_state.value == WmpSessionState.ACTIVE) {
-                            handleDisconnect()
-                        }
+                        // The failure is handled whatever the session's own
+                        // state is (#447). The historic ACTIVE-only guard
+                        // silently dropped the disconnect whenever the session
+                        // sat in RESUMING, CONNECTING or FAILED — found live
+                        // (the Cleverbase Echo E2E round): the stream's
+                        // liveness deadline marked the transport FAILED while
+                        // a resume was still in flight, the collector dropped
+                        // it, and no code path ever retried — the wallet
+                        // stayed stranded on a dead stream until a
+                        // force-stop. The recovery below is safe from any
+                        // state: without a resumption token it is a no-op,
+                        // and the resume path is idempotent (single-flight).
+                        handleDisconnect()
                     }
                     else -> {} // no-op
                 }
@@ -434,60 +449,133 @@ class WmpSession(
         }
     }
 
+    /**
+     * The in-flight recovery's single-flight handle (#447): one resume loop
+     * runs at a time; a trigger that fires while a recovery is already
+     * running — the collector and a stalled request's [recoverTransport]
+     * can both react to the same failure — awaits it instead of racing a
+     * second resume against it.
+     */
+    private var inFlightRecovery: CompletableDeferred<Unit>? = null
+
+    /**
+     * Claims the recovery: the running flight to await, or null when the
+     * caller must run it.
+     */
+    @Synchronized
+    private fun claimRecovery(): CompletableDeferred<Unit>? {
+        val running = inFlightRecovery
+        if (running != null) return running
+        inFlightRecovery = CompletableDeferred()
+        return null
+    }
+
+    /**
+     * The on-demand transport recovery a stalled request triggers
+     * (#447): a flow.start whose POST timed out left the SSE stream
+     * dead-but-CONNECTED — the half-open socket, where the kernel still
+     * shows the connection established and no byte flows — and a bare
+     * request retry would orphan the flow AGAIN, because the engine's
+     * asks ride the SSE stream, not the POST's connection. Force the
+     * stream's teardown FIRST: [Transport.connect] no-ops on a CONNECTED
+     * transport, so the resume below would re-attach to the very stream
+     * whose silence stalled the request. Then the existing
+     * [handleDisconnect] recovery runs — its resume rotates the
+     * resumption token and re-opens the stream (`?session_id=` names it,
+     * the SSE binding of wmp-transport.md §4.3.4) — and the caller's
+     * retry rides the live one. Single-flight with the collector's own
+     * trigger on the disconnect this emits: whichever fires first runs
+     * the recovery, the other awaits it, so exactly one resume runs.
+     */
+    internal suspend fun recoverTransport() {
+        transport.disconnect()
+        handleDisconnect()
+    }
+
     private suspend fun handleDisconnect() {
+        // No session to resume yet (pre-create, or already closed): the
+        // recovery is a no-op — the guard that makes the collector above
+        // safe to run from any session state.
         if (resumptionToken == null) return
-        _state.value = WmpSessionState.RESUMING
-
-        var attempt = 0
-        var lastError: Exception? = null
-        while (attempt < config.maxReconnectAttempts) {
-            attempt++
-            val backoffMs = min(config.reconnectBaseMs * (1L shl attempt), config.reconnectMaxMs)
-            Timber.i("WMP reconnect attempt $attempt in ${backoffMs}ms")
-            delay(backoffMs)
-
-            try {
-                resume()
-                return
-            } catch (e: Exception) {
-                lastError = e
-                Timber.w(e, "Reconnect attempt $attempt failed")
-            }
+        val running = claimRecovery()
+        if (running != null) {
+            // A recovery is already running for this failure: await it
+            // rather than racing a second resume loop against it.
+            running.await()
+            return
         }
+        val flight = inFlightRecovery
+        try {
+            // A stale trigger (#447): the transport reconnected — or is
+            // reconnecting — while this trigger waited its turn (the
+            // single-flight's other runner, or a concurrent resume), so
+            // the recovery it asks for already happened. The collector's
+            // emissions conflate, but the live state does not: if the
+            // transport failed again since, the collector delivers that
+            // failure next and the recovery runs then. A transport that
+            // does not expose its state as a StateFlow keeps the historic
+            // behavior — always recover.
+            val live = (transport.state as? StateFlow<TransportState>)?.value
+            if (live != null && live != TransportState.DISCONNECTED && live != TransportState.FAILED) return
+            _state.value = WmpSessionState.RESUMING
 
-        // The resume exhausted. A session-gone answer ("Session not found"
-        // for a swept/restarted session, "Session expired" for a present
-        // record whose TTL passed — #48: the wallet sat in the background
-        // past the engine's session TTL) means it is GONE, and trying to
-        // resume again in 30 seconds is trying to bring back the dead.
-        // The wallet's engine session is stateless from its own
-        // perspective (the credentials live in the wallet's store, not
-        // the engine's), so a transparent fresh create is safe and the
-        // wallet never gets stranded on a dead session. Found on-device
-        // against the GDC released engine: the session's TTL lapsed
-        // while the wallet sat in the background, the resume loop
-        // exhausted, and every later QR scan's flow start landed on
-        // the dead session - the engine answered "Capability not
-        // supported" (the capability gate fires on an unresolvable
-        // session before the flow's own matching, so every request
-        // failed identically regardless of which credential it named).
-        // The original cut matched only "Session not found", so the
-        // TTL-expiry answer ("Session expired") fell through to FAILED
-        // and every later flow start surfaced its error - the recovery
-        // the #48 fix re-found on-device.
-        if (isSessionGone(lastError?.message) && authToken != null) {
-            Timber.i("Session expired on the server; creating a fresh session")
-            try {
-                create(authToken!!, sender, capabilities)
-                return
-            } catch (e: Exception) {
-                Timber.e(e, "Fresh session creation after resume exhaustion failed")
+            var attempt = 0
+            var lastError: Exception? = null
+            while (attempt < config.maxReconnectAttempts) {
+                attempt++
+                val backoffMs = min(config.reconnectBaseMs * (1L shl attempt), config.reconnectMaxMs)
+                Timber.i("WMP reconnect attempt $attempt in ${backoffMs}ms")
+                delay(backoffMs)
+
+                try {
+                    resume()
+                    return
+                } catch (e: Exception) {
+                    lastError = e
+                    Timber.w(e, "Reconnect attempt $attempt failed")
+                }
             }
-        }
 
-        _state.value = WmpSessionState.FAILED
-        pendingRequests.values.forEach { it.cancel() }
-        pendingRequests.clear()
+            // The resume exhausted. A session-gone answer ("Session not found"
+            // for a swept/restarted session, "Session expired" for a present
+            // record whose TTL passed — #48: the wallet sat in the background
+            // past the engine's session TTL) means it is GONE, and trying to
+            // resume again in 30 seconds is trying to bring back the dead.
+            // The wallet's engine session is stateless from its own
+            // perspective (the credentials live in the wallet's store, not
+            // the engine's), so a transparent fresh create is safe and the
+            // wallet never gets stranded on a dead session. Found on-device
+            // against the GDC released engine: the session's TTL lapsed
+            // while the wallet sat in the background, the resume loop
+            // exhausted, and every later QR scan's flow start landed on
+            // the dead session - the engine answered "Capability not
+            // supported" (the capability gate fires on an unresolvable
+            // session before the flow's own matching, so every request
+            // failed identically regardless of which credential it named).
+            // The original cut matched only "Session not found", so the
+            // TTL-expiry answer ("Session expired") fell through to FAILED
+            // and every later flow start surfaced its error - the recovery
+            // the #48 fix re-found on-device.
+            if (isSessionGone(lastError?.message) && authToken != null) {
+                Timber.i("Session expired on the server; creating a fresh session")
+                try {
+                    create(authToken!!, sender, capabilities)
+                    return
+                } catch (e: Exception) {
+                    Timber.e(e, "Fresh session creation after resume exhaustion failed")
+                }
+            }
+
+            _state.value = WmpSessionState.FAILED
+            pendingRequests.values.forEach { it.cancel() }
+            pendingRequests.clear()
+        } finally {
+            // Release the single-flight BEFORE waking the waiters: a trigger
+            // arriving after the reset starts a fresh recovery of its own,
+            // while the ones already awaiting this flight return (#447).
+            synchronized(this) { inFlightRecovery = null }
+            flight?.complete(Unit)
+        }
     }
 }
 

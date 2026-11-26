@@ -18,6 +18,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody
 import okio.Buffer
+import okio.buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,7 +29,7 @@ import org.junit.Test
 import org.siros.sdk.transport.TransportState
 import timber.log.Timber
 
-/** The SSE binding's guarantees for a flow that delivers a secret: connected before anything is sent, no event twice, nothing logged. */
+/** The SSE binding's guarantees for a flow that delivers a secret: connected before anything is sent, no event twice, nothing logged — and the liveness the stream owes its reader (#447). */
 class WmpHttpSseTransportTest {
 
     private val requests = mutableListOf<Request>()
@@ -207,6 +208,107 @@ class WmpHttpSseTransportTest {
         // Both streams deliver (the channel carries the first stream's event too).
         val seen = withTimeout(5_000) { transport.incoming().take(2).toList() }
         assertEquals(listOf("first", "second"), seen.map { it.toString(Charsets.UTF_8) })
+    }
+
+    /** An SSE body whose [emit] runs per read — the test's lever on what the stream delivers, byte for byte. */
+    private fun body(emit: (sink: Buffer, byteCount: Long) -> Long): ResponseBody =
+        object : ResponseBody() {
+            override fun contentType() = null
+            override fun contentLength() = -1L
+            override fun source(): okio.BufferedSource =
+                (
+                    object : okio.Source {
+                        override fun read(sink: Buffer, byteCount: Long): Long = emit(sink, byteCount)
+                        override fun close() {}
+                        override fun timeout(): okio.Timeout = okio.Timeout.NONE
+                    }
+                ).buffer()
+        }
+
+    @Test
+    fun aStreamSilentPastTheDeadlineFailsTheTransport() = runBlocking {
+        // #447's half-open socket: the stream dies silently (a carrier NAT
+        // idle timeout, Android doze, a proxy that dropped the TCP session
+        // without RST) — the kernel still shows the connection established,
+        // the state stays CONNECTED, and no socket error ever surfaces.
+        // The keepalive must catch it: the engine heartbeats every ~15s
+        // (wmp-transport.md §4.3.4), so the deadline — no received LINE,
+        // heartbeat or data, for the whole window — means the stream is
+        // dead, and the transport marks itself FAILED so the session's
+        // recovery reconnects and replays from Last-Event-ID.
+        val unblock = CountDownLatch(1)
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(
+                    body { _, _ ->
+                        // The half-open socket: the read blocks with no byte
+                        // arriving and no error delivered — until the test
+                        // lets go.
+                        unblock.await(20, TimeUnit.SECONDS)
+                        -1L
+                    },
+                )
+                .build()
+        }.build()
+        val transport = WmpHttpSseTransport(
+            "https://x.test/send", "https://x.test/events", http,
+            keepaliveCheckMs = 50, keepaliveFailAfterMs = 250,
+        )
+        withTimeout(5_000) { transport.onSessionCreated("s1") }
+        try {
+            assertEquals(TransportState.CONNECTED, transport.state.value)
+
+            withTimeout(5_000) { while (transport.state.value != TransportState.FAILED) delay(10) }
+            assertEquals(TransportState.FAILED, transport.state.value)
+        } finally {
+            // Never leak the blocked read, whatever the assertions said.
+            unblock.countDown()
+        }
+    }
+
+    @Test
+    fun aStreamThatKeepsReceivingHeartbeatsIsNotFailed() = runBlocking {
+        // The keepalive's other half: liveness is measured by RECEIVED
+        // LINES, not by the clock alone. The engine's heartbeat comments
+        // count as activity (wmp-transport.md §4.3.4), so a stream whose
+        // data is idle but whose heartbeats arrive never trips the
+        // deadline — the check may not fail a live stream. The body beats
+        // until the test releases it: the stream may not go silent on its
+        // own before the assertion.
+        val unblock = CountDownLatch(1)
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(
+                    body { sink, _ ->
+                        if (unblock.await(60, TimeUnit.MILLISECONDS)) {
+                            -1L
+                        } else {
+                            // a heartbeat every ~60ms — well inside the deadline
+                            sink.writeUtf8(": heartbeat\n\n")
+                            ": heartbeat\n\n".length.toLong()
+                        }
+                    },
+                )
+                .build()
+        }.build()
+        val transport = WmpHttpSseTransport(
+            "https://x.test/send", "https://x.test/events", http,
+            keepaliveCheckMs = 100, keepaliveFailAfterMs = 1_000,
+        )
+        withTimeout(5_000) { transport.onSessionCreated("s1") }
+        try {
+            // ~25 heartbeats over 1.5s — the deadline that fails a dead
+            // stream is a full second of silence: a live one survives every
+            // check with an eightfold margin.
+            delay(1_500)
+            assertEquals(TransportState.CONNECTED, transport.state.value)
+        } finally {
+            // Never leak the beating stream, whatever the assertion said.
+            transport.disconnect()
+            unblock.countDown()
+        }
     }
 
     @Test

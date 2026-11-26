@@ -2644,8 +2644,8 @@ public final class org/siros/sdk/transport/wmp/WmpFlowHandler$DefaultImpls {
 
 public final class org/siros/sdk/transport/wmp/WmpHttpSseTransport : org/siros/sdk/transport/Transport {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/WmpHttpSseTransport$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;Lkotlin/jvm/functions/Function1;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;Lkotlin/jvm/functions/Function1;JJ)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;Lkotlin/jvm/functions/Function1;JJILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun connect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun disconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public synthetic fun getState ()Lkotlinx/coroutines/flow/Flow;

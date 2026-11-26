@@ -8,6 +8,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +39,13 @@ import java.util.concurrent.TimeUnit
  * @param sseUrl The URL for SSE EventSource (incoming messages).
  * @param client Optional OkHttpClient (shared with other SDK components).
  * @param extraHeaders Additional headers (e.g., Authorization, X-Tenant-ID).
+ * @param keepaliveCheckMs How often the stream health check runs (issue #447).
+ *   See [keepaliveFailAfterMs].
+ * @param keepaliveFailAfterMs The stream-health deadline (issue #447): no
+ *   received SSE line (heartbeat or data) for this long means the stream is
+ *   dead and the transport marks itself FAILED so the session's recovery
+ *   reconnects. The engine heartbeats every ~15s (wmp-transport.md §4.3.4),
+ *   so the 60s default is four missed heartbeats.
  * @param tokenProvider Freshens the `Authorization` bearer per request: the
  *   HTTP+SSE binding is stateless - EVERY POST is its own request and the
  *   engine validates each one against the AS - so a token baked in at
@@ -56,6 +64,8 @@ class WmpHttpSseTransport(
     private val client: OkHttpClient = defaultClient(),
     private val extraHeaders: Map<String, String> = emptyMap(),
     private val tokenProvider: (suspend () -> String?)? = null,
+    private val keepaliveCheckMs: Long = 30_000,
+    private val keepaliveFailAfterMs: Long = 60_000,
 ) : Transport {
 
     private val _state = MutableStateFlow(TransportState.DISCONNECTED)
@@ -87,6 +97,33 @@ class WmpHttpSseTransport(
     /** The ids of the events already delivered (bounded): a replayed event with the same `id:` is dropped, not delivered twice. */
     private val seenEventIds = object : LinkedHashSet<String>() {}
     @Volatile private var lastEventId: String? = null
+
+    /**
+     * The wall-clock of the last received SSE line, heartbeat or data
+     * (issue #447) — the keepalive's reference point. Refreshed when the
+     * stream opens and on EVERY line: the engine's ~15s heartbeat comments
+     * count as activity (wmp-transport.md §4.3.4), so a LIVE stream never
+     * trips the deadline no matter how idle its data is.
+     */
+    @Volatile private var lastLineAt: Long = 0L
+
+    /**
+     * The live stream's identity (issue #447): every teardown of a stream
+     * retires it by bumping this, and the read loop's state writes are
+     * made only while it still owns the id. A retired stream's `readLine()`
+     * is a blocking JVM call — cancelling its coroutine does NOT unblock
+     * it, so its late error (the read timeout, the call's cancel, the
+     * EOF of a body drained after the teardown) fires on a thread that
+     * no longer speaks for the transport: without the guard it would
+     * flip the state of whatever NEW stream the recovery already opened.
+     */
+    @Volatile private var streamEpoch: Int = 0
+
+    /** The live stream's HTTP call — held so a teardown can cancel it and unblock its read immediately. */
+    @Volatile private var streamCall: okhttp3.Call? = null
+
+    /** The periodic health check's job (issue #447), started when the first stream opens. */
+    private var keepaliveJob: Job? = null
 
     /**
      * The request headers for one outgoing request: [extraHeaders], with the
@@ -139,8 +176,10 @@ class WmpHttpSseTransport(
             // event state: the engine's replay then re-delivers everything
             // the new session's mailbox holds from the top.
             previous != sessionId -> {
-                sseJob?.cancel()
-                sseJob = null
+                // The teardown retires the stream's identity too: its blocked
+                // readLine fires late (a blocking JVM call survives the
+                // coroutine cancel) and must not flip the new stream's state.
+                retireStream()
                 lastEventId = null
                 seenEventIds.clear()
                 _state.value = TransportState.DISCONNECTED
@@ -178,19 +217,31 @@ class WmpHttpSseTransport(
             .build()
 
         val opened = kotlinx.coroutines.CompletableDeferred<Unit>()
+        // This open is the live stream (issue #447): the id the read loop's
+        // state writes are guarded by. Every teardown bumps it.
+        val epoch = ++streamEpoch
         sseJob = scope.launch {
             try {
                 // streamClient (not client): the SSE call carries its own read
                 // timeout — the liveness deadline, see its declaration.
-                val response = streamClient.newCall(request).execute()
+                val call = streamClient.newCall(request)
+                streamCall = call
+                val response = call.execute()
                 if (!response.isSuccessful) {
                     Timber.e("SSE connection failed: ${response.code}")
-                    _state.value = TransportState.FAILED
+                    if (epoch == streamEpoch) _state.value = TransportState.FAILED
                     opened.complete(Unit)
                     return@launch
                 }
 
-                _state.value = TransportState.CONNECTED
+                // The stream's open is its first sign of life: the keepalive's
+                // deadline runs from here, so a stream that opens but never
+                // delivers one line (heartbeat included) still trips it.
+                if (epoch == streamEpoch) {
+                    _state.value = TransportState.CONNECTED
+                    lastLineAt = System.nanoTime()
+                    ensureKeepalive()
+                }
                 opened.complete(Unit)
                 Timber.d("SSE connected to $sseUrl")
 
@@ -220,6 +271,11 @@ class WmpHttpSseTransport(
 
                 while (true) {
                     val line = reader.readLine() ?: break
+
+                    // Every line is activity — heartbeats included
+                    // (wmp-transport.md §4.3.4's ~15s comment cadence):
+                    // the keepalive's deadline is measured against this.
+                    if (epoch == streamEpoch) lastLineAt = System.nanoTime()
 
                     // The SSE stream's own line-level log: what the transport
                     // actually receives, before any parsing. The on-device
@@ -272,9 +328,13 @@ class WmpHttpSseTransport(
                     }
                 }
 
-                _state.value = TransportState.DISCONNECTED
+                // Only the live stream may set the state: a retired stream's
+                // blocked readLine returns late (a blocking JVM call survives
+                // the coroutine cancel) and its EOF must not clobber the
+                // successor's CONNECTED.
+                if (epoch == streamEpoch) _state.value = TransportState.DISCONNECTED
             } catch (e: Exception) {
-                if (_state.value != TransportState.DISCONNECTED) {
+                if (epoch == streamEpoch && _state.value != TransportState.DISCONNECTED) {
                     Timber.e("SSE error (${e.javaClass.simpleName})")
                     _state.value = TransportState.FAILED
                 }
@@ -282,6 +342,56 @@ class WmpHttpSseTransport(
             }
         }
         opened.await()
+    }
+
+    /**
+     * The proactive stream health check (issue #447): every
+     * [keepaliveCheckMs], a stream that is CONNECTED but has received NO
+     * line for [keepaliveFailAfterMs] is marked FAILED — the half-open
+     * socket case the stream's own read timeout cannot catch, where the
+     * kernel still shows the connection established and no byte flows (a
+     * carrier NAT idle timeout, Android doze, a proxy that dropped the TCP
+     * session without RST: found live 2026-11-25, the Cleverbase Echo E2E
+     * round — the stream died silently, the state stayed CONNECTED, and
+     * every later flow.start hung at "contacting verifier" because the
+     * engine's asks went to the dead stream). The engine heartbeats the
+     * stream every ~15s (wmp-transport.md §4.3.4), so the 60s default is
+     * four missed heartbeats: silence that long is a dead stream, not a
+     * quiet one. FAILED wakes the session's transport-state collector →
+     * handleDisconnect → resume → the stream replays from Last-Event-ID.
+     */
+    private fun ensureKeepalive() {
+        if (keepaliveJob?.isActive == true) return
+        keepaliveJob = scope.launch {
+            while (true) {
+                delay(keepaliveCheckMs.coerceAtLeast(1))
+                if (_state.value != TransportState.CONNECTED) continue
+                val idleMs = (System.nanoTime() - lastLineAt) / 1_000_000
+                if (idleMs >= keepaliveFailAfterMs) {
+                    Timber.w(
+                        "SSE stream silent for ${idleMs}ms (no heartbeat, no data; the engine sends one every ~15s) — marking the transport FAILED and reconnecting",
+                    )
+                    retireStream()
+                    _state.value = TransportState.FAILED
+                }
+            }
+        }
+    }
+
+    /**
+     * Tear the current stream down (issue #447): bump the epoch (the
+     * blocked readLine's late error must land stale — it cannot be
+     * unblocked by coroutine cancellation alone), cancel the coroutine,
+     * and cancel the SSE call itself so the kernel-level read aborts NOW
+     * instead of waiting out its own timeout on a socket that will never
+     * deliver another byte.
+     */
+    private fun retireStream() {
+        streamEpoch++
+        sseJob?.cancel()
+        sseJob = null
+        streamCall?.cancel()
+        streamCall = null
     }
 
     /** True the first time [id] is seen; a replay of the same event id is false. Bounded. */
@@ -369,8 +479,9 @@ class WmpHttpSseTransport(
     override fun incoming(): Flow<ByteArray> = incomingChannel.receiveAsFlow()
 
     override suspend fun disconnect() {
-        sseJob?.cancel()
-        sseJob = null
+        // The teardown retires the stream (issue #447): its blocked readLine
+        // fires late and must not flip the state of whatever opens next.
+        retireStream()
         // A request hanging on a severed connection cannot outlive the
         // transport that carried it (#417).
         inFlightCalls.forEach { it.cancel() }
