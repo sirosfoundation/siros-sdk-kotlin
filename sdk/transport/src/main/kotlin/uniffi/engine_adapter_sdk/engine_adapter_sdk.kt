@@ -920,6 +920,8 @@ internal open class UniffiVTableCallbackInterfacePdp(
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -967,6 +969,8 @@ internal interface UniffiLib : Library {
     fun uniffi_engine_adapter_sdk_fn_method_wmpmls_decrypt(`ptr`: Pointer,`groupId`: RustBuffer.ByValue,`ciphertext`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_engine_adapter_sdk_fn_method_wmpmls_encrypt(`ptr`: Pointer,`groupId`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_engine_adapter_sdk_fn_method_wmpmls_export_group_info(`ptr`: Pointer,`groupId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_engine_adapter_sdk_fn_method_wmpmls_generate_key_package(`ptr`: Pointer,`cipherSuite`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1126,6 +1130,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_engine_adapter_sdk_checksum_method_wmpmls_encrypt(
     ): Short
+    fun uniffi_engine_adapter_sdk_checksum_method_wmpmls_export_group_info(
+    ): Short
     fun uniffi_engine_adapter_sdk_checksum_method_wmpmls_generate_key_package(
     ): Short
     fun uniffi_engine_adapter_sdk_checksum_method_wmpmls_identity(
@@ -1222,6 +1228,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_engine_adapter_sdk_checksum_method_wmpmls_encrypt() != 53426.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_engine_adapter_sdk_checksum_method_wmpmls_export_group_info() != 5896.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_engine_adapter_sdk_checksum_method_wmpmls_generate_key_package() != 10074.toShort()) {
@@ -2218,6 +2227,18 @@ public interface WmpMlsInterface {
     fun `encrypt`(`groupId`: kotlin.String, `plaintext`: kotlin.ByteArray): MlsEncrypted
     
     /**
+     * Export the group's GroupInfo (spec §3.1's `group_info` create
+     * param): the serialized MlsMessageOut, base64url, with the
+     * ratchet tree. The peer's `wmp.mls.group.create` validator
+     * demands the param — a wallet-driven create mints it here and
+     * hands it to the peer; a member joining by Welcome never needs
+     * it. Found live at the Cleverbase interop (2026-11-24): the
+     * wallet path hit the create's refusal on its first group create
+     * because this surface had no export (issue #108).
+     */
+    fun `exportGroupInfo`(`groupId`: kotlin.String): kotlin.String
+    
+    /**
      * A fresh KeyPackage (spec §2.3) for the suite: publish it on the
      * member's well-known for the add flows.
      */
@@ -2418,6 +2439,29 @@ open class WmpMls: Disposable, AutoCloseable, WmpMlsInterface {
     uniffiRustCallWithError(MlsException) { _status ->
     UniffiLib.INSTANCE.uniffi_engine_adapter_sdk_fn_method_wmpmls_encrypt(
         it, FfiConverterString.lower(`groupId`),FfiConverterByteArray.lower(`plaintext`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Export the group's GroupInfo (spec §3.1's `group_info` create
+     * param): the serialized MlsMessageOut, base64url, with the
+     * ratchet tree. The peer's `wmp.mls.group.create` validator
+     * demands the param — a wallet-driven create mints it here and
+     * hands it to the peer; a member joining by Welcome never needs
+     * it. Found live at the Cleverbase interop (2026-11-24): the
+     * wallet path hit the create's refusal on its first group create
+     * because this surface had no export (issue #108).
+     */
+    @Throws(MlsException::class)override fun `exportGroupInfo`(`groupId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(MlsException) { _status ->
+    UniffiLib.INSTANCE.uniffi_engine_adapter_sdk_fn_method_wmpmls_export_group_info(
+        it, FfiConverterString.lower(`groupId`),_status)
 }
     }
     )
