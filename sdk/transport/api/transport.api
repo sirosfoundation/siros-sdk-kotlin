@@ -6845,6 +6845,7 @@ public class uniffi/engine_adapter_sdk/WmpMls : java/lang/AutoCloseable, uniffi/
 	public fun decrypt (Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/MlsDecrypted;
 	public fun destroy ()V
 	public fun encrypt (Ljava/lang/String;[B)Luniffi/engine_adapter_sdk/MlsEncrypted;
+	public fun exportGroupInfo (Ljava/lang/String;)Ljava/lang/String;
 	public fun generateKeyPackage (J)Luniffi/engine_adapter_sdk/MlsKeyPackage;
 	protected final fun getCleanable ()Luniffi/engine_adapter_sdk/UniffiCleaner$Cleanable;
 	protected final fun getPointer ()Lcom/sun/jna/Pointer;
@@ -6865,6 +6866,7 @@ public abstract interface class uniffi/engine_adapter_sdk/WmpMlsInterface {
 	public abstract fun createGroup (J)Luniffi/engine_adapter_sdk/MlsGroupCreated;
 	public abstract fun decrypt (Ljava/lang/String;Ljava/lang/String;)Luniffi/engine_adapter_sdk/MlsDecrypted;
 	public abstract fun encrypt (Ljava/lang/String;[B)Luniffi/engine_adapter_sdk/MlsEncrypted;
+	public abstract fun exportGroupInfo (Ljava/lang/String;)Ljava/lang/String;
 	public abstract fun generateKeyPackage (J)Luniffi/engine_adapter_sdk/MlsKeyPackage;
 	public abstract fun identity ()Ljava/lang/String;
 	public abstract fun processCommit (Ljava/lang/String;Ljava/lang/String;)J
